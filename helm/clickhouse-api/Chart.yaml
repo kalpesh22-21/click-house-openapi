@@ -1,0 +1,16 @@
+apiVersion: v2
+name: clickhouse-api
+description: >
+  Read-only ClickHouse REST API gateway designed for ChatGPT Custom GPT Actions.
+  Exposes schema discovery and query execution endpoints with SQL guardrails.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - clickhouse
+  - api
+  - chatgpt
+  - gpt-action
+maintainers:
+  - name: Platform Engineering
+home: https://github.com/your-org/clickhouse-api

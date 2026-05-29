@@ -1,0 +1,45 @@
+# Version control
+.git
+.gitignore
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv
+venv
+env
+
+# Environment / secrets — never bake these into the image
+.env
+*.env
+
+# Test artefacts
+.pytest_cache
+.coverage
+htmlcov/
+.tox/
+
+# Editor / IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Documentation
+README.md
+docs/
+
+# Helm chart (not needed in the runtime image)
+helm/
+
+# CI
+.github/

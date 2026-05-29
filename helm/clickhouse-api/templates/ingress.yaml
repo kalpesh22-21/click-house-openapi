@@ -1,0 +1,40 @@
+{{- if .Values.ingress.enabled -}}
+{{- /*
+Warn (or fail) when ingress is enabled without TLS.  Exposing this API over
+plain HTTP leaks the API key and query results.  Set ingress.tls.enabled=true
+and provide a valid TLS secret or cert-manager issuer annotation.
+*/ -}}
+{{- if not .Values.ingress.tls.enabled -}}
+{{- fail "ingress.tls.enabled must be true when ingress.enabled is true. Exposing the API over plain HTTP leaks the API key. Set ingress.tls.enabled=true." -}}
+{{- end -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "clickhouse-api.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "clickhouse-api.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path }}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "clickhouse-api.fullname" . }}
+                port:
+                  name: http
+{{- end }}

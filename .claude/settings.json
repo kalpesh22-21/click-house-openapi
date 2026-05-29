@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m py_compile app/__init__.py app/config.py app/models.py app/security.py app/auth.py app/clickhouse_client.py app/routers/__init__.py app/routers/health.py app/routers/schema.py app/routers/query.py app/main.py)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -m pip install --quiet pydantic pydantic-settings fastapi)",
+      "Bash(brew list *)",
+      "Read(//usr/local/bin/**)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(helm lint *)",
+      "Bash(python3 -m pip install --quiet pyyaml)",
+      "Bash(awk '{ gsub\\(\"/Users/kalpeshmulye/Development/clickhouse-api/\",\"\"\\); print }')",
+      "Bash(python3 -m venv /Users/kalpeshmulye/Development/clickhouse-api/.venv)",
+      "Bash(.venv/bin/python -m pytest tests/test_security.py -v --tb=short)",
+      "Bash(python3 /tmp/test_security2.py)",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(.venv/bin/python -m pytest tests/test_auth.py -v --tb=short)",
+      "Bash(python3 /tmp/test_explain.py)",
+      "Bash(.venv/bin/python -m pytest tests/test_routes.py -v --tb=short)",
+      "Bash(.venv/bin/python -m pytest tests/ -v --tb=short)",
+      "Bash(.venv/bin/python -m pytest tests/ -v)",
+      "Bash(.venv/bin/python -c \"from app.security import validate_and_sanitize; print\\(validate_and_sanitize\\(\\\\\"SELECT * FROM t WHERE note = 'v1.0; beta'\\\\\", 1000\\)\\)\")",
+      "Bash(brew install *)",
+      "Bash(echo \"---EXIT: $?---\")",
+      "Bash(git config *)",
+      "Bash(echo \"name-exit: $?\")",
+      "Bash(echo \"email-exit: $?\")",
+      "Bash(echo \"global-name-exit: $?\")",
+      "Bash(echo \"global-email-exit: $?\")",
+      "Bash(git add *)"
+    ]
+  }
+}

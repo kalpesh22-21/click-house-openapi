@@ -1,0 +1,67 @@
+ClickHouse Query API has been deployed.
+
+Release:   {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Image:     {{ .Values.image.repository }}:{{ .Values.image.tag }}
+
+== Service ==
+  Type: {{ .Values.service.type }}
+  Port: {{ .Values.service.port }}
+
+{{- if .Values.ingress.enabled }}
+
+== Ingress ==
+  URL:  https://{{ .Values.ingress.host }}
+
+  TLS is required — the ingress controller must terminate TLS using the
+  secret '{{ .Values.ingress.tls.secretName }}' in namespace {{ .Release.Namespace }}.
+  If you are using cert-manager, add the appropriate cluster-issuer annotation
+  under ingress.annotations.
+
+  Set PUBLIC_BASE_URL in your values to match this URL so the OpenAPI
+  /openapi.json servers block is correct for ChatGPT GPT Actions.
+
+{{- else }}
+
+== Port-forward for local testing ==
+
+  kubectl port-forward svc/{{ include "clickhouse-api.fullname" . }} 8080:{{ .Values.service.port }} \
+    -n {{ .Release.Namespace }}
+
+  Then visit: http://localhost:8080/docs
+
+{{- end }}
+
+== Health check ==
+
+  curl https://{{ if .Values.ingress.enabled }}{{ .Values.ingress.host }}{{ else }}localhost:8080{{ end }}/health
+
+== ChatGPT GPT Action wiring ==
+
+  1. In the Custom GPT editor, go to "Actions" and click "Import from URL":
+       {{ .Values.config.PUBLIC_BASE_URL }}/openapi.json
+  2. Set Authentication to "API Key" with header name "Authorization" and
+     prefix "Bearer".
+  3. Set the API key value to the API_KEY secret value.
+  4. Save and test with: "List the available databases."
+
+== SECURITY REQUIREMENTS ==
+
+  1. Secrets: ClickHouse connection details and credentials are ALL Secret-managed.
+     clickhousePassword and apiKey MUST be supplied at install time via
+     --set secrets.clickhousePassword=<val> --set secrets.apiKey=<val>
+     or by referencing a pre-existing Secret via secrets.existingSecret.
+     Installation will fail if these are left empty.
+
+     Connection variables (CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER,
+     CLICKHOUSE_DATABASE, CLICKHOUSE_SECURE) are set under secrets.connection.*
+     and rendered into the same Secret.
+
+     When using secrets.existingSecret, the referenced Secret MUST contain all
+     seven keys with their canonical env-var names:
+       CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_DATABASE,
+       CLICKHOUSE_SECURE, CLICKHOUSE_PASSWORD, API_KEY
+
+  2. TLS: ingress.tls.enabled is required when ingress.enabled is true.
+     Installation will fail if ingress is enabled without TLS to prevent
+     API key exposure over plain HTTP.

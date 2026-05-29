@@ -1,0 +1,197 @@
+# =============================================================================
+# clickhouse-api Helm values
+# =============================================================================
+# Override any value with --set key=value or -f my-values.yaml on install.
+
+# -----------------------------------------------------------------------------
+# Image
+# -----------------------------------------------------------------------------
+image:
+  repository: your-registry/clickhouse-api
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# -----------------------------------------------------------------------------
+# Deployment
+# -----------------------------------------------------------------------------
+replicaCount: 2
+
+# Pod-level annotations (e.g. Prometheus scrape config, Vault agent injection)
+podAnnotations: {}
+
+# Pod-level labels (merged with chart-managed labels)
+podLabels: {}
+
+# -----------------------------------------------------------------------------
+# Service Account
+# -----------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  # Annotations for IAM role binding (AWS IRSA, GCP Workload Identity, etc.)
+  annotations: {}
+  name: ""
+
+# -----------------------------------------------------------------------------
+# Security contexts
+# -----------------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# -----------------------------------------------------------------------------
+# Resources
+# -----------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# -----------------------------------------------------------------------------
+# Service
+# -----------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 80
+  # targetPort is the APP_PORT value (default 8000)
+  targetPort: 8000
+
+# -----------------------------------------------------------------------------
+# Ingress
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: false
+  # Ingress class name (e.g. nginx, traefik, alb)
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: clickhouse-api.example.com
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: true
+    secretName: clickhouse-api-tls
+
+# -----------------------------------------------------------------------------
+# Horizontal Pod Autoscaler
+# -----------------------------------------------------------------------------
+hpa:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# -----------------------------------------------------------------------------
+# Liveness / readiness probes
+# Both hit GET /health on the container port.
+# -----------------------------------------------------------------------------
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -----------------------------------------------------------------------------
+# Application configuration (non-secret) — rendered into a ConfigMap
+# NOTE: ClickHouse connection/topology vars (HOST, PORT, USER, DATABASE, SECURE)
+# are considered sensitive and are managed in the Secret below.
+# -----------------------------------------------------------------------------
+config:
+  # Query safety limits
+  MAX_EXECUTION_TIME: "30"
+  MAX_RESULT_ROWS: "10000"
+  MAX_ROWS_TO_READ: "100000000000"
+  DEFAULT_LIMIT: "10000"
+  MAX_RESPONSE_ROWS: "10000"
+
+  # Schema access control
+  ALLOWED_DATABASES: "*"
+
+  # Server
+  APP_PORT: "8000"
+  LOG_LEVEL: "INFO"
+
+  # OpenAPI / GPT Action base URL
+  PUBLIC_BASE_URL: "https://clickhouse-api.example.com"
+
+# -----------------------------------------------------------------------------
+# Secrets — rendered into a Kubernetes Secret
+#
+# Option A (default): supply plain-text values here; the chart creates a Secret.
+#   Set connection.*, clickhousePassword, and apiKey.
+#
+# Option B: point to a pre-existing Secret (e.g. managed by Vault / ESO).
+#   Set existingSecret.name. The referenced Secret MUST contain ALL seven keys
+#   with their canonical env-var names:
+#     CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_DATABASE,
+#     CLICKHOUSE_SECURE, CLICKHOUSE_PASSWORD, API_KEY
+#
+# Option B takes precedence when existingSecret.name is non-empty.
+# -----------------------------------------------------------------------------
+secrets:
+  # ClickHouse connection/topology (Secret-managed because topology is sensitive)
+  connection:
+    CLICKHOUSE_HOST: "clickhouse.example.com"
+    CLICKHOUSE_PORT: "8443"
+    CLICKHOUSE_USER: "default"
+    CLICKHOUSE_DATABASE: "default"
+    CLICKHOUSE_SECURE: "true"
+
+  # Option A: inline credential values (base64-encoded automatically by Helm).
+  # REQUIRED: leave empty here and supply via --set or a separate values file.
+  # Installation will fail if both clickhousePassword/apiKey are empty AND
+  # existingSecret.name is not provided.
+  clickhousePassword: ""
+  apiKey: ""
+
+  # Option B: reference a pre-existing Secret
+  # The Secret must contain all seven keys with their canonical env-var names:
+  #   CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_DATABASE,
+  #   CLICKHOUSE_SECURE, CLICKHOUSE_PASSWORD, API_KEY
+  existingSecret:
+    name: ""
+
+# -----------------------------------------------------------------------------
+# Node scheduling
+# -----------------------------------------------------------------------------
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# -----------------------------------------------------------------------------
+# Additional environment variables
+# Injected directly into the container (not via ConfigMap/Secret).
+# Useful for one-off overrides during debugging.
+# Example:
+#   extraEnv:
+#     - name: SOME_FLAG
+#       value: "true"
+# -----------------------------------------------------------------------------
+extraEnv: []
