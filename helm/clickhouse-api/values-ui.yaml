@@ -1,0 +1,20 @@
+# Example values for the UI/admin release: helm install clickhouse-ui ./helm/clickhouse-api -f values-ui.yaml --set secrets.apiKey=... (plus ClickHouse connection)
+mode: api
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Restrict the admin/UI write path to trusted networks. EDIT these CIDRs.
+    nginx.ingress.kubernetes.io/whitelist-source-range: "203.0.113.0/24,10.0.0.0/8"
+    # Admin CSV upload limit is 200 MB; nginx default body size is 1m and would block ingests.
+    nginx.ingress.kubernetes.io/proxy-body-size: "200m"
+  host: ui.example.com
+  paths:
+    - path: /ui
+      pathType: Prefix
+    - path: /admin
+      pathType: Prefix
+  tls:
+    enabled: true
+    secretName: clickhouse-ui-tls

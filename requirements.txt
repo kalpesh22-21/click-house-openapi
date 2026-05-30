@@ -1,4 +1,5 @@
 fastapi==0.124.4
+python-multipart==0.0.20
 uvicorn[standard]==0.32.1
 clickhouse-connect==0.7.16
 pydantic-settings==2.7.1

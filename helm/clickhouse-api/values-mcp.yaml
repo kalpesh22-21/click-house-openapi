@@ -1,0 +1,19 @@
+# Example values for the MCP release: helm install clickhouse-mcp ./helm/clickhouse-api -f values-mcp.yaml --set secrets.apiKey=... (plus ClickHouse connection)
+mode: mcp
+config:
+  MCP_PORT: "8000"
+  MCP_PATH: "/mcp"
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # MCP streamable-HTTP is long-lived; disable buffering and raise read timeout.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  host: mcp.example.com
+  path: /mcp
+  pathType: Prefix
+  tls:
+    enabled: true
+    secretName: clickhouse-mcp-tls

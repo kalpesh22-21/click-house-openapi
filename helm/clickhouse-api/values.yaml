@@ -96,6 +96,11 @@ ingress:
   host: clickhouse-api.example.com
   path: /
   pathType: Prefix
+  # paths:                # optional: route multiple prefixes in one ingress (overrides `path`)
+  #   - path: /ui
+  #     pathType: Prefix
+  #   - path: /admin
+  #     pathType: Prefix
   tls:
     enabled: true
     secretName: clickhouse-api-tls

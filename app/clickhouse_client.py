@@ -193,9 +193,14 @@ def execute_query(
 
 
 def ping(settings: Settings | None = None) -> bool:
-    """Return True if ClickHouse responds to a lightweight ping."""
-    if settings is None:
-        settings = get_settings()
+    """Return True if ClickHouse responds to a lightweight ping.
+
+    Passes *settings* straight through to get_client: None (the production
+    path, e.g. /health probes) resolves to the cached singleton client, while
+    explicit settings build a one-off client (used by tests).  Resolving
+    settings eagerly here would force every probe through _build_client,
+    rebuilding the connection and re-logging on each call.
+    """
     try:
         client = get_client(settings)
         return client.ping()

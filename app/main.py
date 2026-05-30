@@ -10,9 +10,10 @@ from typing import Any, AsyncGenerator
 from fastapi import FastAPI, Request
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
-from app.routers import health, query, schema
+from app.routers import admin, health, query, schema
 
 # ---------------------------------------------------------------------------
 # Logging — use a default level at import time; the lifespan reconfigures
@@ -123,6 +124,13 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 app.include_router(health.router)
 app.include_router(schema.router)
 app.include_router(query.router)
+app.include_router(admin.router)
+
+# ---------------------------------------------------------------------------
+# Static files — admin UI (frontend developer will populate app/static/)
+# ---------------------------------------------------------------------------
+
+app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")
 
 
 # ---------------------------------------------------------------------------
