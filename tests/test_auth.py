@@ -30,7 +30,7 @@ def _make_client(api_key: str = "test-api-key-abc123") -> TestClient:
     mock_ch.ping.return_value = True
 
     with patch("app.clickhouse_client.get_client", return_value=mock_ch):
-        with patch("app.clickhouse_client.execute_query", return_value=(["col"], [["v"]])):
+        with patch("app.service.execute_query", return_value=(["col"], [["v"]])):
             from app.main import app
             # raise_server_exceptions=False so 401 is returned as a response, not raised.
             return TestClient(app, raise_server_exceptions=False)
@@ -49,7 +49,7 @@ def patch_clickhouse():
     mock_ch = MagicMock()
     mock_ch.ping.return_value = True
     with patch("app.clickhouse_client.get_client", return_value=mock_ch):
-        with patch("app.clickhouse_client.execute_query", return_value=(["col"], [["v"]])):
+        with patch("app.service.execute_query", return_value=(["col"], [["v"]])):
             os.environ["API_KEY"] = VALID_API_KEY
             get_settings.cache_clear()
             yield

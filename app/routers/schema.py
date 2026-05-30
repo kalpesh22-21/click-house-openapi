@@ -1,4 +1,8 @@
-"""Schema-discovery routes: listDatabases, listTables, getTableSchema, sampleRows."""
+"""Schema-discovery routes: listDatabases, listTables, getTableSchema, sampleRows.
+
+These are thin HTTP adapters.  All business logic lives in app.service.
+Domain errors from service.py are mapped to HTTP status codes here.
+"""
 
 from __future__ import annotations
 
@@ -7,29 +11,19 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.auth import require_api_key
-from app.clickhouse_client import execute_query
 from app.config import Settings, get_settings
+from app.errors import DatabaseNotAllowedError, TableNotFoundError
 from app.models import ColumnInfo, DatabaseInfo, SchemaResponse, TableInfo, QueryResponse
+from app.service import (
+    get_table_schema as svc_get_table_schema,
+    list_databases as svc_list_databases,
+    list_tables as svc_list_tables,
+    sample_rows as svc_sample_rows,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Schema Discovery"])
-
-
-def _check_database_allowed(database: str, settings: Settings) -> None:
-    """Raise 403 if *database* is not in the configured allowlist."""
-    allowed = settings.allowed_databases_list()
-    if allowed is not None and database not in allowed:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": (
-                    f"Access to database '{database}' is not permitted. "
-                    f"Allowed databases: {', '.join(allowed)}"
-                ),
-                "code": "DATABASE_NOT_ALLOWED",
-            },
-        )
 
 
 @router.get(
@@ -46,19 +40,9 @@ def _check_database_allowed(database: str, settings: Settings) -> None:
     dependencies=[Depends(require_api_key)],
 )
 def list_databases(settings: Settings = Depends(get_settings)) -> list[DatabaseInfo]:
-    """List all databases accessible through this API.
-
-    Filters results against the ALLOWED_DATABASES allowlist so the LLM only
-    sees databases it is permitted to query.
-    """
-    _, rows = execute_query("SELECT name FROM system.databases ORDER BY name", settings)
-
-    allowed = settings.allowed_databases_list()
-    results: list[DatabaseInfo] = []
-    for (name,) in rows:
-        if allowed is None or name in allowed:
-            results.append(DatabaseInfo(name=name))
-    return results
+    """List all databases accessible through this API."""
+    results = svc_list_databases(settings)
+    return [DatabaseInfo(name=r["name"]) for r in results]
 
 
 @router.get(
@@ -78,22 +62,16 @@ def list_tables(
     settings: Settings = Depends(get_settings),
 ) -> list[TableInfo]:
     """List all tables in *database*."""
-    _check_database_allowed(database, settings)
-
-    sql = (
-        "SELECT database, name, engine "
-        "FROM system.tables "
-        "WHERE database = {db:String} "
-        "ORDER BY name"
-    )
-    # Route through execute_query so that readonly_settings() is applied
-    # consistently (readonly + max_execution_time + max_result_rows +
-    # result_overflow_mode + max_rows_to_read).
-    _, rows = execute_query(sql, settings, parameters={"db": database})
-
+    try:
+        results = svc_list_tables(database, settings)
+    except DatabaseNotAllowedError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": exc.message, "code": exc.code},
+        ) from exc
     return [
-        TableInfo(database=row[0], name=row[1], engine=row[2])
-        for row in rows
+        TableInfo(database=r["database"], name=r["name"], engine=r["engine"])
+        for r in results
     ]
 
 
@@ -117,36 +95,27 @@ def get_table_schema(
     settings: Settings = Depends(get_settings),
 ) -> SchemaResponse:
     """Return column names, types, and comments for *database*.*table*."""
-    _check_database_allowed(database, settings)
-
-    sql = (
-        "SELECT name, type, comment "
-        "FROM system.columns "
-        "WHERE database = {db:String} AND table = {tbl:String} "
-        "ORDER BY position"
-    )
-
-    # Route through execute_query so that readonly_settings() is applied
-    # consistently across all query paths.
-    _, rows = execute_query(sql, settings, parameters={"db": database, "tbl": table})
-
-    if not rows:
+    try:
+        result = svc_get_table_schema(database, table, settings)
+    except DatabaseNotAllowedError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": exc.message, "code": exc.code},
+        ) from exc
+    except TableNotFoundError as exc:
         raise HTTPException(
             status_code=404,
-            detail={
-                "error": (
-                    f"Table '{database}.{table}' not found or has no columns. "
-                    "Check the database and table names with listTables."
-                ),
-                "code": "TABLE_NOT_FOUND",
-            },
-        )
+            detail={"error": exc.message, "code": exc.code},
+        ) from exc
 
-    columns = [
-        ColumnInfo(name=row[0], type=row[1], comment=row[2] or "")
-        for row in rows
-    ]
-    return SchemaResponse(database=database, table=table, columns=columns)
+    return SchemaResponse(
+        database=result["database"],
+        table=result["table"],
+        columns=[
+            ColumnInfo(name=c["name"], type=c["type"], comment=c["comment"])
+            for c in result["columns"]
+        ],
+    )
 
 
 @router.get(
@@ -169,20 +138,17 @@ def sample_rows(
     settings: Settings = Depends(get_settings),
 ) -> QueryResponse:
     """Return up to *limit* rows from *database*.*table*."""
-    _check_database_allowed(database, settings)
-
-    # We construct the table reference carefully — database and table names come
-    # from validated allowlist-checked parameters, not raw user SQL input.
-    # Use backtick quoting for identifiers to handle names with special characters.
-    safe_db = database.replace("`", "``")
-    safe_table = table.replace("`", "``")
-    sql = f"SELECT * FROM `{safe_db}`.`{safe_table}` LIMIT {limit}"
-
-    columns, rows = execute_query(sql, settings)
+    try:
+        result = svc_sample_rows(database, table, limit, settings)
+    except DatabaseNotAllowedError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": exc.message, "code": exc.code},
+        ) from exc
 
     return QueryResponse(
-        columns=columns,
-        rows=rows,
-        row_count=len(rows),
-        truncated=False,  # sample always returns exactly what was asked
+        columns=result["columns"],
+        rows=result["rows"],
+        row_count=result["row_count"],
+        truncated=result["truncated"],
     )

@@ -109,7 +109,7 @@ def test_client():
     mock_client.ping.return_value = True
 
     with patch("app.clickhouse_client.get_client", return_value=mock_client):
-        with patch("app.clickhouse_client.execute_query") as mock_execute:
+        with patch("app.service.execute_query") as mock_execute:
             # Default: return two columns and one row so routes work out of the box.
             mock_execute.return_value = (["col1", "col2"], [["val1", "val2"]])
 

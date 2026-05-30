@@ -18,7 +18,6 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        # Force pod restart when ConfigMap changes (checksum-based rollout trigger).
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}
@@ -40,26 +39,52 @@ spec:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           ports:
             - name: http
+              {{- if eq .Values.mode "mcp" }}
+              containerPort: {{ .Values.config.MCP_PORT | default "8000" | int }}
+              {{- else }}
               containerPort: {{ .Values.service.targetPort }}
+              {{- end }}
               protocol: TCP
-          # Load non-secret config from ConfigMap
-          # Load all secret keys (connection + credentials) from the Secret via envFrom
           envFrom:
             - configMapRef:
                 name: {{ include "clickhouse-api.fullname" . }}
             - secretRef:
                 name: {{ include "clickhouse-api.secretName" . }}
-          {{- with .Values.extraEnv }}
           env:
+            - name: MODE
+              value: {{ .Values.mode | quote }}
+            {{- if eq .Values.mode "mcp" }}
+            - name: MCP_TRANSPORT
+              value: "http"
+            {{- end }}
+            {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- end }}
+          {{- if eq .Values.mode "mcp" }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          {{- else }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
             {{- toYaml .Values.readinessProbe | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          # readOnlyRootFilesystem=true requires a writable /tmp for temp files.
           volumeMounts:
             - name: tmp
               mountPath: /tmp

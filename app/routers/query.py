@@ -1,20 +1,49 @@
-"""Query execution routes: runQuery, explainQuery."""
+"""Query execution routes: runQuery, explainQuery.
+
+These are thin HTTP adapters.  All business logic lives in app.service.
+Domain errors from service.py are mapped to HTTP status codes here.
+"""
 
 from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import require_api_key
-from app.clickhouse_client import execute_query
 from app.config import Settings, get_settings
+from app.errors import (
+    ClickHouseQueryError,
+    ClickHouseUnavailableError,
+    QueryValidationError,
+)
 from app.models import ExplainRequest, QueryRequest, QueryResponse
-from app.security import validate_and_sanitize
+from app.service import explain_query as svc_explain_query, run_query as svc_run_query
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Query Execution"])
+
+
+def _map_query_error(exc: Exception) -> HTTPException:
+    """Map a domain query error to an HTTPException with the correct status code."""
+    if isinstance(exc, QueryValidationError):
+        return HTTPException(
+            status_code=400,
+            detail={"error": exc.message, "code": exc.code},
+        )
+    if isinstance(exc, ClickHouseQueryError):
+        return HTTPException(
+            status_code=400,
+            detail={"error": exc.message, "code": exc.code},
+        )
+    if isinstance(exc, ClickHouseUnavailableError):
+        return HTTPException(
+            status_code=502,
+            detail={"error": exc.message, "code": exc.code},
+        )
+    # Unexpected — re-raise so the global handler picks it up.
+    raise exc  # type: ignore[misc]
 
 
 @router.post(
@@ -38,41 +67,17 @@ def run_query(
     body: QueryRequest,
     settings: Settings = Depends(get_settings),
 ) -> QueryResponse:
-    """Validate, optionally limit, and execute *body.sql*.
-
-    Results are truncated at MAX_RESPONSE_ROWS.  The ``truncated`` flag tells
-    the caller whether data was cut off.
-    """
-    sql = validate_and_sanitize(body.sql, settings.default_limit)
-
-    # If the caller supplied an explicit limit, re-apply it (the sanitiser may
-    # have already injected one; we override with the caller's preference when
-    # it is more restrictive).
-    if body.limit is not None:
-        effective_limit = min(body.limit, settings.max_response_rows)
-        # Replace any existing injected limit with the caller's value.
-        # Simple append approach: wrap as subquery is fragile; instead rely on
-        # the fact that validate_and_sanitize only appended a LIMIT when there
-        # was none — so if body.limit is set we can safely replace the tail.
-        import re as _re
-        sql = _re.sub(
-            r"\bLIMIT\s+\d+\s*$",
-            f"LIMIT {effective_limit}",
-            sql,
-            flags=_re.IGNORECASE,
-        )
-
-    columns, rows = execute_query(sql, settings)
-
-    truncated = len(rows) > settings.max_response_rows
-    if truncated:
-        rows = rows[: settings.max_response_rows]
+    """Validate, optionally limit, and execute *body.sql*."""
+    try:
+        result = svc_run_query(body.sql, body.limit, settings)
+    except (QueryValidationError, ClickHouseQueryError, ClickHouseUnavailableError) as exc:
+        raise _map_query_error(exc) from exc
 
     return QueryResponse(
-        columns=columns,
-        rows=rows,
-        row_count=len(rows),
-        truncated=truncated,
+        columns=result["columns"],
+        rows=result["rows"],
+        row_count=result["row_count"],
+        truncated=result["truncated"],
     )
 
 
@@ -94,21 +99,15 @@ def explain_query(
     body: ExplainRequest,
     settings: Settings = Depends(get_settings),
 ) -> QueryResponse:
-    """Wrap *body.sql* in EXPLAIN and return the plan.
-
-    The inner SQL is still validated by the guardrails so that the user cannot
-    sneak a mutation inside an EXPLAIN wrapper.
-    """
-    # Validate the inner SQL first (strip its injected LIMIT — EXPLAIN doesn't need it).
-    inner_sql = validate_and_sanitize(body.sql, settings.default_limit)
-
-    explain_sql = f"EXPLAIN {inner_sql}"
-
-    columns, rows = execute_query(explain_sql, settings)
+    """Wrap *body.sql* in EXPLAIN and return the plan."""
+    try:
+        result = svc_explain_query(body.sql, settings)
+    except (QueryValidationError, ClickHouseQueryError, ClickHouseUnavailableError) as exc:
+        raise _map_query_error(exc) from exc
 
     return QueryResponse(
-        columns=columns,
-        rows=rows,
-        row_count=len(rows),
-        truncated=False,
+        columns=result["columns"],
+        rows=result["rows"],
+        row_count=result["row_count"],
+        truncated=result["truncated"],
     )

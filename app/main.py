@@ -15,13 +15,14 @@ from app.config import get_settings
 from app.routers import health, query, schema
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging — use a default level at import time; the lifespan reconfigures
+# once settings are loaded.  This avoids a hard import-time get_settings()
+# call that would crash if API_KEY is absent (stdio MCP uses a different
+# entrypoint, but we still want main.py to be importable by tooling).
 # ---------------------------------------------------------------------------
 
-settings = get_settings()
-
 logging.basicConfig(
-    level=getattr(logging, settings.log_level, logging.INFO),
+    level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
     stream=sys.stdout,
 )
@@ -37,14 +38,37 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: RUF029
     """Startup / shutdown logic.
 
-    On startup we eagerly create the ClickHouse client so that connection
-    errors surface immediately rather than on the first request.
+    On startup we:
+      1. Check that API_KEY is configured — the REST API always requires auth.
+         An empty key would leave the service permanently unauthenticated, so
+         we log a CRITICAL message and exit rather than serve unprotected routes.
+      2. Eagerly create the ClickHouse client so connection errors surface
+         immediately rather than on the first request.
     """
     from app.clickhouse_client import get_client
 
+    settings = get_settings()
+
+    # Reconfigure logging now that we have the real log level from settings.
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level, logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        stream=sys.stdout,
+        force=True,
+    )
+
+    # Fail closed: the REST API has no unauthenticated mode.  If API_KEY is
+    # not set, refuse to serve rather than allow open access.
+    if not settings.api_key or not settings.api_key.strip():
+        logger.critical(
+            "REST API requires a non-empty API_KEY. "
+            "Set API_KEY to a real secret and restart."
+        )
+        sys.exit(1)
+
     logger.info("Initialising ClickHouse client...")
     try:
-        get_client(settings)
+        get_client()
         logger.info("ClickHouse client initialised successfully.")
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to initialise ClickHouse client: %s", exc)
@@ -124,7 +148,7 @@ def custom_openapi() -> dict[str, Any]:
 
     schema["servers"] = [
         {
-            "url": settings.public_base_url,
+            "url": get_settings().public_base_url,
             "description": "Production — set PUBLIC_BASE_URL env var to your HTTPS endpoint",
         }
     ]

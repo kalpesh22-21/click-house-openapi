@@ -1,0 +1,16 @@
+# Example-only dependencies — separate from the app's requirements.txt so
+# these are not pulled into the server Docker image.
+#
+# Requires Python >= 3.10 (openai-agents uses X | Y union syntax).
+# Tested against: openai-agents==0.17.4, openai==2.38.0
+#
+# Install into a dedicated venv:
+#   python3.10+ -m venv .venv-examples
+#   .venv-examples/bin/pip install -r examples/requirements.txt
+
+# OpenAI Agents SDK — provides Agent, Runner, MCPServerStreamableHttp
+openai-agents>=0.17.4
+
+# OpenAI Python SDK — provides the Responses API client used by responses_api_demo.py
+# Also a transitive dependency of openai-agents, pinned here for clarity.
+openai>=2.38.0

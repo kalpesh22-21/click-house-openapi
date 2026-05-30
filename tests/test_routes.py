@@ -59,28 +59,37 @@ def env_setup():
 
 
 @pytest.fixture()
-def mock_query_execute():
-    """Patch execute_query as bound in the query router."""
-    with patch("app.routers.query.execute_query") as m:
+def mock_execute():
+    """Patch execute_query in the service layer — single patch covers all routes.
+
+    Both query and schema operations now go through app.service.execute_query,
+    so there is only one patch target.  Individual tests configure the return
+    value as needed; the default here satisfies most schema-route tests.
+    """
+    with patch("app.service.execute_query") as m:
         m.return_value = (["id", "name"], [["1", "Alice"], ["2", "Bob"]])
         yield m
 
 
 @pytest.fixture()
-def mock_schema_execute():
-    """Patch execute_query as bound in the schema router."""
-    with patch("app.routers.schema.execute_query") as m:
-        m.return_value = (["name"], [["default"], ["analytics"]])
-        yield m
+def mock_query_execute(mock_execute):
+    """Alias kept for backward compatibility with existing query-route tests."""
+    return mock_execute
+
+
+@pytest.fixture()
+def mock_schema_execute(mock_execute):
+    """Alias kept for backward compatibility with existing schema-route tests."""
+    mock_execute.return_value = (["name"], [["default"], ["analytics"]])
+    return mock_execute
 
 
 @pytest.fixture()
 def mock_ch_client():
     """Patch get_client at the clickhouse_client module level.
 
-    All schema routes now go through execute_query (which is separately patched
-    by mock_schema_execute).  This fixture is kept so that the ping() call in
-    the lifespan/health route succeeds without a real ClickHouse server.
+    Needed so the ping() call in the lifespan/health route succeeds without a
+    real ClickHouse server.
     """
     mock = MagicMock()
     mock.ping.return_value = True
@@ -89,7 +98,7 @@ def mock_ch_client():
 
 
 @pytest.fixture()
-def client(mock_query_execute, mock_schema_execute, mock_ch_client):
+def client(mock_execute, mock_ch_client):
     """TestClient with all ClickHouse interactions stubbed."""
     from app.main import app
     return TestClient(app, raise_server_exceptions=False)

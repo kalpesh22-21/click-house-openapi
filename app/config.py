@@ -32,7 +32,11 @@ class Settings(BaseSettings):
     clickhouse_secure: bool = Field(True, description="Use TLS for ClickHouse connection")
 
     # --- API authentication ---
-    api_key: str = Field(..., description="Bearer token required on every route (secret)")
+    # Optional at the schema level so that MCP stdio mode (which requires no auth)
+    # can start without API_KEY set.  The REST API and MCP HTTP transport enforce
+    # a non-empty value contextually at the point where auth is actually performed —
+    # see app/auth.py (REST) and app/mcp_server._run_http (MCP HTTP).
+    api_key: str = Field("", description="Bearer token required for REST API and MCP HTTP transport (secret). Not used for MCP stdio.")
 
     # --- Query safety limits ---
     max_execution_time: int = Field(30, description="Max query wall-clock time in seconds")
@@ -53,6 +57,24 @@ class Settings(BaseSettings):
     # --- Server ---
     app_port: int = Field(8000, description="Port uvicorn listens on")
     log_level: str = Field("INFO", description="Python logging level")
+
+    # --- MCP ---
+    mode: str = Field(
+        "api",
+        description=(
+            "Server mode: 'api' starts the REST/FastAPI server (default), "
+            "'mcp' starts the MCP server."
+        ),
+    )
+    mcp_transport: str = Field(
+        "stdio",
+        description=(
+            "MCP transport: 'stdio' for local desktop clients (no auth required), "
+            "'http' for streamable-HTTP over the network (Bearer auth enforced)."
+        ),
+    )
+    mcp_port: int = Field(8000, description="Port the MCP HTTP server listens on (default 8000)")
+    mcp_path: str = Field("/mcp", description="Mount path for the MCP streamable-HTTP endpoint")
 
     # --- OpenAPI / GPT Action ---
     public_base_url: str = Field(

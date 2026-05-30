@@ -4,6 +4,19 @@
 # Override any value with --set key=value or -f my-values.yaml on install.
 
 # -----------------------------------------------------------------------------
+# Mode — controls which server process runs in the container.
+#
+#   api  (default): REST/FastAPI server exposed via uvicorn.
+#   mcp            : MCP server in streamable-HTTP transport (stdio is
+#                    meaningless inside Kubernetes; use 'http' there).
+#
+# When mode=mcp the chart sets MCP_TRANSPORT=http automatically, configures
+# the liveness/readiness probes to hit GET /health on the MCP port, and
+# adjusts the service targetPort to MCP_PORT.
+# -----------------------------------------------------------------------------
+mode: api
+
+# -----------------------------------------------------------------------------
 # Image
 # -----------------------------------------------------------------------------
 image:
@@ -66,7 +79,8 @@ resources:
 service:
   type: ClusterIP
   port: 80
-  # targetPort is the APP_PORT value (default 8000)
+  # targetPort is the APP_PORT value for mode=api, or MCP_PORT for mode=mcp.
+  # The deployment template overrides this automatically based on mode.
   targetPort: 8000
 
 # -----------------------------------------------------------------------------
@@ -98,7 +112,10 @@ hpa:
 
 # -----------------------------------------------------------------------------
 # Liveness / readiness probes
-# Both hit GET /health on the container port.
+#
+# mode=api  : hit GET /health on the container port (REST server).
+# mode=mcp  : the deployment template overrides these to hit GET /health
+#             on the MCP port (MCP HTTP server also exposes /health).
 # -----------------------------------------------------------------------------
 livenessProbe:
   httpGet:
@@ -140,6 +157,11 @@ config:
 
   # OpenAPI / GPT Action base URL
   PUBLIC_BASE_URL: "https://clickhouse-api.example.com"
+
+  # MCP configuration (non-secret — no credentials here)
+  # MCP_TRANSPORT is set automatically by the deployment when mode=mcp.
+  MCP_PORT: "8000"
+  MCP_PATH: "/mcp"
 
 # -----------------------------------------------------------------------------
 # Secrets — rendered into a Kubernetes Secret

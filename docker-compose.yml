@@ -1,0 +1,80 @@
+# Local end-to-end stack: ClickHouse + the read-only API.
+# Usage:
+#   docker compose up -d --build
+#   curl -H "Authorization: Bearer test-key-abc123" http://localhost:8000/health
+#
+# This is a DEV/TEST setup: ClickHouse runs over plain HTTP (8123) with the
+# default user, so the API is configured with CLICKHOUSE_SECURE=false.
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: ch-test
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    environment:
+      # Allow the default user to connect without a password (dev only).
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # native
+    volumes:
+      - ./docker/clickhouse-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--host", "localhost", "--query", "SELECT 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ch-api
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      MODE: "api"
+      CLICKHOUSE_HOST: "clickhouse"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_SECURE: "false"
+      CLICKHOUSE_USER: "default"
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DATABASE: "analytics"
+      API_KEY: "test-key-abc123"
+      ALLOWED_DATABASES: "*"
+      APP_PORT: "8000"
+      LOG_LEVEL: "INFO"
+      PUBLIC_BASE_URL: "http://localhost:8000"
+    ports:
+      - "18080:8000"
+
+  # MCP server, streamable-HTTP transport. Same image as `api`, MODE=mcp.
+  # Bearer auth is enforced on the /mcp path; /health is unauthenticated.
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ch-mcp
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      MODE: "mcp"
+      MCP_TRANSPORT: "http"
+      MCP_PORT: "8000"
+      MCP_PATH: "/mcp"
+      CLICKHOUSE_HOST: "clickhouse"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_SECURE: "false"
+      CLICKHOUSE_USER: "default"
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DATABASE: "analytics"
+      API_KEY: "test-key-abc123"
+      ALLOWED_DATABASES: "*"
+      LOG_LEVEL: "INFO"
+    ports:
+      - "18090:8000"

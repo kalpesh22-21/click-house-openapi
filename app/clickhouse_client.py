@@ -45,18 +45,8 @@ def _redact_connection_details(msg: str, settings: Settings) -> str:
     return msg
 
 
-@lru_cache(maxsize=1)
-def get_client(settings: Settings | None = None) -> Client:
-    """Return a cached clickhouse-connect Client built from *settings*.
-
-    The lru_cache means we create exactly one client for the lifetime of the
-    process (connection pooling is handled internally by clickhouse-connect).
-    Pass *settings* explicitly only in tests; production code calls
-    ``get_client()`` with no arguments.
-    """
-    if settings is None:
-        settings = get_settings()
-
+def _build_client(settings: Settings) -> Client:
+    """Construct a fresh clickhouse-connect Client from *settings* (no caching)."""
     logger.info(
         "Creating ClickHouse client: host=%s port=%s secure=%s user=%s",
         settings.clickhouse_host,
@@ -76,6 +66,31 @@ def get_client(settings: Settings | None = None) -> Client:
         # by setting verify=False only in development environments.
         verify=settings.clickhouse_secure,
     )
+
+
+@lru_cache(maxsize=1)
+def _cached_client() -> Client:
+    """Process-wide singleton Client built from the cached settings.
+
+    The cache key is the (empty) argument list, NOT the Settings object —
+    pydantic Settings instances are unhashable, so lru_cache must never receive
+    one as an argument.
+    """
+    return _build_client(get_settings())
+
+
+def get_client(settings: Settings | None = None) -> Client:
+    """Return the clickhouse-connect Client.
+
+    Production code calls ``get_client()`` with no arguments and receives the
+    process-wide cached singleton (clickhouse-connect pools connections
+    internally).  Tests may pass an explicit *settings* to build a one-off,
+    uncached client — this path deliberately bypasses the lru_cache so an
+    unhashable Settings object is never used as a cache key.
+    """
+    if settings is not None:
+        return _build_client(settings)
+    return _cached_client()
 
 
 def readonly_settings(settings: Settings) -> dict[str, Any]:
@@ -123,7 +138,10 @@ def execute_query(
     if settings is None:
         settings = get_settings()
 
-    client = get_client(settings)
+    # Use the cached singleton client (no-arg). Passing settings here would
+    # build a fresh client on every query and (historically) crash because
+    # lru_cache cannot hash a Settings object.
+    client = get_client()
     ch_settings = readonly_settings(settings)
 
     try:
