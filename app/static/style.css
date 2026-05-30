@@ -398,11 +398,14 @@ select.error {
 }
 
 .col-editor-table td:first-child {
-  font-weight: 500;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 0.8rem;
-  color: #1e3a8a;
-  width: 40%;
+  width: 30%;
+}
+
+/* Muted hint showing the original (pre-sanitization) CSV header */
+.orig-hint {
+  font-size: 11px;
+  color: #888;
+  margin-top: 0.2rem;
 }
 
 /* --- Schema diff ------------------------------------------ */

@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 # through DDL identifier interpolation.
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# Used by _sanitize_column_name to replace runs of disallowed characters.
+_SANITIZE_COLLAPSE_RE = re.compile(r"[^a-z0-9_]+")
+
 # Whitelist of allowed ClickHouse type expressions (base types and wrappers).
 # This regex matches:
 #   Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
@@ -94,6 +97,77 @@ def validate_ch_type(type_str: str) -> str:
             "Nullable(<type>), LowCardinality(String)."
         )
     return type_str.strip()
+
+
+# ---------------------------------------------------------------------------
+# Column name sanitization (CSV → valid ClickHouse identifiers)
+# ---------------------------------------------------------------------------
+
+
+def _sanitize_column_name(name: str) -> str:
+    """Convert an arbitrary CSV header cell into a valid ClickHouse identifier.
+
+    Steps (applied in order):
+    1. Strip leading/trailing whitespace and convert to lowercase.
+    2. Replace every run of characters NOT in [a-z0-9_] with a single "_".
+    3. Collapse consecutive underscores into one.
+    4. Strip leading and trailing underscores.
+    5. If the result is empty, return "column".
+    6. If the first character is a digit, prepend "_".
+
+    The result always matches ^[A-Za-z_][A-Za-z0-9_]*$ (i.e. _SAFE_IDENTIFIER_RE).
+
+    Examples::
+
+        "Order Date"    → "order_date"
+        "Total (USD)"   → "total_usd"
+        "2024 Sales"    → "_2024_sales"
+        "  --  "        → "column"
+    """
+    s = name.strip().lower()
+    # Replace runs of characters outside [a-z0-9_] with a single underscore.
+    s = _SANITIZE_COLLAPSE_RE.sub("_", s)
+    # Collapse repeated underscores.
+    s = re.sub(r"_+", "_", s)
+    # Strip leading/trailing underscores.
+    s = s.strip("_")
+    # Empty result → fallback.
+    if not s:
+        return "column"
+    # Leading digit → prepend underscore.
+    if s[0].isdigit():
+        s = "_" + s
+    return s
+
+
+def _sanitize_columns(header: list[str]) -> list[str]:
+    """Sanitize a list of CSV header names into unique ClickHouse identifiers.
+
+    Each name is sanitized with _sanitize_column_name.  If two or more sanitized
+    names collide, the first occurrence keeps the base name and each subsequent
+    collision is suffixed _2, _3, … (re-checking against all already-taken names
+    to avoid introducing new collisions).
+
+    Preserves order and length: one output name per input name.
+    """
+    taken: set[str] = set()
+    result: list[str] = []
+
+    for raw in header:
+        base = _sanitize_column_name(raw)
+        if base not in taken:
+            taken.add(base)
+            result.append(base)
+        else:
+            counter = 2
+            candidate = f"{base}_{counter}"
+            while candidate in taken:
+                counter += 1
+                candidate = f"{base}_{counter}"
+            taken.add(candidate)
+            result.append(candidate)
+
+    return result
 
 
 def _redact_ch_error(msg: str, host: str, password: str) -> str:
@@ -486,21 +560,42 @@ def coerce(value: str, ch_type: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _escape_sql_string(s: str) -> str:
+    """Escape *s* for use inside a ClickHouse single-quoted string literal.
+
+    Applies escaping in the required order:
+    1. Replace backslash with double-backslash.
+    2. Replace single-quote with backslash-single-quote.
+    3. Strip null bytes (they are not valid inside SQL string literals).
+    4. Escape newline and carriage-return as \\n and \\r respectively.
+
+    The caller is responsible for surrounding the result with single quotes.
+    """
+    s = s.replace("\\", "\\\\")
+    s = s.replace("'", "\\'")
+    s = s.replace("\x00", "")
+    s = s.replace("\n", "\\n")
+    s = s.replace("\r", "\\r")
+    return s
+
+
 def build_create_table_sql(
     database: str,
     table: str,
-    columns: list[dict[str, str]],
+    columns: list[dict],
     order_by: list[str],
 ) -> str:
     """Return a CREATE TABLE ... ENGINE=MergeTree DDL string.
 
     All identifiers and types are validated before use; raises ValueError on
-    any invalid input.
+    any invalid input.  Column entries may optionally contain a 'description'
+    key; when present and non-empty, a COMMENT clause is appended to that
+    column's DDL fragment.
 
     Args:
         database:  Validated database name.
         table:     Validated table name.
-        columns:   List of {"name": col_name, "type": ch_type} dicts.
+        columns:   List of {"name": col_name, "type": ch_type[, "description": str]} dicts.
         order_by:  List of column names for ORDER BY.  Empty list -> tuple().
     """
     if not columns:
@@ -510,7 +605,11 @@ def build_create_table_sql(
     for col in columns:
         col_name = validate_identifier(col["name"])
         col_type = validate_ch_type(col["type"])
-        col_defs.append(f"    `{col_name}` {col_type}")
+        col_def = f"    `{col_name}` {col_type}"
+        desc = col.get("description")
+        if desc:
+            col_def += f" COMMENT '{_escape_sql_string(desc)}'"
+        col_defs.append(col_def)
 
     cols_sql = ",\n".join(col_defs)
 
@@ -568,6 +667,24 @@ def _query_existing_schema(
         parameters={"db": database, "tbl": table},
     )
     return [{"name": row[0], "type": row[1]} for row in result.result_rows]
+
+
+def _query_existing_comments(
+    client: Client, database: str, table: str
+) -> dict[str, str]:
+    """Fetch column comments for all columns in *database*.*table*.
+
+    Returns a dict mapping column name → comment string (empty string when
+    no comment is set).  *_query_existing_schema* is left unchanged so that
+    its callers (_append, etc.) are not affected.
+    """
+    result = client.query(
+        "SELECT name, comment FROM system.columns "
+        "WHERE database = {db:String} AND table = {tbl:String} "
+        "ORDER BY position",
+        parameters={"db": database, "tbl": table},
+    )
+    return {row[0]: (row[1] if row[1] is not None else "") for row in result.result_rows}
 
 
 def _query_max_timestamp(
@@ -638,6 +755,137 @@ def _batch_insert(
 
 
 # ---------------------------------------------------------------------------
+# Column JSON parsing helper
+# ---------------------------------------------------------------------------
+
+
+def _parse_columns_json(columns_json: str) -> list[dict]:
+    """Parse and validate a columns JSON string into a list of column dicts.
+
+    Each entry must have at minimum "name" (valid identifier) and "type"
+    (whitelisted ClickHouse type).  An optional "description" key is threaded
+    through; if present it must be a string (or None / absent).
+
+    Raises ValueError for:
+    - Invalid JSON
+    - Invalid identifier in "name"
+    - Disallowed type in "type"
+    - Non-string "description" value (when present and not None)
+    """
+    try:
+        raw = json.loads(columns_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid columns JSON: {exc}") from exc
+
+    if not isinstance(raw, list):
+        raise ValueError("columns JSON must be a JSON array.")
+
+    result: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("Each entry in 'columns' must be a JSON object.")
+        if "name" not in item or "type" not in item:
+            raise ValueError("Each column entry must have 'name' and 'type'.")
+        validate_identifier(item["name"])
+        validate_ch_type(item["type"])
+        name = item["name"]
+        if name in seen:
+            raise ValueError(f"Duplicate column name {name!r} in 'columns'.")
+        seen.add(name)
+        desc = item.get("description")
+        if desc is not None and not isinstance(desc, str):
+            raise ValueError(
+                f"Column 'description' must be a string or null/absent, "
+                f"got {type(desc).__name__!r} for column {item['name']!r}."
+            )
+        result.append({"name": name, "type": item["type"], "description": desc})
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Column report builder
+# ---------------------------------------------------------------------------
+
+
+def _build_column_report(
+    header: list[str],
+    sanitized: list[str],
+    inferred: list[dict[str, str]],
+    existing: list[dict[str, str]] | None,
+    existing_comments: dict[str, str] | None,
+) -> list[dict]:
+    """Build the per-column analysis report for the analyze() response.
+
+    For each CSV column i, produces::
+
+        {
+            "original_name": header[i],
+            "name": sanitized[i],
+            "inferred_type": <type inferred from CSV values>,
+            "existing_type": <type from existing table, or None>,
+            "description": <comment from existing table, or "">,
+            "in_csv": True,
+        }
+
+    Then, for any column in the existing table that is NOT in *sanitized*,
+    appends::
+
+        {
+            "original_name": colname,
+            "name": colname,
+            "inferred_type": None,
+            "existing_type": existing[colname],
+            "description": existing_comments.get(colname, ""),
+            "in_csv": False,
+        }
+
+    *inferred* is the list returned by infer_schema() keyed by SANITIZED column name
+    (not the raw header name).  *existing* is the list returned by
+    _query_existing_schema() ({name: type} after conversion).
+    """
+    # Build lookup from sanitized column name → inferred type.
+    inferred_by_raw: dict[str, str] = {col["name"]: col["suggested_type"] for col in inferred}
+
+    # Build existing type lookup (name → type) from existing schema list.
+    existing_by_name: dict[str, str] = {}
+    if existing:
+        for col in existing:
+            existing_by_name[col["name"]] = col["type"]
+
+    existing_comments_safe: dict[str, str] = existing_comments or {}
+
+    entries: list[dict] = []
+    sanitized_set: set[str] = set(sanitized)
+
+    for i, raw_name in enumerate(header):
+        san = sanitized[i]
+        entries.append({
+            "original_name": raw_name,
+            "name": san,
+            "inferred_type": inferred_by_raw.get(san),
+            "existing_type": existing_by_name.get(san),
+            "description": existing_comments_safe.get(san, ""),
+            "in_csv": True,
+        })
+
+    # Columns that exist in the table but are absent from the CSV.
+    for colname, coltype in existing_by_name.items():
+        if colname not in sanitized_set:
+            entries.append({
+                "original_name": colname,
+                "name": colname,
+                "inferred_type": None,
+                "existing_type": coltype,
+                "description": existing_comments_safe.get(colname, ""),
+                "in_csv": False,
+            })
+
+    return entries
+
+
+# ---------------------------------------------------------------------------
 # Public service functions
 # ---------------------------------------------------------------------------
 
@@ -686,15 +934,24 @@ def analyze(
         tbl_exists = _query_table_exists(client, database, table)
 
         header, sample, total_data_rows = parse_csv_sample(file_content, sample_rows=1000)
-        inferred = infer_schema(header, sample)
+        sanitized = _sanitize_columns(header)
+        # Infer schema using sanitized names so entries are keyed by sanitized name,
+        # matching what is stored in the existing table (also sanitized).
+        inferred = infer_schema(sanitized, sample)
 
         existing_schema: list[dict[str, str]] | None = None
+        existing_comments: dict[str, str] | None = None
         schema_matches: bool | None = None
         schema_diff: dict[str, Any] | None = None
 
         if tbl_exists:
             existing_schema = _query_existing_schema(client, database, table)
-            schema_matches, schema_diff = compare_schemas(header, inferred, existing_schema)
+            existing_comments = _query_existing_comments(client, database, table)
+            schema_matches, schema_diff = compare_schemas(sanitized, inferred, existing_schema)
+
+        columns_report = _build_column_report(
+            header, sanitized, inferred, existing_schema, existing_comments
+        )
 
     except ClickHouseError as exc:
         redacted = _redact_ch_error(str(exc), host, password)
@@ -715,6 +972,7 @@ def analyze(
         "existing_schema": existing_schema,
         "schema_matches": schema_matches,
         "schema_diff": schema_diff,
+        "columns": columns_report,
     }
 
 
@@ -753,16 +1011,12 @@ def ingest(
     validate_identifier(database)
     validate_identifier(table)
 
-    # Parse columns from JSON if provided.
-    columns: list[dict[str, str]] | None = None
+    # Parse columns from JSON if provided; otherwise auto-build from CSV header.
+    columns: list[dict] | None = None
     if columns_json:
-        try:
-            columns = json.loads(columns_json)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid columns JSON: {exc}") from exc
-        for col in columns:
-            validate_identifier(col["name"])
-            validate_ch_type(col["type"])
+        columns = _parse_columns_json(columns_json)
+    # columns left as None here if columns_json absent; built from CSV header
+    # later (inside _run_ingest after header is parsed) for create/wipe.
 
     # Parse order_by from JSON if provided.
     order_by: list[str] = []
@@ -773,9 +1027,6 @@ def ingest(
             raise ValueError(f"Invalid order_by JSON: {exc}") from exc
         for ob in order_by:
             validate_identifier(ob)
-
-    if mode in ("create", "wipe") and not columns:
-        raise ValueError(f"columns is required for mode '{mode}'.")
 
     if mode == "append" and not timestamp_column:
         raise ValueError("timestamp_column is required for append mode.")
@@ -824,7 +1075,7 @@ def _run_ingest(
     table: str,
     file_content: bytes,
     mode: str,
-    columns: list[dict[str, str]] | None,
+    columns: list[dict] | None,
     order_by: list[str],
     timestamp_column: str | None,
     batch_size: int,
@@ -834,9 +1085,35 @@ def _run_ingest(
     All CSV-to-DB column mapping is done BY NAME (not by position) so that
     a CSV whose column order differs from the declared/table column order
     still lands values in the correct columns.
+
+    When *columns* is None (no columns_json was provided by the caller) and
+    mode is 'create' or 'wipe', column names and types are auto-inferred from
+    the CSV header and sample rows using sanitized snake_case names.
     """
     db = validate_identifier(database)
     tbl = validate_identifier(table)
+
+    # For create/wipe without explicit columns, parse CSV now to auto-build schema.
+    # We use a sample (up to 1000 rows) for type inference; the full streaming
+    # ingest happens later.  Track whether auto-build happened so we can switch
+    # from name-based to positional CSV→column mapping below.
+    _auto_built_columns = False
+    if columns is None and mode in ("create", "wipe"):
+        auto_header, auto_sample, _ = parse_csv_sample(file_content, sample_rows=1000)
+        if not auto_header:
+            raise ValueError("CSV has no header row — cannot auto-infer schema.")
+        sanitized_auto = _sanitize_columns(auto_header)
+        columns = [
+            {
+                "name": sanitized_auto[i],
+                "type": infer_column_type(
+                    [row[i] if i < len(row) else "" for row in auto_sample]
+                ),
+                "description": None,
+            }
+            for i in range(len(auto_header))
+        ]
+        _auto_built_columns = True
 
     if mode == "create":
         # Fail if table already exists.
@@ -885,10 +1162,27 @@ def _run_ingest(
 
     col_names = [c["name"] for c in columns]
 
-    # For create/wipe: validate that every declared column name exists in the CSV header.
-    # For append: every table column must be present in the CSV header.
-    csv_name_to_idx = {name: i for i, name in enumerate(header)}
-    missing_cols = [c["name"] for c in columns if c["name"] not in csv_name_to_idx]
+    # Build the CSV header name → column index mapping.
+    # For auto-built columns (sanitized names from CSV header), use positional
+    # mapping so that sanitized name i → CSV position i.
+    # For explicitly-declared columns (create/wipe with columns_json), use name-based
+    # mapping against the raw header (declared names must match CSV header names exactly).
+    # For append columns (from existing table schema — sanitized names), sanitize the
+    # CSV header names too so they match the table's sanitized column names.
+    if _auto_built_columns:
+        # Positional mapping: sanitized column name → its CSV position index.
+        csv_name_to_idx = {col["name"]: i for i, col in enumerate(columns)}
+        missing_cols: list[str] = []  # positions guaranteed to exist
+    elif mode == "append":
+        # Append: existing table has sanitized column names; CSV header may be messy.
+        # Sanitize the CSV header names and map sanitized→index so they align.
+        sanitized_header = _sanitize_columns(header)
+        csv_name_to_idx = {san: i for i, san in enumerate(sanitized_header)}
+        missing_cols = [c["name"] for c in columns if c["name"] not in csv_name_to_idx]
+    else:
+        # Name-based mapping: every declared column name must appear in header.
+        csv_name_to_idx = {name: i for i, name in enumerate(header)}
+        missing_cols = [c["name"] for c in columns if c["name"] not in csv_name_to_idx]
     if missing_cols:
         raise ValueError(
             f"CSV is missing columns required by the declared schema: "

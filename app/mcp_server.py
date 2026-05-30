@@ -384,7 +384,13 @@ async def health_check(request: Request) -> JSONResponse:
     """
     from app.clickhouse_client import ping
 
-    ch_ok = ping(settings)
+    # Call ping() with NO arguments so it reuses the process-wide cached
+    # singleton client. Passing an explicit settings routes through
+    # get_client(settings) -> _build_client, which constructs (and logs) a
+    # brand-new client on every probe — liveness/readiness probes run every
+    # few seconds, so that churns connections continuously. (Mirrors the REST
+    # /health route in app/routers/health.py.)
+    ch_ok = ping()
     return JSONResponse(
         {
             "status": "ok",

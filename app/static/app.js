@@ -10,6 +10,11 @@
  */
 
 /* ============================================================
+   Column editor state — populated by renderStep3, read by ingest
+   ============================================================ */
+let columnState = [];
+
+/* ============================================================
    App state — single source of truth
    ============================================================ */
 const state = {
@@ -328,7 +333,7 @@ function renderStep2(result) {
   dom.step2Content.innerHTML = "";
   clearBanner(dom.step2Panel);
 
-  const { table_exists, schema_matches, schema_diff, csv_columns, inferred_columns } = result;
+  const { table_exists, schema_matches, schema_diff, csv_columns, inferred_columns, columns } = result;
 
   // ------------------------------------------------------------------
   // Branch A: Table does not exist → create
@@ -348,7 +353,7 @@ function renderStep2(result) {
 
     const btn = makeButton("Continue to Column Editor", "btn-primary");
     btn.addEventListener("click", () => {
-      renderStep3(inferred_columns, "create");
+      renderStep3((columns || []).filter((c) => c.in_csv), "create");
       showStep(3);
     });
     dom.step2Content.appendChild(makeBtnGroup([btn]));
@@ -423,7 +428,7 @@ function renderStep2(result) {
     wipeBtn.innerHTML = "Wipe table &amp; re-create";
     wipeBtn.addEventListener("click", () => {
       state.ingestMode = "wipe";
-      renderStep3(inferred_columns, "wipe");
+      renderStep3((columns || []).filter((c) => c.in_csv), "wipe");
       showStep(3);
     });
 
@@ -511,12 +516,24 @@ function renderSchemaDiff(diff) {
 
 /**
  * Build and display the column type editor table and ORDER BY selector.
- * @param {Array<{name:string, suggested_type:string}>} inferredColumns
+ * Populates the module-level columnState array from the analyze response.
+ * @param {Array<{name:string, original_name:string, inferred_type:string, description:string}>} inferredColumns
  * @param {"create"|"wipe"} mode
  */
 function renderStep3(inferredColumns, mode) {
   dom.step3Content.innerHTML = "";
   clearBanner(dom.step3Panel);
+
+  // Seed columnState from the backend's analyze response.
+  // Backend contract: each entry has name (sanitized), original_name (raw header),
+  // inferred_type, and description (existing column comment or "").
+  columnState = inferredColumns.map((col) => ({
+    name: col.name,
+    originalName: col.original_name || col.name,
+    type: col.inferred_type || col.suggested_type || "",
+    orderBy: false,
+    description: col.description || "",
+  }));
 
   // Heading annotation
   const modeLabel = mode === "wipe" ? "Wipe &amp; Re-create" : "Create";
@@ -539,6 +556,7 @@ function renderStep3(inferredColumns, mode) {
       <tr>
         <th scope="col">Column name</th>
         <th scope="col">ClickHouse type <small>(editable)</small></th>
+        <th scope="col">Description</th>
       </tr>
     </thead>
     <tbody id="col-editor-tbody"></tbody>
@@ -547,24 +565,61 @@ function renderStep3(inferredColumns, mode) {
   dom.step3Content.appendChild(tableWrap);
 
   const tbody = table.querySelector("#col-editor-tbody");
-  inferredColumns.forEach((col) => {
+
+  columnState.forEach((col, idx) => {
     const tr = document.createElement("tr");
-    const inputId = `col-type-${sanitizeId(col.name)}`;
+    const typeInputId = `col-type-${sanitizeId(col.name)}-${idx}`;
+    const showHint = col.originalName !== col.name;
     tr.innerHTML = `
-      <td><label for="${inputId}">${escHtml(col.name)}</label></td>
       <td>
         <input
           type="text"
-          id="${inputId}"
-          data-colname="${escHtml(col.name)}"
-          value="${escHtml(col.suggested_type)}"
-          aria-label="Type for column ${escHtml(col.name)}"
+          class="name-input"
+          data-idx="${idx}"
+          value="${escHtml(col.name)}"
+          aria-label="Column name for index ${idx}"
           spellcheck="false"
+          autocomplete="off"
+        />${showHint ? `<div class="orig-hint">from: ${escHtml(col.originalName)}</div>` : ""}
+      </td>
+      <td>
+        <input
+          type="text"
+          id="${typeInputId}"
+          class="type-input"
+          data-idx="${idx}"
+          value="${escHtml(col.type)}"
+          aria-label="ClickHouse type for column ${escHtml(col.name)}"
+          spellcheck="false"
+          autocomplete="off"
+        />
+      </td>
+      <td>
+        <input
+          type="text"
+          class="desc-input"
+          data-idx="${idx}"
+          placeholder="optional"
+          value="${escHtml(col.description)}"
+          aria-label="Description for column ${escHtml(col.name)}"
           autocomplete="off"
         />
       </td>
     `;
     tbody.appendChild(tr);
+  });
+
+  // Wire input listeners to keep columnState in sync with edits
+  tbody.addEventListener("input", (e) => {
+    const idx = parseInt(e.target.dataset.idx, 10);
+    if (isNaN(idx)) return;
+    if (e.target.classList.contains("name-input")) {
+      columnState[idx].name = e.target.value;
+    } else if (e.target.classList.contains("type-input")) {
+      columnState[idx].type = e.target.value;
+    } else if (e.target.classList.contains("desc-input")) {
+      columnState[idx].description = e.target.value;
+    }
   });
 
   // ---- ORDER BY selector ----
@@ -581,32 +636,65 @@ function renderStep3(inferredColumns, mode) {
   dom.step3Content.appendChild(orderBySection);
 
   const orderByGrid = orderBySection.querySelector("#orderby-grid");
-  inferredColumns.forEach((col) => {
-    const checkId = `ob-${sanitizeId(col.name)}`;
+  columnState.forEach((col, idx) => {
+    const checkId = `ob-${sanitizeId(col.name)}-${idx}`;
     // Default-check if the type looks like a date/time column
-    const isDateTime =
-      col.suggested_type.includes("DateTime") || col.suggested_type.includes("Date");
+    const isDateTime = col.type.includes("DateTime") || col.type.includes("Date");
 
     const label = document.createElement("label");
     label.className = "orderby-item";
     label.htmlFor = checkId;
     label.innerHTML = `
-      <input type="checkbox" id="${checkId}" value="${escHtml(col.name)}"${isDateTime ? " checked" : ""} />
+      <input type="checkbox" id="${checkId}" data-idx="${idx}"${isDateTime ? " checked" : ""} />
       <span>${escHtml(col.name)}</span>
     `;
     orderByGrid.appendChild(label);
+
+    // Sync initial checked state into columnState
+    if (isDateTime) columnState[idx].orderBy = true;
+  });
+
+  // Wire ORDER BY checkboxes to columnState
+  orderByGrid.addEventListener("change", (e) => {
+    if (e.target.type !== "checkbox") return;
+    const idx = parseInt(e.target.dataset.idx, 10);
+    if (!isNaN(idx)) columnState[idx].orderBy = e.target.checked;
   });
 
   // ---- Ingest button ----
   const ingestBtn = makeButton("Ingest", "btn-primary");
   ingestBtn.addEventListener("click", async () => {
-    const columns = collectColumnTypes(tbody);
-    const orderBy = collectOrderBy(orderByGrid);
+    // Build columns payload from current columnState
+    const columns = columnState.map((c) => ({
+      name: c.name.trim(),
+      type: c.type,
+      description: (c.description || "").trim(),
+    }));
 
-    if (!columns) {
+    // Client-side guard: reject empty or invalid column names
+    const namePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
+    for (const col of columns) {
+      if (!col.name) {
+        showBanner(dom.step3Panel, "Column names must not be empty.", "error");
+        return;
+      }
+      if (!namePattern.test(col.name)) {
+        showBanner(
+          dom.step3Panel,
+          `Invalid column name "${col.name}". Names must start with a letter or underscore and contain only letters, digits, and underscores.`,
+          "error"
+        );
+        return;
+      }
+    }
+
+    // Validate types are non-empty
+    if (columns.some((c) => !c.type)) {
       showBanner(dom.step3Panel, "All column types must be non-empty.", "error");
       return;
     }
+
+    const orderBy = columnState.filter((c) => c.orderBy).map((c) => c.name.trim());
 
     clearBanner(dom.step3Panel);
     await handleIngest(
@@ -620,33 +708,6 @@ function renderStep3(inferredColumns, mode) {
   });
 
   dom.step3Content.appendChild(makeBtnGroup([ingestBtn]));
-}
-
-/**
- * Read column name+type pairs from the editor table body.
- * Returns null if any type field is empty.
- * @param {HTMLElement} tbody
- * @returns {Array<{name:string,type:string}>|null}
- */
-function collectColumnTypes(tbody) {
-  const inputs = tbody.querySelectorAll("input[data-colname]");
-  const cols = [];
-  for (const input of inputs) {
-    const type = input.value.trim();
-    if (!type) return null;
-    cols.push({ name: input.dataset.colname, type });
-  }
-  return cols;
-}
-
-/**
- * Collect checked ORDER BY column names from the checkbox grid.
- * @param {HTMLElement} grid
- * @returns {string[]}
- */
-function collectOrderBy(grid) {
-  const checked = grid.querySelectorAll("input[type=checkbox]:checked");
-  return Array.from(checked).map((cb) => cb.value);
 }
 
 /* ============================================================

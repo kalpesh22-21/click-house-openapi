@@ -65,6 +65,18 @@ def _build_client(settings: Settings) -> Client:
         # Verify TLS certificates by default; can be relaxed with a custom CA
         # by setting verify=False only in development environments.
         verify=settings.clickhouse_secure,
+        # THREAD SAFETY (load-bearing): clickhouse-connect's sync client defaults
+        # autogenerate_session_id=True, stamping the SAME session_id on every
+        # query from this process-wide singleton. ClickHouse forbids concurrent
+        # queries in one session, so the driver raises ProgrammingError ("Attempt
+        # to execute concurrent queries within the same session") the moment two
+        # requests share the client — which is the normal case here, since our
+        # sync FastAPI routes and the MCP HTTP transport run in a threadpool.
+        # Disabling session_id makes the query path stateless: with no session_id
+        # the driver skips its _active_session guard entirely and concurrent
+        # queries ride the thread-safe urllib3 connection pool independently.
+        # This read-only API uses no session-scoped features, so we lose nothing.
+        autogenerate_session_id=False,
     )
 
 

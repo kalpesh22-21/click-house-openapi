@@ -542,3 +542,19 @@ class TestHealthRoute:
         with patch("app.routers.health.ping", return_value=True):
             resp = client.get("/health", headers={"Authorization": "Bearer wrong-key"})
         assert resp.status_code == 200
+
+    def test_health_check_reuses_cached_client(self):
+        """health_check() must call ping() with NO arguments.
+
+        Passing an explicit settings object routes through get_client(settings)
+        -> _build_client, which constructs (and logs) a brand-new ClickHouse
+        client on every probe instead of reusing the lru_cache singleton.
+        """
+        from app.routers.health import health_check
+
+        with patch("app.routers.health.ping", return_value=True) as mock_ping:
+            health_check()
+
+        mock_ping.assert_called_once_with()
+        assert mock_ping.call_args.args == ()
+        assert mock_ping.call_args.kwargs == {}

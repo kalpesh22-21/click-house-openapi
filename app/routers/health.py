@@ -5,7 +5,6 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.clickhouse_client import ping
-from app.config import get_settings
 from app.models import HealthResponse
 
 router = APIRouter(tags=["Health"])
@@ -27,8 +26,12 @@ router = APIRouter(tags=["Health"])
 )
 def health_check() -> HealthResponse:
     """Check service liveness and ClickHouse connectivity."""
-    settings = get_settings()
-    ch_ok = ping(settings)
+    # Call ping() with NO arguments so it reuses the process-wide cached
+    # singleton client. Passing an explicit settings routes through
+    # get_client(settings) -> _build_client, which constructs (and logs) a
+    # brand-new client on every probe — liveness/readiness probes run every
+    # few seconds, so that churns connections continuously.
+    ch_ok = ping()
     return HealthResponse(
         status="ok",
         clickhouse="ok" if ch_ok else "error",

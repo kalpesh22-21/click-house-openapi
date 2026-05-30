@@ -618,6 +618,12 @@ class TestAnalyzeEndpoint:
                 ["name", "String"],
                 ["score", "Float64"],
             ]),
+            # existing comments query: columns name, comment
+            MagicMock(result_rows=[
+                ["id", ""],
+                ["name", ""],
+                ["score", ""],
+            ]),
         ]
         with patch("app.admin_ingest.build_admin_client", return_value=mock_ch):
             with patch("app.clickhouse_client._cached_client", return_value=MagicMock(ping=lambda: True)):
@@ -926,16 +932,24 @@ class TestIngestEndpoint:
         call_kwargs = mock_ch.insert.call_args
         assert call_kwargs.kwargs["column_names"] == ["id", "name", "score"]
 
-    def test_create_mode_requires_columns(self):
+    def test_create_mode_without_columns_auto_infers_from_csv(self):
+        """When no columns JSON is provided, schema is auto-inferred from the CSV header."""
         mock_ch = MagicMock()
         mock_ch.query.return_value = MagicMock(result_rows=[])
+        mock_ch.command.return_value = None
+        mock_ch.insert.return_value = None
 
+        # No "columns" form field — schema should be auto-built from SIMPLE_CSV header.
         def run(client):
             return self._post_ingest(client, {"mode": "create"})
 
         resp = _run_with_mocked_ingest(mock_ch, run)
-        assert resp.status_code == 400
-        assert "columns" in resp.json()["detail"]
+        assert resp.status_code == 200
+        # DDL should have been issued with auto-inferred column names.
+        ddl_calls = [str(c.args[0]) for c in mock_ch.command.call_args_list]
+        create_calls = [c for c in ddl_calls if "CREATE TABLE" in c]
+        assert len(create_calls) == 1
+        assert "MergeTree" in create_calls[0]
 
     def test_ingest_400_on_bad_identifier(self):
         mock_ch = MagicMock()
@@ -1256,8 +1270,15 @@ class TestCompareSchemasAdditional:
 # ---------------------------------------------------------------------------
 
 
-def _build_mock_analyze_client(db_exists, tbl_exists, existing_schema=None):
-    """Return a mock client configured for analyze() calls."""
+def _build_mock_analyze_client(db_exists, tbl_exists, existing_schema=None, existing_comments=None):
+    """Return a mock client configured for analyze() calls.
+
+    Provides mock responses for:
+    1. database_exists
+    2. table_exists
+    3. existing schema (name, type) — only when tbl_exists and existing_schema given
+    4. existing comments (name, comment) — only when tbl_exists and existing_schema given
+    """
     mock_ch = MagicMock()
     mock_ch.ping.return_value = True
     side = [
@@ -1266,6 +1287,12 @@ def _build_mock_analyze_client(db_exists, tbl_exists, existing_schema=None):
     ]
     if tbl_exists and existing_schema is not None:
         side.append(MagicMock(result_rows=existing_schema))
+        # Build a comments response: use provided or empty comments for each column.
+        if existing_comments is not None:
+            comments_rows = existing_comments
+        else:
+            comments_rows = [[row[0], ""] for row in existing_schema]
+        side.append(MagicMock(result_rows=comments_rows))
     mock_ch.query.side_effect = side
     return mock_ch
 
@@ -1448,16 +1475,21 @@ class TestIngestEndpointAdditional:
         assert create_tbl_idx is not None, "CREATE TABLE must be called"
         assert create_db_idx < create_tbl_idx, "CREATE DATABASE must precede CREATE TABLE"
 
-    def test_wipe_mode_requires_columns(self):
-        """wipe mode without columns JSON must return 400."""
+    def test_wipe_mode_without_columns_auto_infers_from_csv(self):
+        """wipe mode without columns JSON auto-infers schema from the CSV header."""
         mock_ch = MagicMock()
+        mock_ch.command.return_value = None
+        mock_ch.insert.return_value = None
 
+        # No "columns" form field.
         def run(client):
             return self._post_ingest(client, {"mode": "wipe"})
 
         resp = _run_with_mocked_ingest(mock_ch, run)
-        assert resp.status_code == 400
-        assert "columns" in resp.json()["detail"]
+        assert resp.status_code == 200
+        ddl_calls = [str(c.args[0]) for c in mock_ch.command.call_args_list]
+        assert any("DROP TABLE IF EXISTS" in c for c in ddl_calls)
+        assert any("CREATE TABLE" in c for c in ddl_calls)
 
     def test_wipe_mode_rows_skipped_is_zero(self):
         """wipe mode always reports rows_skipped=0."""
@@ -2561,3 +2593,1117 @@ class TestUIntCoercion:
 
     def test_uint_invalid_string_returns_none(self):
         assert coerce("abc", "UInt32") is None
+
+
+# ===========================================================================
+# New tests: column name sanitization, COMMENT DDL, analyze report shape
+# ===========================================================================
+
+from app.admin_ingest import (
+    _sanitize_column_name,
+    _sanitize_columns,
+    _parse_columns_json,
+    _escape_sql_string,
+    _SAFE_IDENTIFIER_RE,
+)
+
+# ---------------------------------------------------------------------------
+# _sanitize_column_name
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeColumnName:
+    """Unit tests for _sanitize_column_name."""
+
+    def test_order_date(self):
+        assert _sanitize_column_name("Order Date") == "order_date"
+
+    def test_total_usd(self):
+        assert _sanitize_column_name("Total (USD)") == "total_usd"
+
+    def test_leading_digit(self):
+        assert _sanitize_column_name("2024 Sales") == "_2024_sales"
+
+    def test_only_dashes_returns_column(self):
+        assert _sanitize_column_name("  --  ") == "column"
+
+    def test_simple_lowercase(self):
+        assert _sanitize_column_name("name") == "name"
+
+    def test_mixed_case_lowercased(self):
+        assert _sanitize_column_name("MyColumn") == "mycolumn"
+
+    def test_already_snake_case(self):
+        assert _sanitize_column_name("user_id") == "user_id"
+
+    def test_special_chars_replaced(self):
+        result = _sanitize_column_name("col!@#$%")
+        assert result == "col"
+
+    def test_multiple_spaces_collapsed(self):
+        assert _sanitize_column_name("a  b") == "a_b"
+
+    def test_leading_trailing_stripped(self):
+        assert _sanitize_column_name("  hello  ") == "hello"
+
+    def test_empty_string_returns_column(self):
+        assert _sanitize_column_name("") == "column"
+
+    def test_all_spaces_returns_column(self):
+        assert _sanitize_column_name("   ") == "column"
+
+    def test_digit_only_gets_prefix(self):
+        assert _sanitize_column_name("123") == "_123"
+
+    def test_unicode_replaced(self):
+        # Non-ascii letters become underscores, then collapsed/stripped.
+        result = _sanitize_column_name("café")
+        assert _SAFE_IDENTIFIER_RE.match(result) is not None
+
+    def test_result_always_matches_ident_re(self):
+        cases = [
+            "Order Date", "Total (USD)", "2024 Sales", "  --  ",
+            "myCol", "123abc", "", "   ", "café", "col!name",
+            "  leading", "trailing  ", "__double__", "a.b.c",
+        ]
+        for case in cases:
+            result = _sanitize_column_name(case)
+            assert _SAFE_IDENTIFIER_RE.match(result) is not None, (
+                f"_sanitize_column_name({case!r}) = {result!r} does not match _IDENT_RE"
+            )
+
+    def test_slash_replaced(self):
+        assert _sanitize_column_name("revenue/sales") == "revenue_sales"
+
+    def test_tab_replaced(self):
+        assert _sanitize_column_name("col\tname") == "col_name"
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_columns (de-duplication)
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeColumns:
+    def test_dedupes_collisions(self):
+        header = ["Col A", "col_a", "Col-A"]
+        result = _sanitize_columns(header)
+        # All three sanitize to "col_a" → should be col_a, col_a_2, col_a_3.
+        assert result[0] == "col_a"
+        assert result[1] == "col_a_2"
+        assert result[2] == "col_a_3"
+
+    def test_preserves_order_and_length(self):
+        header = ["id", "name", "value"]
+        result = _sanitize_columns(header)
+        assert len(result) == 3
+
+    def test_no_collision_unchanged(self):
+        header = ["id", "name", "score"]
+        result = _sanitize_columns(header)
+        assert result == ["id", "name", "score"]
+
+    def test_first_occurrence_keeps_base(self):
+        header = ["A B", "a_b"]
+        result = _sanitize_columns(header)
+        assert result[0] == "a_b"
+        assert result[1] == "a_b_2"
+
+    def test_suffix_skips_taken_names(self):
+        # "a", "a" → should be "a", "a_2"
+        # But if there is also "a_2" in the header, the third "a" should be "a_3".
+        header = ["a", "a_2", "a"]
+        result = _sanitize_columns(header)
+        assert result[0] == "a"
+        assert result[1] == "a_2"
+        assert result[2] == "a_3"
+
+    def test_empty_header_returns_empty(self):
+        assert _sanitize_columns([]) == []
+
+    def test_single_element(self):
+        assert _sanitize_columns(["My Col"]) == ["my_col"]
+
+    def test_collision_on_empty_names(self):
+        # All empty strings → each becomes "column", then "column_2", etc.
+        result = _sanitize_columns(["", "", ""])
+        assert result[0] == "column"
+        assert result[1] == "column_2"
+        assert result[2] == "column_3"
+
+
+# ---------------------------------------------------------------------------
+# ingest: auto-sanitized names in CREATE DDL and insert column_names
+# ---------------------------------------------------------------------------
+
+
+def _csv_bytes(header: list[str], rows: list[list[str]]) -> bytes:
+    """Build CSV bytes from a header list and row lists."""
+    lines = [",".join(header)]
+    for row in rows:
+        lines.append(",".join(row))
+    return "\n".join(lines).encode()
+
+
+class TestIngestCreateUsesSanitizedNames:
+    """When no columns_json is provided, CREATE DDL and insert use sanitized names."""
+
+    _BASE_FORM = {
+        "host": "localhost",
+        "port": "9000",
+        "user": "default",
+        "password": "secret",
+        "secure": "false",
+        "database": "mydb",
+        "table": "mytable",
+    }
+
+    def test_messy_headers_produce_sanitized_ddl_and_insert_names(self):
+        mock_ch = MagicMock()
+        mock_ch.query.return_value = MagicMock(result_rows=[])  # table not exists
+        mock_ch.command.return_value = None
+        mock_ch.insert.return_value = None
+
+        csv_data = _csv_bytes(
+            ["Order Date", "Total (USD)", "2024 Sales"],
+            [["2024-01-01", "100.00", "500"]],
+        )
+
+        def run(client):
+            return client.post(
+                "/admin/ingest",
+                data={**self._BASE_FORM, "mode": "create"},
+                files={"file": ("data.csv", csv_data, "text/csv")},
+                headers=AUTH,
+            )
+
+        resp = _run_with_mocked_ingest(mock_ch, run)
+        assert resp.status_code == 200
+
+        # Check CREATE TABLE DDL uses sanitized names.
+        ddl_calls = [str(c.args[0]) for c in mock_ch.command.call_args_list]
+        create_calls = [c for c in ddl_calls if "CREATE TABLE" in c]
+        assert len(create_calls) == 1
+        ddl = create_calls[0]
+        assert "order_date" in ddl
+        assert "total_usd" in ddl
+        assert "_2024_sales" in ddl
+        # Original messy names must NOT appear.
+        assert "Order Date" not in ddl
+        assert "Total (USD)" not in ddl
+
+        # Check insert uses sanitized column names.
+        assert mock_ch.insert.called
+        insert_col_names = mock_ch.insert.call_args.kwargs["column_names"]
+        assert insert_col_names == ["order_date", "total_usd", "_2024_sales"]
+
+
+# ---------------------------------------------------------------------------
+# _create_table: COMMENT emitted when description is set
+# ---------------------------------------------------------------------------
+
+
+class TestCreateTableEmitsComment:
+    """build_create_table_sql emits COMMENT for columns with a description."""
+
+    def test_column_with_description_has_comment(self):
+        sql = build_create_table_sql(
+            database="mydb",
+            table="events",
+            columns=[
+                {"name": "id", "type": "Int64", "description": "Primary key"},
+                {"name": "ts", "type": "DateTime", "description": None},
+            ],
+            order_by=["id"],
+        )
+        assert "COMMENT 'Primary key'" in sql
+        # Column without description must not have COMMENT.
+        assert sql.count("COMMENT") == 1
+
+    def test_column_without_description_has_no_comment(self):
+        sql = build_create_table_sql(
+            database="mydb",
+            table="t",
+            columns=[{"name": "val", "type": "String"}],
+            order_by=[],
+        )
+        assert "COMMENT" not in sql
+
+    def test_empty_string_description_has_no_comment(self):
+        sql = build_create_table_sql(
+            database="mydb",
+            table="t",
+            columns=[{"name": "val", "type": "String", "description": ""}],
+            order_by=[],
+        )
+        assert "COMMENT" not in sql
+
+    def test_multiple_descriptions(self):
+        sql = build_create_table_sql(
+            database="mydb",
+            table="t",
+            columns=[
+                {"name": "a", "type": "Int64", "description": "First column"},
+                {"name": "b", "type": "String", "description": "Second column"},
+                {"name": "c", "type": "Float64"},
+            ],
+            order_by=[],
+        )
+        assert "COMMENT 'First column'" in sql
+        assert "COMMENT 'Second column'" in sql
+        assert sql.count("COMMENT") == 2
+
+
+class TestIngestCreateWithDescriptionEmitsComment:
+    """End-to-end: columns_json with description → COMMENT in DDL."""
+
+    _BASE_FORM = {
+        "host": "localhost",
+        "port": "9000",
+        "user": "default",
+        "password": "secret",
+        "secure": "false",
+        "database": "mydb",
+        "table": "mytable",
+    }
+
+    def test_description_appears_in_ddl(self):
+        mock_ch = MagicMock()
+        mock_ch.query.return_value = MagicMock(result_rows=[])
+        mock_ch.command.return_value = None
+        mock_ch.insert.return_value = None
+
+        cols = json.dumps([
+            {"name": "id", "type": "Int64", "description": "Primary key"},
+            {"name": "name", "type": "String", "description": None},
+            {"name": "score", "type": "Float64"},
+        ])
+
+        def run(client):
+            return client.post(
+                "/admin/ingest",
+                data={**self._BASE_FORM, "mode": "create", "columns": cols},
+                files={"file": ("data.csv", SIMPLE_CSV, "text/csv")},
+                headers=AUTH,
+            )
+
+        resp = _run_with_mocked_ingest(mock_ch, run)
+        assert resp.status_code == 200
+
+        ddl_calls = [str(c.args[0]) for c in mock_ch.command.call_args_list]
+        create_calls = [c for c in ddl_calls if "CREATE TABLE" in c]
+        assert len(create_calls) == 1
+        ddl = create_calls[0]
+        assert "COMMENT 'Primary key'" in ddl
+        # Columns without description must not have COMMENT keyword next to them.
+        assert ddl.count("COMMENT") == 1
+
+    def test_column_without_description_has_no_comment_in_ddl(self):
+        mock_ch = MagicMock()
+        mock_ch.query.return_value = MagicMock(result_rows=[])
+        mock_ch.command.return_value = None
+        mock_ch.insert.return_value = None
+
+        cols = json.dumps([
+            {"name": "id", "type": "Int64"},
+            {"name": "name", "type": "String"},
+            {"name": "score", "type": "Float64"},
+        ])
+
+        def run(client):
+            return client.post(
+                "/admin/ingest",
+                data={**self._BASE_FORM, "mode": "create", "columns": cols},
+                files={"file": ("data.csv", SIMPLE_CSV, "text/csv")},
+                headers=AUTH,
+            )
+
+        resp = _run_with_mocked_ingest(mock_ch, run)
+        assert resp.status_code == 200
+
+        ddl_calls = [str(c.args[0]) for c in mock_ch.command.call_args_list]
+        create_calls = [c for c in ddl_calls if "CREATE TABLE" in c]
+        assert len(create_calls) == 1
+        assert "COMMENT" not in create_calls[0]
+
+
+# ---------------------------------------------------------------------------
+# _escape_sql_string and description escaping
+# ---------------------------------------------------------------------------
+
+
+class TestDescriptionSingleQuoteEscaped:
+    """Single quotes and backslashes in descriptions must be escaped in DDL."""
+
+    def test_escape_single_quote(self):
+        from app.admin_ingest import _escape_sql_string
+        assert _escape_sql_string("O'Brien") == "O\\'Brien"
+
+    def test_escape_backslash(self):
+        from app.admin_ingest import _escape_sql_string
+        assert _escape_sql_string("C:\\path") == "C:\\\\path"
+
+    def test_escape_both(self):
+        from app.admin_ingest import _escape_sql_string
+        assert _escape_sql_string("O'Brien \\ test") == "O\\'Brien \\\\ test"
+
+    def test_escape_empty_string(self):
+        from app.admin_ingest import _escape_sql_string
+        assert _escape_sql_string("") == ""
+
+    def test_no_special_chars_unchanged(self):
+        from app.admin_ingest import _escape_sql_string
+        assert _escape_sql_string("Primary key") == "Primary key"
+
+    def test_description_with_quote_in_ddl(self):
+        """Description with single quote must be properly escaped in CREATE DDL."""
+        sql = build_create_table_sql(
+            database="mydb",
+            table="t",
+            columns=[{"name": "col", "type": "String", "description": "O'Brien \\ test"}],
+            order_by=[],
+        )
+        # Backslash first (escaping order: \ → \\, then ' → \').
+        assert "COMMENT 'O\\'Brien \\\\ test'" in sql
+        # The raw unescaped values must not appear as injection.
+        assert "O'Brien \\ test" not in sql
+
+    def test_end_to_end_escaped_description_in_ingest(self):
+        """End-to-end: description with quote/backslash is escaped in DDL via ingest."""
+        mock_ch = MagicMock()
+        mock_ch.query.return_value = MagicMock(result_rows=[])
+        mock_ch.command.return_value = None
+        mock_ch.insert.return_value = None
+
+        cols = json.dumps([
+            {"name": "id", "type": "Int64", "description": "O'Brien \\ test"},
+            {"name": "name", "type": "String"},
+            {"name": "score", "type": "Float64"},
+        ])
+        base_form = {
+            "host": "localhost", "port": "9000", "user": "default",
+            "password": "secret", "secure": "false",
+            "database": "mydb", "table": "mytable",
+        }
+
+        def run(client):
+            return client.post(
+                "/admin/ingest",
+                data={**base_form, "mode": "create", "columns": cols},
+                files={"file": ("data.csv", SIMPLE_CSV, "text/csv")},
+                headers=AUTH,
+            )
+
+        resp = _run_with_mocked_ingest(mock_ch, run)
+        assert resp.status_code == 200
+
+        ddl_calls = [str(c.args[0]) for c in mock_ch.command.call_args_list]
+        create_calls = [c for c in ddl_calls if "CREATE TABLE" in c]
+        assert len(create_calls) == 1
+        ddl = create_calls[0]
+        assert "\\'" in ddl   # escaped single quote present
+        assert "\\\\" in ddl  # escaped backslash present
+
+
+# ---------------------------------------------------------------------------
+# _parse_columns_json: accepts optional description, rejects non-string
+# ---------------------------------------------------------------------------
+
+
+class TestParseColumnsJson:
+    def test_accepts_entry_without_description(self):
+        result = _parse_columns_json('[{"name": "id", "type": "Int64"}]')
+        assert result[0]["name"] == "id"
+        assert result[0]["description"] is None
+
+    def test_accepts_entry_with_string_description(self):
+        result = _parse_columns_json(
+            '[{"name": "id", "type": "Int64", "description": "Primary key"}]'
+        )
+        assert result[0]["description"] == "Primary key"
+
+    def test_accepts_entry_with_null_description(self):
+        result = _parse_columns_json(
+            '[{"name": "id", "type": "Int64", "description": null}]'
+        )
+        assert result[0]["description"] is None
+
+    def test_accepts_entry_with_empty_string_description(self):
+        result = _parse_columns_json(
+            '[{"name": "id", "type": "Int64", "description": ""}]'
+        )
+        assert result[0]["description"] == ""
+
+    def test_rejects_non_string_description_int(self):
+        with pytest.raises(ValueError, match="description"):
+            _parse_columns_json(
+                '[{"name": "id", "type": "Int64", "description": 42}]'
+            )
+
+    def test_rejects_non_string_description_bool(self):
+        with pytest.raises(ValueError, match="description"):
+            _parse_columns_json(
+                '[{"name": "id", "type": "Int64", "description": true}]'
+            )
+
+    def test_rejects_non_string_description_list(self):
+        with pytest.raises(ValueError, match="description"):
+            _parse_columns_json(
+                '[{"name": "id", "type": "Int64", "description": []}]'
+            )
+
+    def test_rejects_invalid_json(self):
+        with pytest.raises(ValueError, match="Invalid columns JSON"):
+            _parse_columns_json("not-json")
+
+    def test_rejects_invalid_identifier(self):
+        with pytest.raises(ValueError, match="Invalid identifier"):
+            _parse_columns_json('[{"name": "col; DROP", "type": "Int64"}]')
+
+    def test_rejects_invalid_type(self):
+        with pytest.raises(ValueError, match="Disallowed ClickHouse type"):
+            _parse_columns_json('[{"name": "col", "type": "TEXT"}]')
+
+    def test_multiple_columns_all_optional_description(self):
+        result = _parse_columns_json(
+            '[{"name": "a", "type": "Int64"}, '
+            '{"name": "b", "type": "String", "description": "B col"}, '
+            '{"name": "c", "type": "Float64", "description": null}]'
+        )
+        assert result[0]["description"] is None
+        assert result[1]["description"] == "B col"
+        assert result[2]["description"] is None
+
+
+# ---------------------------------------------------------------------------
+# analyze: original_name, sanitized name, and description in columns report
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyzeReturnsOriginalAndSanitizedNamesAndDescriptions:
+    """analyze() columns report includes original_name, name (sanitized), and description."""
+
+    _FORM = {
+        "host": "localhost",
+        "port": "9000",
+        "user": "default",
+        "password": "secret",
+        "secure": "false",
+        "database": "mydb",
+        "table": "mytable",
+    }
+
+    def _post_analyze(self, client, csv_bytes):
+        return client.post(
+            "/admin/analyze",
+            data=self._FORM,
+            files={"file": ("data.csv", csv_bytes, "text/csv")},
+            headers=AUTH,
+        )
+
+    def test_messy_headers_produce_original_and_sanitized_names(self):
+        """analyze() columns[i] must have original_name and sanitized name."""
+        mock_ch = MagicMock()
+        mock_ch.ping.return_value = True
+        mock_ch.query.side_effect = [
+            MagicMock(result_rows=[[1]]),   # database_exists
+            MagicMock(result_rows=[]),      # table not exists
+        ]
+
+        csv_data = _csv_bytes(["Order Date", "Total (USD)"], [["2024-01-01", "100.0"]])
+
+        from app.config import get_settings
+        get_settings.cache_clear()
+        singleton_mock = MagicMock()
+        singleton_mock.ping.return_value = True
+        with patch("app.admin_ingest.build_admin_client", return_value=mock_ch):
+            with patch("app.clickhouse_client._cached_client", return_value=singleton_mock):
+                from app.main import app
+                client = TestClient(app, raise_server_exceptions=False)
+                resp = self._post_analyze(client, csv_data)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "columns" in body
+        cols = body["columns"]
+        assert cols[0]["original_name"] == "Order Date"
+        assert cols[0]["name"] == "order_date"
+        assert cols[1]["original_name"] == "Total (USD)"
+        assert cols[1]["name"] == "total_usd"
+
+    def test_columns_report_includes_in_csv_true_for_csv_columns(self):
+        mock_ch = MagicMock()
+        mock_ch.ping.return_value = True
+        mock_ch.query.side_effect = [
+            MagicMock(result_rows=[[1]]),
+            MagicMock(result_rows=[]),
+        ]
+        from app.config import get_settings
+        get_settings.cache_clear()
+        singleton_mock = MagicMock()
+        singleton_mock.ping.return_value = True
+        with patch("app.admin_ingest.build_admin_client", return_value=mock_ch):
+            with patch("app.clickhouse_client._cached_client", return_value=singleton_mock):
+                from app.main import app
+                client = TestClient(app, raise_server_exceptions=False)
+                resp = self._post_analyze(client, SIMPLE_CSV)
+
+        body = resp.json()
+        for col in body["columns"]:
+            assert col["in_csv"] is True
+
+    def test_columns_report_includes_description_from_existing_table(self):
+        """When table exists and has column comments, they appear in the columns report."""
+        mock_ch = MagicMock()
+        mock_ch.ping.return_value = True
+        mock_ch.query.side_effect = [
+            MagicMock(result_rows=[[1]]),   # database_exists
+            MagicMock(result_rows=[[1]]),   # table_exists
+            # existing schema: name, type
+            MagicMock(result_rows=[
+                ["id", "Int64"],
+                ["name", "String"],
+                ["score", "Float64"],
+            ]),
+            # existing comments: name, comment
+            MagicMock(result_rows=[
+                ["id", "Primary key"],
+                ["name", ""],
+                ["score", "Score value"],
+            ]),
+        ]
+
+        from app.config import get_settings
+        get_settings.cache_clear()
+        singleton_mock = MagicMock()
+        singleton_mock.ping.return_value = True
+        with patch("app.admin_ingest.build_admin_client", return_value=mock_ch):
+            with patch("app.clickhouse_client._cached_client", return_value=singleton_mock):
+                from app.main import app
+                client = TestClient(app, raise_server_exceptions=False)
+                resp = self._post_analyze(client, SIMPLE_CSV)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        cols_by_name = {c["name"]: c for c in body["columns"]}
+        assert cols_by_name["id"]["description"] == "Primary key"
+        assert cols_by_name["name"]["description"] == ""
+        assert cols_by_name["score"]["description"] == "Score value"
+
+    def test_table_only_column_has_in_csv_false(self):
+        """Columns present in the table but absent from the CSV have in_csv=False."""
+        mock_ch = MagicMock()
+        mock_ch.ping.return_value = True
+        mock_ch.query.side_effect = [
+            MagicMock(result_rows=[[1]]),   # database_exists
+            MagicMock(result_rows=[[1]]),   # table_exists
+            # Table has id, name, score, PLUS extra_col not in CSV.
+            MagicMock(result_rows=[
+                ["id", "Int64"],
+                ["name", "String"],
+                ["score", "Float64"],
+                ["extra_col", "String"],
+            ]),
+            # Comments
+            MagicMock(result_rows=[
+                ["id", ""],
+                ["name", ""],
+                ["score", ""],
+                ["extra_col", "Extra column not in CSV"],
+            ]),
+        ]
+
+        from app.config import get_settings
+        get_settings.cache_clear()
+        singleton_mock = MagicMock()
+        singleton_mock.ping.return_value = True
+        with patch("app.admin_ingest.build_admin_client", return_value=mock_ch):
+            with patch("app.clickhouse_client._cached_client", return_value=singleton_mock):
+                from app.main import app
+                client = TestClient(app, raise_server_exceptions=False)
+                resp = self._post_analyze(client, SIMPLE_CSV)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        extra = next(c for c in body["columns"] if c["name"] == "extra_col")
+        assert extra["in_csv"] is False
+        assert extra["description"] == "Extra column not in CSV"
+        assert extra["existing_type"] == "String"
+        assert extra["inferred_type"] is None
+
+    def test_columns_report_has_inferred_type_for_csv_columns(self):
+        """inferred_type is populated for each CSV column from type inference."""
+        mock_ch = MagicMock()
+        mock_ch.ping.return_value = True
+        mock_ch.query.side_effect = [
+            MagicMock(result_rows=[[1]]),
+            MagicMock(result_rows=[]),
+        ]
+        from app.config import get_settings
+        get_settings.cache_clear()
+        singleton_mock = MagicMock()
+        singleton_mock.ping.return_value = True
+        with patch("app.admin_ingest.build_admin_client", return_value=mock_ch):
+            with patch("app.clickhouse_client._cached_client", return_value=singleton_mock):
+                from app.main import app
+                client = TestClient(app, raise_server_exceptions=False)
+                resp = self._post_analyze(client, SIMPLE_CSV)
+
+        body = resp.json()
+        cols = {c["name"]: c for c in body["columns"]}
+        assert cols["id"]["inferred_type"] == "Int64"
+        assert cols["name"]["inferred_type"] == "String"
+        assert cols["score"]["inferred_type"] == "Float64"
+
+
+# ===========================================================================
+# New tests for code-review fixes (FIX 1–3)
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# FIX 1 — _parse_columns_json robustness (non-dict, missing keys, duplicates)
+# ---------------------------------------------------------------------------
+
+
+class TestParseColumnsJsonRobustness:
+    """_parse_columns_json must raise ValueError (not KeyError/TypeError) for
+    malformed entries, and must reject duplicate column names.
+    """
+
+    def test_rejects_non_dict_item(self):
+        """A non-object entry (e.g. a string) must raise ValueError, not TypeError."""
+        with pytest.raises(ValueError, match="JSON object"):
+            _parse_columns_json('["not_a_dict"]')
+
+    def test_rejects_non_dict_integer_item(self):
+        with pytest.raises(ValueError, match="JSON object"):
+            _parse_columns_json('[42]')
+
+    def test_rejects_item_missing_name(self):
+        """An entry with 'type' but no 'name' must raise ValueError."""
+        with pytest.raises(ValueError, match="'name' and 'type'"):
+            _parse_columns_json('[{"type": "Int64"}]')
+
+    def test_rejects_item_missing_type(self):
+        """An entry with 'name' but no 'type' must raise ValueError."""
+        with pytest.raises(ValueError, match="'name' and 'type'"):
+            _parse_columns_json('[{"name": "col"}]')
+
+    def test_rejects_item_missing_both_keys(self):
+        """An entry with neither 'name' nor 'type' must raise ValueError."""
+        with pytest.raises(ValueError, match="'name' and 'type'"):
+            _parse_columns_json('[{}]')
+
+    def test_rejects_duplicate_column_names(self):
+        """Two entries with the same 'name' must raise ValueError."""
+        with pytest.raises(ValueError, match="Duplicate column name"):
+            _parse_columns_json(
+                '[{"name": "id", "type": "Int64"}, {"name": "id", "type": "String"}]'
+            )
+
+    def test_rejects_duplicate_column_names_message_contains_name(self):
+        """The duplicate error message must include the repeated name."""
+        with pytest.raises(ValueError, match="'my_col'"):
+            _parse_columns_json(
+                '[{"name": "my_col", "type": "Int64"}, '
+                '{"name": "my_col", "type": "Float64"}]'
+            )
+
+    def test_accepts_distinct_names(self):
+        """Two entries with distinct valid names must succeed."""
+        result = _parse_columns_json(
+            '[{"name": "col_a", "type": "Int64"}, {"name": "col_b", "type": "String"}]'
+        )
+        assert len(result) == 2
+        assert result[0]["name"] == "col_a"
+        assert result[1]["name"] == "col_b"
+
+    def test_non_dict_item_via_endpoint_returns_400(self):
+        """Non-dict item in columns JSON must cause the ingest endpoint to return 400."""
+        mock_ch = MagicMock()
+        mock_ch.query.return_value = MagicMock(result_rows=[])
+
+        cols = json.dumps(["not_a_dict"])
+
+        def run(client):
+            return client.post(
+                "/admin/ingest",
+                data={
+                    "host": "localhost", "port": "9000", "user": "default",
+                    "password": "secret", "secure": "false",
+                    "database": "mydb", "table": "mytable",
+                    "mode": "create", "columns": cols,
+                },
+                files={"file": ("data.csv", b"id\n1\n", "text/csv")},
+                headers=AUTH,
+            )
+
+        resp = _run_with_mocked_ingest(mock_ch, run)
+        assert resp.status_code == 400
+
+    def test_duplicate_column_names_via_endpoint_returns_400(self):
+        """Duplicate column names in columns JSON must cause the endpoint to return 400."""
+        mock_ch = MagicMock()
+        mock_ch.query.return_value = MagicMock(result_rows=[])
+
+        cols = json.dumps([
+            {"name": "id", "type": "Int64"},
+            {"name": "id", "type": "String"},
+        ])
+
+        def run(client):
+            return client.post(
+                "/admin/ingest",
+                data={
+                    "host": "localhost", "port": "9000", "user": "default",
+                    "password": "secret", "secure": "false",
+                    "database": "mydb", "table": "mytable",
+                    "mode": "create", "columns": cols,
+                },
+                files={"file": ("data.csv", b"id\n1\n", "text/csv")},
+                headers=AUTH,
+            )
+
+        resp = _run_with_mocked_ingest(mock_ch, run)
+        assert resp.status_code == 400
+        assert "Duplicate" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# FIX 2 — _escape_sql_string control-character hygiene
+# ---------------------------------------------------------------------------
+
+
+class TestEscapeSqlStringControlChars:
+    """_escape_sql_string must handle control characters and keep existing escapes."""
+
+    def test_newline_escaped(self):
+        assert _escape_sql_string("line1\nline2") == "line1\\nline2"
+
+    def test_carriage_return_escaped(self):
+        assert _escape_sql_string("line1\rline2") == "line1\\rline2"
+
+    def test_crlf_escaped(self):
+        result = _escape_sql_string("line1\r\nline2")
+        assert result == "line1\\r\\nline2"
+
+    def test_null_byte_stripped(self):
+        assert _escape_sql_string("before\x00after") == "beforeafter"
+
+    def test_null_byte_only_becomes_empty(self):
+        assert _escape_sql_string("\x00") == ""
+
+    def test_multiple_null_bytes_stripped(self):
+        assert _escape_sql_string("\x00a\x00b\x00") == "ab"
+
+    def test_backslash_still_escaped_first(self):
+        # A backslash must become \\ (not interact with newline escaping).
+        assert _escape_sql_string("C:\\path") == "C:\\\\path"
+
+    def test_single_quote_still_escaped(self):
+        assert _escape_sql_string("it's") == "it\\'s"
+
+    def test_backslash_before_newline_order(self):
+        # "\\n" in the input: backslash is escaped first → "\\\\n",
+        # then "\n" is NOT present so no further newline substitution on that.
+        # But a literal newline \n comes from the string, tested separately.
+        result = _escape_sql_string("a\nb")
+        assert result == "a\\nb"
+
+    def test_injection_payload_stays_safe(self):
+        """Classic SQL injection payload stays safely within the literal.
+
+        The payload "'); DROP TABLE x; --" must have its single-quote escaped
+        to \\' so that it cannot close the surrounding SQL string literal early.
+        After escaping, every ' in the output must be preceded by a backslash.
+        """
+        payload = "'); DROP TABLE x; --"
+        escaped = _escape_sql_string(payload)
+        # The single-quote must be escaped — every ' in the result has a \ before it.
+        assert "\\'" in escaped
+        # No bare (unescaped) single-quote must remain: check that a ' not preceded
+        # by \ is absent.  We do this by stripping all \\' occurrences and verifying
+        # no ' remains.
+        without_escaped_quotes = escaped.replace("\\'", "")
+        assert "'" not in without_escaped_quotes, (
+            f"Unescaped single-quote found in: {escaped!r}"
+        )
+
+    def test_backslash_and_quote_together(self):
+        """A string with both backslash and quote is handled: backslash first."""
+        result = _escape_sql_string("O'Brien \\ test")
+        assert result == "O\\'Brien \\\\ test"
+
+    def test_empty_string_unchanged(self):
+        assert _escape_sql_string("") == ""
+
+    def test_plain_string_unchanged(self):
+        assert _escape_sql_string("Primary key") == "Primary key"
+
+
+# ---------------------------------------------------------------------------
+# FIX 3 — analyze: sanitized-name schema matching (no false mismatch)
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyzeSanitizedSchemaMatch:
+    """analyze() must use sanitized column names for compare_schemas and
+    _build_column_report so that a table created via auto-sanitization
+    correctly reports schema_matches=True when CSV has the corresponding
+    messy headers.
+    """
+
+    _FORM = {
+        "host": "localhost",
+        "port": "9000",
+        "user": "default",
+        "password": "secret",
+        "secure": "false",
+        "database": "mydb",
+        "table": "mytable",
+    }
+
+    def _post_analyze(self, client, csv_bytes):
+        return client.post(
+            "/admin/analyze",
+            data=self._FORM,
+            files={"file": ("data.csv", csv_bytes, "text/csv")},
+            headers=AUTH,
+        )
+
+    def _make_client(self, existing_schema_rows, existing_comments_rows=None):
+        mock_ch = MagicMock()
+        mock_ch.ping.return_value = True
+        side = [
+            MagicMock(result_rows=[[1]]),   # database_exists
+            MagicMock(result_rows=[[1]]),   # table_exists
+            MagicMock(result_rows=existing_schema_rows),
+        ]
+        if existing_comments_rows is None:
+            existing_comments_rows = [[row[0], ""] for row in existing_schema_rows]
+        side.append(MagicMock(result_rows=existing_comments_rows))
+        mock_ch.query.side_effect = side
+        return mock_ch
+
+    def test_messy_csv_headers_match_sanitized_table_schema(self):
+        """A table created with sanitized names (order_date, total_usd) must
+        report schema_matches=True when the CSV uses the original messy headers
+        (Order Date, Total (USD)).
+        """
+        # Table has sanitized column names (as created by auto-ingest).
+        mock_ch = self._make_client(
+            existing_schema_rows=[
+                ["order_date", "Date"],
+                ["total_usd", "Float64"],
+            ]
+        )
+
+        # CSV still has the original messy headers.
+        csv_data = _csv_bytes(
+            ["Order Date", "Total (USD)"],
+            [["2024-01-01", "100.0"]],
+        )
+
+        from app.config import get_settings
+        get_settings.cache_clear()
+        singleton_mock = MagicMock()
+        singleton_mock.ping.return_value = True
+        with patch("app.admin_ingest.build_admin_client", return_value=mock_ch):
+            with patch("app.clickhouse_client._cached_client", return_value=singleton_mock):
+                from app.main import app
+                client = TestClient(app, raise_server_exceptions=False)
+                resp = self._post_analyze(client, csv_data)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["schema_matches"] is True
+        assert body["schema_diff"]["missing_in_csv"] == []
+        assert body["schema_diff"]["extra_in_csv"] == []
+        assert body["schema_diff"]["type_mismatches"] == []
+
+    def test_inferred_type_populated_by_sanitized_name(self):
+        """inferred_columns and columns[i].inferred_type are keyed by sanitized name."""
+        mock_ch = MagicMock()
+        mock_ch.ping.return_value = True
+        mock_ch.query.side_effect = [
+            MagicMock(result_rows=[[1]]),  # db exists
+            MagicMock(result_rows=[]),     # table not exists
+        ]
+
+        csv_data = _csv_bytes(
+            ["Order Date", "Total (USD)"],
+            [["2024-01-01", "99.5"]],
+        )
+
+        from app.config import get_settings
+        get_settings.cache_clear()
+        singleton_mock = MagicMock()
+        singleton_mock.ping.return_value = True
+        with patch("app.admin_ingest.build_admin_client", return_value=mock_ch):
+            with patch("app.clickhouse_client._cached_client", return_value=singleton_mock):
+                from app.main import app
+                client = TestClient(app, raise_server_exceptions=False)
+                resp = self._post_analyze(client, csv_data)
+
+        assert resp.status_code == 200
+        body = resp.json()
+
+        # inferred_columns keyed by sanitized name.
+        inferred_by_name = {c["name"]: c["suggested_type"] for c in body["inferred_columns"]}
+        assert "order_date" in inferred_by_name
+        assert inferred_by_name["order_date"] == "Date"
+        assert "total_usd" in inferred_by_name
+        assert inferred_by_name["total_usd"] == "Float64"
+
+        # columns[i].inferred_type is also populated (via sanitized lookup).
+        cols_by_name = {c["name"]: c for c in body["columns"]}
+        assert cols_by_name["order_date"]["inferred_type"] == "Date"
+        assert cols_by_name["total_usd"]["inferred_type"] == "Float64"
+
+    def test_no_false_missing_or_extra_in_schema_diff(self):
+        """When table and CSV have the same columns (raw vs sanitized),
+        schema_diff must not report false missing_in_csv or extra_in_csv.
+        """
+        mock_ch = self._make_client(
+            existing_schema_rows=[
+                ["order_date", "Date"],
+                ["total_usd", "Float64"],
+                ["_2024_sales", "Int64"],
+            ]
+        )
+
+        csv_data = _csv_bytes(
+            ["Order Date", "Total (USD)", "2024 Sales"],
+            [["2024-01-01", "100.0", "500"]],
+        )
+
+        from app.config import get_settings
+        get_settings.cache_clear()
+        singleton_mock = MagicMock()
+        singleton_mock.ping.return_value = True
+        with patch("app.admin_ingest.build_admin_client", return_value=mock_ch):
+            with patch("app.clickhouse_client._cached_client", return_value=singleton_mock):
+                from app.main import app
+                client = TestClient(app, raise_server_exceptions=False)
+                resp = self._post_analyze(client, csv_data)
+
+        body = resp.json()
+        assert body["schema_matches"] is True
+        assert body["schema_diff"]["missing_in_csv"] == []
+        assert body["schema_diff"]["extra_in_csv"] == []
+
+
+# ---------------------------------------------------------------------------
+# FIX 3 — append: messy-header CSV appends into sanitized-name table correctly
+# ---------------------------------------------------------------------------
+
+
+class TestAppendMessyHeaderIntoSanitizedTable:
+    """Appending a CSV with messy headers into a table that was created via
+    auto-sanitization must correctly map values to sanitized column names.
+    """
+
+    _BASE_FORM = {
+        "host": "localhost",
+        "port": "9000",
+        "user": "default",
+        "password": "secret",
+        "secure": "false",
+        "database": "mydb",
+        "table": "mytable",
+    }
+
+    def test_messy_header_append_uses_sanitized_column_names_in_insert(self):
+        """Insert call must use sanitized column names, not raw messy header names."""
+        mock_ch = MagicMock()
+
+        def query_side_effect(sql, parameters=None):
+            if "system.tables" in sql:
+                return MagicMock(result_rows=[[1]])  # table exists
+            if "system.columns" in sql:
+                # Table was created with sanitized column names.
+                return MagicMock(result_rows=[
+                    ["order_date", "Date"],
+                    ["total_usd", "Float64"],
+                ])
+            if sql.startswith("SELECT max("):
+                return MagicMock(result_rows=[[None]])  # empty table → insert all
+            return MagicMock(result_rows=[])
+
+        mock_ch.query.side_effect = query_side_effect
+        mock_ch.insert.return_value = None
+
+        # CSV has the original messy headers.
+        csv_data = _csv_bytes(
+            ["Order Date", "Total (USD)"],
+            [["2024-01-01", "99.5"]],
+        )
+
+        def run(client):
+            return client.post(
+                "/admin/ingest",
+                data={**self._BASE_FORM, "mode": "append", "timestamp_column": "order_date"},
+                files={"file": ("data.csv", csv_data, "text/csv")},
+                headers=AUTH,
+            )
+
+        resp = _run_with_mocked_ingest(mock_ch, run)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["rows_inserted"] == 1
+        assert body["rows_skipped"] == 0
+
+        # The insert must use the table's sanitized column names.
+        assert mock_ch.insert.called
+        insert_col_names = mock_ch.insert.call_args.kwargs["column_names"]
+        assert insert_col_names == ["order_date", "total_usd"]
+
+    def test_messy_header_append_watermark_filter_works(self):
+        """Watermark filter must still work when CSV has messy headers."""
+        mock_ch = MagicMock()
+
+        from datetime import date as _date
+
+        def query_side_effect(sql, parameters=None):
+            if "system.tables" in sql:
+                return MagicMock(result_rows=[[1]])
+            if "system.columns" in sql:
+                return MagicMock(result_rows=[
+                    ["order_date", "Date"],
+                    ["amount", "Float64"],
+                ])
+            if sql.startswith("SELECT max("):
+                return MagicMock(result_rows=[[_date(2024, 1, 15)]])
+            return MagicMock(result_rows=[])
+
+        mock_ch.query.side_effect = query_side_effect
+        mock_ch.insert.return_value = None
+
+        # CSV has messy headers; two rows, one before watermark, one after.
+        csv_data = _csv_bytes(
+            ["Order Date", "Amount"],
+            [
+                ["2024-01-10", "50.0"],   # before watermark → skip
+                ["2024-01-20", "75.0"],   # after watermark → insert
+            ],
+        )
+
+        def run(client):
+            return client.post(
+                "/admin/ingest",
+                data={**self._BASE_FORM, "mode": "append", "timestamp_column": "order_date"},
+                files={"file": ("data.csv", csv_data, "text/csv")},
+                headers=AUTH,
+            )
+
+        resp = _run_with_mocked_ingest(mock_ch, run)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["rows_inserted"] == 1
+        assert body["rows_skipped"] == 1
+
+        # Column names in insert must be sanitized.
+        assert mock_ch.insert.called
+        insert_col_names = mock_ch.insert.call_args.kwargs["column_names"]
+        assert insert_col_names == ["order_date", "amount"]

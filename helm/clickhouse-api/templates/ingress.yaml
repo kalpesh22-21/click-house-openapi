@@ -1,52 +1,93 @@
-{{- if .Values.ingress.enabled -}}
 {{- /*
-Warn (or fail) when ingress is enabled without TLS.  Exposing this API over
-plain HTTP leaks the API key and query results.  Set ingress.tls.enabled=true
-and provide a valid TLS secret or cert-manager issuer annotation.
+Ingress rendering.
+
+Two ways to expose the service:
+
+1. Legacy single ingress — `.Values.ingress` (kept for backward compatibility).
+
+2. Multiple named ingresses — `.Values.ingresses` (a map of name -> config).
+   Use this to expose different paths/hosts to different backends, e.g. a
+   public "mcp" ingress and a locked-down, internal-only "ui" ingress.
+
+Each ingress entry supports:
+   enabled:     bool
+   className:   ingress class (e.g. nginx, traefik, alb)
+   host:        FQDN for the rule + TLS SAN
+   annotations: map (per-ingress — put IP allow-lists / auth on the ui one here)
+   tls:
+     enabled:    bool (MUST be true — see safety check below)
+     secretName: TLS secret
+   paths:       list of { path, pathType, serviceName?, servicePortName? }
+                serviceName defaults to this chart's own service;
+                servicePortName defaults to "http".
+
+SECURITY: TLS is mandatory on every ingress. Plain HTTP would leak the API key,
+query results, and — for the UI/admin path — write access to ClickHouse. The
+"ui" ingress should ALSO carry restrictive annotations (source-IP allow-list,
+auth, or an internal-only ingress class) so the admin UI is never publicly
+reachable.
 */ -}}
-{{- if not .Values.ingress.tls.enabled -}}
-{{- fail "ingress.tls.enabled must be true when ingress.enabled is true. Exposing the API over plain HTTP leaks the API key. Set ingress.tls.enabled=true." -}}
+
+{{- define "clickhouse-api.renderIngress" -}}
+{{- $ := .root -}}
+{{- $name := .name -}}
+{{- $cfg := .cfg -}}
+{{- if not $cfg.tls.enabled -}}
+{{- fail (printf "ingress %q: tls.enabled must be true. Exposing over plain HTTP leaks the API key and the admin UI." $name) -}}
+{{- end -}}
+{{- if not $cfg.host -}}
+{{- fail (printf "ingress %q: host is required." $name) -}}
 {{- end -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "clickhouse-api.fullname" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ printf "%s-%s" (include "clickhouse-api.fullname" $) $name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ $.Release.Namespace }}
   labels:
-    {{- include "clickhouse-api.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+    {{- include "clickhouse-api.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+  {{- with $cfg.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  {{- if .Values.ingress.className }}
-  ingressClassName: {{ .Values.ingress.className }}
+  {{- with $cfg.className }}
+  ingressClassName: {{ . }}
   {{- end }}
   tls:
     - hosts:
-        - {{ .Values.ingress.host | quote }}
-      secretName: {{ .Values.ingress.tls.secretName }}
+        - {{ $cfg.host | quote }}
+      secretName: {{ $cfg.tls.secretName }}
   rules:
-    - host: {{ .Values.ingress.host | quote }}
+    - host: {{ $cfg.host | quote }}
       http:
         paths:
-        {{- if .Values.ingress.paths }}
-        {{- range .Values.ingress.paths }}
+          {{- range $cfg.paths }}
           - path: {{ .path }}
-            pathType: {{ .pathType }}
+            pathType: {{ .pathType | default "Prefix" }}
             backend:
               service:
-                name: {{ include "clickhouse-api.fullname" $ }}
+                name: {{ .serviceName | default (include "clickhouse-api.fullname" $) }}
                 port:
-                  name: http
-        {{- end }}
-        {{- else }}
-          - path: {{ .Values.ingress.path }}
-            pathType: {{ .Values.ingress.pathType }}
-            backend:
-              service:
-                name: {{ include "clickhouse-api.fullname" . }}
-                port:
-                  name: http
-        {{- end }}
+                  name: {{ .servicePortName | default "http" }}
+          {{- end }}
+{{- end -}}
+
+{{- /* 1. Legacy single ingress, normalised into the shared renderer. */ -}}
+{{- if .Values.ingress.enabled }}
+{{- $legacy := merge (dict
+      "paths" (list (dict
+        "path" (.Values.ingress.path | default "/")
+        "pathType" (.Values.ingress.pathType | default "Prefix")))
+    ) .Values.ingress -}}
+---
+{{ include "clickhouse-api.renderIngress" (dict "root" $ "name" "default" "cfg" $legacy) }}
+{{- end }}
+
+{{- /* 2. Named ingresses (mcp, ui, ...). */ -}}
+{{- range $name, $cfg := .Values.ingresses }}
+{{- if $cfg.enabled }}
+---
+{{ include "clickhouse-api.renderIngress" (dict "root" $ "name" $name "cfg" $cfg) }}
+{{- end }}
 {{- end }}
