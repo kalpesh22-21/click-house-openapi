@@ -24,7 +24,7 @@ import io
 import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 import clickhouse_connect
@@ -236,34 +236,97 @@ def build_admin_client(
 # Type inference
 # ---------------------------------------------------------------------------
 
-_DATETIME_FORMATS = (
-    "%Y-%m-%d %H:%M:%S",
-    "%Y-%m-%dT%H:%M:%S",
-    "%Y-%m-%dT%H:%M:%SZ",
-)
 _DATE_FORMAT = "%Y-%m-%d"
+
+# Non-ISO datetime layouts that datetime.fromisoformat() does not accept.
+# fromisoformat already covers the common ISO 8601 cases: "T" or space
+# separator, optional seconds, fractional seconds, and "+HH:MM" / "Z" offsets.
+# Slash formats use US month/day/year ordering (e.g. 03/04/2024 = March 4).
+# The year-first (%Y/...) layouts are tried before the US (%m/...) ones; they
+# never collide because a 4-digit trailing field can't be a valid day.
+_DATETIME_STRPTIME_FALLBACKS = (
+    "%Y/%m/%d %H:%M:%S",
+    "%Y/%m/%d %H:%M",
+    "%Y/%m/%dT%H:%M:%S",
+    "%m/%d/%Y %H:%M:%S",
+    "%m/%d/%Y %H:%M",
+    "%m/%d/%YT%H:%M:%S",
+)
+
+# Bare date layouts, tried after ISO (date.fromisoformat). US month/day/year.
+_DATE_STRPTIME_FALLBACKS = (
+    "%Y/%m/%d",
+    "%m/%d/%Y",
+)
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    """Parse *value* into a naive (UTC) datetime, or return None.
+
+    Accepts the broad set of ISO 8601 layouts understood by
+    datetime.fromisoformat() — space or "T" separator, optional seconds,
+    fractional seconds, and timezone offsets including a trailing "Z" — plus a
+    few common non-ISO fallbacks.  A bare date (no time component) parses to
+    midnight.  Timezone-aware values are converted to UTC and returned naive so
+    they compare cleanly against ClickHouse-sourced (naive) watermarks.
+    """
+    s = value.strip()
+    if not s:
+        return None
+
+    # fromisoformat accepts "Z" only on 3.11+; normalize defensively.
+    iso = s
+    if iso[-1:] in ("Z", "z"):
+        iso = iso[:-1] + "+00:00"
+
+    dt: datetime | None = None
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        for fmt in _DATETIME_STRPTIME_FALLBACKS:
+            try:
+                dt = datetime.strptime(s, fmt)
+                break
+            except ValueError:
+                continue
+
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _parse_date(value: str) -> date | None:
+    """Parse *value* strictly as a calendar date (YYYY-MM-DD), or return None."""
+    s = value.strip()
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        for fmt in _DATE_STRPTIME_FALLBACKS:
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        return None
 
 
 def _try_parse_datetime(value: str) -> bool:
-    """Return True if *value* parses as a datetime but NOT as a bare date."""
-    for fmt in _DATETIME_FORMATS:
-        try:
-            datetime.strptime(value, fmt)
-            return True
-        except ValueError:
-            pass
-    return False
+    """Return True if *value* parses as a datetime WITH a time component.
+
+    A bare date (e.g. "2024-01-01") returns False so it is classified as Date,
+    not DateTime — the time component is detected by the presence of ":".
+    """
+    if ":" not in value:
+        return False
+    return _parse_datetime(value) is not None
 
 
 def _try_parse_date(value: str) -> bool:
-    """Return True if *value* parses strictly as YYYY-MM-DD (date only)."""
-    try:
-        datetime.strptime(value, _DATE_FORMAT)
-        # Reject strings that also match a datetime format (they won't here
-        # because bare dates have no time component, but be explicit).
-        return True
-    except ValueError:
-        return False
+    """Return True if *value* parses strictly as a bare calendar date."""
+    return _parse_date(value) is not None
 
 
 def infer_column_type(values: list[str]) -> str:
@@ -328,6 +391,95 @@ def infer_column_type(values: list[str]) -> str:
 
     # --- String (no Nullable wrapping — empty string is a valid String value) ---
     return "String"
+
+
+def infer_schema_streaming(content: bytes) -> tuple[list[str], list[str], int]:
+    """Infer a ClickHouse type per column by scanning EVERY data row.
+
+    Returns ``(header, inferred_types, total_data_rows)`` where
+    ``inferred_types[i]`` is the suggested type for ``header[i]``.
+
+    Unlike inferring from a leading sample, this examines the whole file so that
+    nullability (empty cells) and type widening are detected even when they only
+    appear late in the data — e.g. a numeric column whose first empty cell or
+    first decimal value is on row 50,000 is still correctly inferred as
+    ``Nullable(...)`` / ``Float64`` rather than a non-nullable ``Int64``.
+
+    The decision rules and priority order match infer_column_type().
+
+    Raises ValueError if the content is not valid UTF-8.
+    """
+    try:
+        text = content.decode("utf-8-sig")  # strip BOM if present
+    except UnicodeDecodeError as exc:
+        raise ValueError("CSV file is not valid UTF-8.") from exc
+
+    reader = csv.reader(io.StringIO(text))
+    rows_iter = iter(reader)
+
+    try:
+        header = next(rows_iter)
+    except StopIteration:
+        return [], [], 0
+
+    header = [h.strip() for h in header]
+    n = len(header)
+
+    # Per-column accumulators (index-aligned with header).  Each "still_*" flag
+    # starts True and is cleared the first time a non-empty value fails to parse
+    # as that type; "has_empty" records whether any cell was blank.
+    saw_value = [False] * n
+    has_empty = [False] * n
+    still_int = [True] * n
+    still_float = [True] * n
+    still_datetime = [True] * n
+    still_date = [True] * n
+
+    total = 0
+    for row in rows_iter:
+        total += 1
+        for i in range(n):
+            raw = row[i] if i < len(row) else ""
+            if raw == "":
+                has_empty[i] = True
+                continue
+            saw_value[i] = True
+            if still_int[i]:
+                try:
+                    int(raw)
+                except ValueError:
+                    still_int[i] = False
+            if still_float[i]:
+                try:
+                    float(raw)
+                except ValueError:
+                    still_float[i] = False
+            if still_datetime[i] and not _try_parse_datetime(raw):
+                still_datetime[i] = False
+            if still_date[i] and not _try_parse_date(raw):
+                still_date[i] = False
+
+    inferred: list[str] = []
+    for i in range(n):
+        if not saw_value[i]:
+            # All cells empty (or no data rows) — can't infer anything useful.
+            inferred.append("String")
+            continue
+        if still_int[i]:
+            base = "Int64"
+        elif still_float[i]:
+            base = "Float64"
+        elif still_datetime[i]:
+            base = "DateTime"
+        elif still_date[i]:
+            base = "Date"
+        else:
+            # String columns are never wrapped — empty is a valid String value.
+            inferred.append("String")
+            continue
+        inferred.append(f"Nullable({base})" if has_empty[i] else base)
+
+    return header, inferred, total
 
 
 def parse_csv_sample(
@@ -531,25 +683,13 @@ def coerce(value: str, ch_type: str) -> Any:
             return False
         return None
 
-    # DateTime64 — treat same as DateTime.
+    # DateTime64 — treat same as DateTime.  A bare date coerces to midnight.
     if stripped.startswith("DateTime"):
-        for fmt in _DATETIME_FORMATS:
-            try:
-                return datetime.strptime(value, fmt)
-            except ValueError:
-                pass
-        # Fallback: try date-only string and return as midnight datetime.
-        try:
-            return datetime.strptime(value, _DATE_FORMAT)
-        except ValueError:
-            return None
+        return _parse_datetime(value)
 
     # Date.
     if stripped in ("Date", "Date32"):
-        try:
-            return datetime.strptime(value, _DATE_FORMAT).date()
-        except ValueError:
-            return None
+        return _parse_date(value)
 
     # Unknown/fallback type -> str passthrough.
     return value
@@ -933,11 +1073,16 @@ def analyze(
         db_exists = _query_database_exists(client, database)
         tbl_exists = _query_table_exists(client, database, table)
 
-        header, sample, total_data_rows = parse_csv_sample(file_content, sample_rows=1000)
+        # Scan ALL data rows for type inference (not just a leading sample) so
+        # nullability and type widening reflect the entire file.
+        header, inferred_types, total_data_rows = infer_schema_streaming(file_content)
         sanitized = _sanitize_columns(header)
-        # Infer schema using sanitized names so entries are keyed by sanitized name,
-        # matching what is stored in the existing table (also sanitized).
-        inferred = infer_schema(sanitized, sample)
+        # Key inferred entries by sanitized name so they match what is stored in
+        # the existing table (also sanitized).
+        inferred = [
+            {"name": sanitized[i], "suggested_type": inferred_types[i]}
+            for i in range(len(header))
+        ]
 
         existing_schema: list[dict[str, str]] | None = None
         existing_comments: dict[str, str] | None = None
@@ -967,7 +1112,7 @@ def analyze(
         "database_exists": db_exists,
         "table_exists": tbl_exists,
         "csv_columns": header,
-        "csv_row_sample_count": len(sample),
+        "csv_row_sample_count": total_data_rows,
         "inferred_columns": inferred,
         "existing_schema": existing_schema,
         "schema_matches": schema_matches,
@@ -1099,16 +1244,16 @@ def _run_ingest(
     # from name-based to positional CSV→column mapping below.
     _auto_built_columns = False
     if columns is None and mode in ("create", "wipe"):
-        auto_header, auto_sample, _ = parse_csv_sample(file_content, sample_rows=1000)
+        # Scan ALL rows for type inference so nullability/widening is detected
+        # across the whole file, not just a leading sample.
+        auto_header, auto_types, _ = infer_schema_streaming(file_content)
         if not auto_header:
             raise ValueError("CSV has no header row — cannot auto-infer schema.")
         sanitized_auto = _sanitize_columns(auto_header)
         columns = [
             {
                 "name": sanitized_auto[i],
-                "type": infer_column_type(
-                    [row[i] if i < len(row) else "" for row in auto_sample]
-                ),
+                "type": auto_types[i],
                 "description": None,
             }
             for i in range(len(auto_header))
@@ -1116,18 +1261,19 @@ def _run_ingest(
         _auto_built_columns = True
 
     if mode == "create":
+        # We never create the database — it must already exist. ClickHouse
+        # returns a clear "database doesn't exist" error if it is missing.
         # Fail if table already exists.
         if _query_table_exists(client, database, table):
             raise ValueError(
                 f"Table `{db}`.`{tbl}` already exists. Use mode 'wipe' to recreate "
                 "or mode 'append' to add rows."
             )
-        client.command(f"CREATE DATABASE IF NOT EXISTS `{db}`")
         ddl = build_create_table_sql(database, table, columns, order_by)  # type: ignore[arg-type]
         client.command(ddl)
 
     elif mode == "wipe":
-        client.command(f"CREATE DATABASE IF NOT EXISTS `{db}`")
+        # We never create the database — it must already exist.
         client.command(f"DROP TABLE IF EXISTS `{db}`.`{tbl}`")
         ddl = build_create_table_sql(database, table, columns, order_by)  # type: ignore[arg-type]
         client.command(ddl)
@@ -1180,8 +1326,13 @@ def _run_ingest(
         csv_name_to_idx = {san: i for i, san in enumerate(sanitized_header)}
         missing_cols = [c["name"] for c in columns if c["name"] not in csv_name_to_idx]
     else:
-        # Name-based mapping: every declared column name must appear in header.
-        csv_name_to_idx = {name: i for i, name in enumerate(header)}
+        # Explicit columns (create/wipe with columns_json). The UI normalizes
+        # column names to sanitized snake_case before sending them, while the raw
+        # CSV header still carries the original messy names. Sanitize the header
+        # so each declared column aligns with its source CSV column by normalized
+        # form (matching how the table itself was created).
+        sanitized_header = _sanitize_columns(header)
+        csv_name_to_idx = {san: i for i, san in enumerate(sanitized_header)}
         missing_cols = [c["name"] for c in columns if c["name"] not in csv_name_to_idx]
     if missing_cols:
         raise ValueError(
@@ -1250,13 +1401,25 @@ def _run_ingest(
 
     # Append mode: watermark filter applied row-by-row during streaming.
     assert timestamp_column is not None  # validated above
-    watermark = _query_max_timestamp(client, database, table, timestamp_column)
+
+    # Resolve the timestamp column to the sanitized name actually used by the
+    # table and the csv_name_to_idx mapping. The UI populates the picker from the
+    # raw CSV header, so the incoming value may be an original (un-sanitized)
+    # header name (e.g. "OrderDate" → "orderdate").
+    if timestamp_column in csv_name_to_idx:
+        ts_name = timestamp_column
+    elif timestamp_column in header:
+        ts_name = sanitized_header[header.index(timestamp_column)]
+    else:
+        ts_name = _sanitize_column_name(timestamp_column)
+
+    watermark = _query_max_timestamp(client, database, table, ts_name)
     watermark_str: str | None = str(watermark) if watermark is not None else None
 
     # Find the timestamp column's type in the existing schema.
     ts_col_type = "String"
     for col in columns:
-        if col["name"] == timestamp_column:
+        if col["name"] == ts_name:
             ts_col_type = col["type"]
             break
 
@@ -1270,9 +1433,7 @@ def _run_ingest(
             ts_col_type,
         )
 
-    ts_idx = csv_name_to_idx.get(timestamp_column, -1)
-    # ts_idx cannot be -1 here because missing_cols check above would have caught it,
-    # but guard defensively.
+    ts_idx = csv_name_to_idx.get(ts_name, -1)
     if ts_idx == -1:
         raise ValueError(
             f"timestamp_column {timestamp_column!r} not found in CSV header: {header}"

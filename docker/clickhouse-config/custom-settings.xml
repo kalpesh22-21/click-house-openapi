@@ -1,0 +1,9 @@
+<clickhouse>
+    <!--
+      Allow the per-tenant custom setting the API injects (e.g. SQL_tenant).
+      Without a matching <custom_settings_prefixes> entry ClickHouse rejects the
+      query with "Unknown setting SQL_tenant". Row policies read it via
+      getSetting('SQL_tenant') to filter rows per tenant.
+    -->
+    <custom_settings_prefixes>SQL_</custom_settings_prefixes>
+</clickhouse>

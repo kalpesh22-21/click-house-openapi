@@ -48,7 +48,7 @@ LLM usage pattern:
 from __future__ import annotations
 
 import argparse
-import hmac
+import json
 import logging
 import sys
 from typing import Annotated, Any, Optional
@@ -58,11 +58,12 @@ import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import Field
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 
+from app.auth_jwt import JWTAuthError, validate_token
 from app.config import get_settings
+from app.principal import current_principal
 from app.errors import (
     ClickHouseQueryError,
     ClickHouseUnavailableError,
@@ -106,6 +107,12 @@ mcp = FastMCP(
     port=settings.mcp_port,
     streamable_http_path=settings.mcp_path,
     log_level=settings.log_level,
+    # Stateless HTTP: do not keep per-process MCP session state. Each request is
+    # self-contained, so any replica can serve any request. This is required when
+    # running >1 replica behind a round-robin load balancer without session
+    # affinity — otherwise a follow-up request carrying an mcp-session-id minted
+    # on pod A gets routed to pod B, which returns 404 (unknown session).
+    stateless_http=True,
 )
 
 
@@ -304,71 +311,93 @@ def explain_query(
 # HTTP transport: Bearer auth middleware
 # ---------------------------------------------------------------------------
 
-class BearerAuthMiddleware(BaseHTTPMiddleware):
-    """Starlette middleware that enforces Bearer token auth on the MCP path.
+def _bearer_from_scope(scope: dict[str, Any]) -> Optional[str]:
+    """Extract the Bearer token from an ASGI scope, or None if absent/malformed."""
+    for name, value in scope.get("headers", []):
+        if name == b"authorization":
+            header = value.decode("latin-1")
+            if header.startswith("Bearer "):
+                token = header[len("Bearer "):].strip()
+                return token or None
+            return None
+    return None
 
-    Requests to the MCP endpoint without a valid ``Authorization: Bearer <API_KEY>``
-    header are rejected with 401.  The /health path is exempt so Kubernetes
-    probes work without credentials.
+
+async def _send_json_response(
+    send,
+    status_code: int,
+    payload: dict[str, Any],
+    *,
+    www_authenticate: bool = False,
+) -> None:
+    """Emit a complete JSON ASGI response (used for auth rejections)."""
+    body = json.dumps(payload).encode("utf-8")
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode("ascii")),
+    ]
+    if www_authenticate:
+        headers.append((b"www-authenticate", b"Bearer"))
+    await send({"type": "http.response.start", "status": status_code, "headers": headers})
+    await send({"type": "http.response.body", "body": body})
+
+
+class JWTAuthMiddleware:
+    """Pure-ASGI middleware: validate the JWT and bind the principal per request.
+
+    Why pure-ASGI rather than BaseHTTPMiddleware: BaseHTTPMiddleware runs the
+    downstream app in a separate task, so a ContextVar set in it does NOT reach
+    the MCP tool functions.  A pure-ASGI middleware awaits the app in the SAME
+    context, so ``current_principal`` set here propagates into the tool call (and
+    into the anyio threadpool that runs the sync tools).
+
+    Default-deny: every request is rejected unless it carries a valid token,
+    except an explicit public-path allowlist (default: /health for k8s probes).
+    Statelessness is preserved — the token is verified per request (only JWKS is
+    cached), so any replica can serve any request.
     """
 
-    def __init__(self, app, api_key: str, mcp_path: str) -> None:
-        super().__init__(app)
-        self._api_key = api_key
-        self._mcp_path = mcp_path.rstrip("/")
+    def __init__(self, app, settings, public_paths: tuple[str, ...] = ("/health",)) -> None:
+        self.app = app
+        self.settings = settings
+        self._public_paths = frozenset(p.rstrip("/") or "/" for p in public_paths)
 
-    async def dispatch(self, request: Request, call_next) -> Response:
-        # Exempt paths that don't start with the MCP mount path.
-        if not request.url.path.startswith(self._mcp_path):
-            return await call_next(request)
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        auth_header = request.headers.get("Authorization", "")
+        path = (scope.get("path", "") or "/").rstrip("/") or "/"
+        if path in self._public_paths:
+            await self.app(scope, receive, send)
+            return
 
-        # Distinguish MISSING_AUTH (no Bearer prefix) from INVALID_AUTH (wrong
-        # token) so callers get actionable error codes.  Both checks are
-        # delegated to _check_bearer_token — the same tested function.
-        if not auth_header.startswith("Bearer "):
-            return JSONResponse(
+        token = _bearer_from_scope(scope)
+        if token is None:
+            await _send_json_response(
+                send,
+                401,
                 {"error": "Missing Authorization header.", "code": "MISSING_AUTH"},
-                status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
+                www_authenticate=True,
             )
+            return
 
-        if not _check_bearer_token(auth_header, self._api_key):
-            return JSONResponse(
-                {"error": "Invalid API key.", "code": "INVALID_AUTH"},
-                status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
+        try:
+            principal = validate_token(token, self.settings)
+        except JWTAuthError as exc:
+            await _send_json_response(
+                send,
+                exc.status_code,
+                {"error": exc.message, "code": exc.code},
+                www_authenticate=True,
             )
+            return
 
-        return await call_next(request)
-
-
-def _check_bearer_token(authorization: str | None, api_key: str) -> bool:
-    """Return True if the Authorization header carries the correct Bearer token.
-
-    This is a pure function (no request object) that can be unit-tested directly.
-    It uses hmac.compare_digest to prevent timing side-channel attacks.
-
-    An empty *provided* token always returns False — hmac.compare_digest(b"", b"")
-    would return True, so we guard explicitly against empty tokens before the
-    constant-time comparison.  The caller (_run_http) is responsible for ensuring
-    api_key is non-empty before this function is invoked; this function is safe
-    in isolation regardless.
-    """
-    if not authorization or not authorization.startswith("Bearer "):
-        return False
-    provided = authorization[len("Bearer "):]
-    # Explicit empty-token guard: reject blank credentials regardless of the
-    # server-side api_key value.  hmac.compare_digest(b"", b"") == True, so
-    # without this guard an empty Bearer token against an empty api_key would
-    # incorrectly pass.
-    if not provided:
-        return False
-    return hmac.compare_digest(
-        provided.encode("utf-8"),
-        api_key.encode("utf-8"),
-    )
+        ctx_token = current_principal.set(principal)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            current_principal.reset(ctx_token)
 
 
 # ---------------------------------------------------------------------------
@@ -417,27 +446,23 @@ def _parse_args() -> argparse.Namespace:
 
 
 async def _run_http() -> None:
-    """Build and serve the streamable-HTTP MCP app with Bearer auth middleware."""
-    # Fail closed: if the API key is somehow empty at runtime (e.g. a non-pydantic
-    # code path that bypasses the validator), refuse to serve rather than allow
-    # unauthenticated access.  The pydantic validator in config.py is the primary
-    # defence; this guard is a second line of defence specific to HTTP mode.
-    if not settings.api_key or not settings.api_key.strip():
+    """Build and serve the streamable-HTTP MCP app with JWT auth middleware."""
+    # Fail closed: a network-exposed transport must not start without a way to
+    # verify tokens.  Require the OIDC config (JWKS URL + issuer + audience)
+    # before serving; otherwise every request would be unauthenticable.
+    if not settings.auth_configured():
         logger.critical(
-            "MCP HTTP transport requires a non-empty API_KEY. "
-            "Set API_KEY to a real secret and restart."
+            "MCP HTTP transport requires OIDC config. Set OIDC_JWKS_URL, "
+            "OIDC_ISSUER, and OIDC_AUDIENCE to enable JWT validation, then restart."
         )
         sys.exit(1)
 
     starlette_app = mcp.streamable_http_app()
 
-    # Wrap with Bearer auth middleware so every request to the MCP path requires
-    # a valid API_KEY in the Authorization header.
-    authed_app = BearerAuthMiddleware(
-        starlette_app,
-        api_key=settings.api_key,
-        mcp_path=settings.mcp_path,
-    )
+    # Wrap with the JWT auth middleware so every request requires a valid token.
+    # /health is exempted by default so Kubernetes liveness/readiness probes work
+    # without credentials.
+    authed_app = JWTAuthMiddleware(starlette_app, settings=settings)
 
     logger.info(
         "Starting MCP HTTP server on 0.0.0.0:%d, mount_path=%s",

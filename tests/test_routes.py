@@ -32,13 +32,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
+from tests.jwt_helpers import make_jwt
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-API_KEY = "test-api-key-abc123"
-AUTH = {"Authorization": f"Bearer {API_KEY}"}
+# A valid tenant JWT (user_name='alice'); the autouse _patch_jwks fixture in
+# conftest resolves its signing key locally so no IdP is contacted.
+AUTH = {"Authorization": f"Bearer {make_jwt()}"}
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +49,6 @@ AUTH = {"Authorization": f"Bearer {API_KEY}"}
 
 @pytest.fixture(autouse=True)
 def env_setup():
-    os.environ["API_KEY"] = API_KEY
     os.environ["MAX_RESPONSE_ROWS"] = "1000"
     os.environ["DEFAULT_LIMIT"] = "1000"
     os.environ["ALLOWED_DATABASES"] = "*"
@@ -558,3 +559,32 @@ class TestHealthRoute:
         mock_ping.assert_called_once_with()
         assert mock_ping.call_args.args == ()
         assert mock_ping.call_args.kwargs == {}
+
+
+# ===========================================================================
+# Schema routes — ClickHouse domain errors map to clean HTTP codes (not 500)
+# ===========================================================================
+
+class TestSchemaRouteErrorTranslation:
+    """Regression: schema routes let ClickHouse domain errors propagate; the
+    app-level handler must translate them (was a 500 on /databases)."""
+
+    def test_databases_clickhouse_query_error_returns_400(self, client, mock_execute):
+        from fastapi import HTTPException
+
+        mock_execute.side_effect = HTTPException(
+            status_code=400, detail={"error": "boom", "code": "CLICKHOUSE_QUERY_ERROR"}
+        )
+        resp = client.get("/databases", headers=AUTH)
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["code"] == "CLICKHOUSE_QUERY_ERROR"
+
+    def test_databases_clickhouse_unavailable_returns_502(self, client, mock_execute):
+        from fastapi import HTTPException
+
+        mock_execute.side_effect = HTTPException(
+            status_code=502, detail={"error": "down", "code": "CLICKHOUSE_UNAVAILABLE"}
+        )
+        resp = client.get("/databases", headers=AUTH)
+        assert resp.status_code == 502, resp.text
+        assert resp.json()["code"] == "CLICKHOUSE_UNAVAILABLE"

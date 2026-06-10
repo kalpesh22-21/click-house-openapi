@@ -29,6 +29,7 @@ Do not rely solely on the injected LIMIT to bound result sizes.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from fastapi import HTTPException
 
@@ -127,12 +128,30 @@ _ALLOWED_PREFIXES = ("select", "with", "explain", "show", "describe", "desc")
 # "inserted_at" is not.
 #
 # TABLE FUNCTIONS (CRITICAL — data exfiltration / SSRF vectors):
-#   Each entry uses the pattern  \b<name>\s*\(  so that:
-#     - "url('...')"  is blocked
-#     - "url_slug"    is NOT blocked (no following parenthesis)
-#     - "file_size"   is NOT blocked (no following parenthesis)
-#   The function call pattern inherently avoids false positives on column/table
-#   names that contain the function name as a substring with a non-'(' suffix.
+#   Each entry uses the pattern  \b<root>\w*\s*\(  so that a denied ROOT
+#   matches any identifier that starts with it and is immediately followed by
+#   an optional run of word-characters and then an open parenthesis.  This
+#   means a single root blocks all *Cluster / *S3 / *Secure variants without
+#   requiring each variant to be listed explicitly.  Examples:
+#     - "url"     blocks  url(  AND  urlCluster(
+#     - "s3"      blocks  s3(   AND  s3Cluster(
+#     - "hdfs"    blocks  hdfs( AND  hdfsCluster(
+#     - "iceberg" blocks  icebergS3(  icebergLocal(  etc.
+#     - "cluster" blocks  cluster(  AND  clusterAllReplicas(
+#     - "remote"  blocks  remote(   AND  remoteSecure(
+#   The \w* suffix does NOT match across a word boundary, so:
+#     - "url_slug"  is still safe (followed by '_', not '(')
+#     - "file_size" is still safe (followed by '_', not '(')
+#   This replaces the previous per-name workaround where "clusterAllReplicas"
+#   and "remoteSecure" had to be listed separately because \b blocked the
+#   exact-name pattern from matching mid-identifier extensions.
+#   Those names are retained in the list below as no-ops (harmless) rather
+#   than removed, to keep the intent explicit.
+#
+# NOTE ON DoS GENERATORS (numbers, range, arrayJoin, generateRandom, etc.):
+#   These are intentionally NOT blocked here to avoid false positives on
+#   legitimate analytics queries.  They are handled by server-side execution
+#   caps (max_rows_to_read, max_result_rows) applied in clickhouse_client.py.
 # ---------------------------------------------------------------------------
 
 _DENIED_KEYWORDS: list[str] = [
@@ -158,16 +177,17 @@ _DENIED_KEYWORDS: list[str] = [
     r"\bSET\b",
 ]
 
-# Table-function names that must be blocked when used as function calls.
-# Pattern: \b<name>\s*\( — matches the call syntax but not identifiers like
-# url_slug (no parenthesis) or file_size (no parenthesis).
+# Table-function ROOT names that must be blocked when used as function calls.
+# Pattern: \b<root>\w*\s*\( — the \w* suffix catches *Cluster/*S3/*Secure
+# variants automatically without listing each one.  See the comment block
+# above for a full explanation.
 _DENIED_TABLE_FUNCTIONS: list[str] = [
     "url",
     "file",
     "remote",
-    "remoteSecure",
+    "remoteSecure",   # kept explicit; also covered by "remote\w*\("
     "s3",
-    "s3Cluster",
+    "s3Cluster",      # kept explicit; also covered by "s3\w*\("
     "mysql",
     "postgresql",
     "sqlite",
@@ -181,15 +201,31 @@ _DENIED_TABLE_FUNCTIONS: list[str] = [
     "input",
     "executable",
     "cluster",
-    # Additional external-network / external-DB table functions.
-    # Note: "clusterAllReplicas" must be listed explicitly — the existing
-    # "cluster" entry uses \b word-boundary matching which does NOT fire
-    # mid-identifier, so "clusterAllReplicas(" would slip past it.
+    "clusterAllReplicas",  # kept explicit; also covered by "cluster\w*\("
     "gcs",
     "azureBlobStorage",
-    "clusterAllReplicas",
     "mongodb",
     "redis",
+    # Additional dangerous table functions:
+    # "merge" is critical — merge('system','.*') dumps system catalog
+    # by hiding the 'system' database name inside a string literal, bypassing
+    # the \bSYSTEM\b denylist entry (which only fires outside literals).
+    # NOTE: aggregate combinators like quantileMerge( do NOT match because
+    # "merge" there has no \b word boundary before it (it is mid-identifier).
+    "merge",
+    # fuzzJSON and fuzzQuery are listed by full name rather than a broad "fuzz"
+    # root to avoid false positives on hypothetical scalar fuzzBits( etc.
+    # The \w* suffix in \bfuzzJSON\w*\( still auto-covers any future fuzzJSONCluster(
+    # variants; the explicit name is only to avoid matching a broad root.
+    "fuzzJSON",
+    "fuzzQuery",
+    "view",
+    "loop",
+    # Cloud object-storage table functions — same SSRF/exfil class as s3/gcs.
+    # The \w* suffix auto-covers ossCluster(, cosnCluster(, obsCluster( variants.
+    "oss",   # Alibaba Cloud OSS
+    "cosn",  # Tencent Cloud COS
+    "obs",   # Huawei Cloud OBS
 ]
 
 # Pre-compile each keyword pattern once.  We include \b on both sides unless
@@ -207,14 +243,29 @@ for _kw in _DENIED_KEYWORDS:
         _pat = re.compile(r"\b" + re.escape(_kw) + r"\b", re.IGNORECASE)
     _DENIED_PATTERNS.append(_pat)
 
-# Table-function patterns: \b<name>\s*\(
-# re.IGNORECASE is intentionally NOT set here for case-sensitive function names
-# like remoteSecure, s3Cluster, deltaLake, etc.  We add both the canonical and
-# lowercase variants explicitly via re.IGNORECASE to catch all casings of the
-# common ASCII-only names while still matching mixed-case ClickHouse builtins.
+# Table-function patterns: \b<root>\w*\s*\(
+# The \w* between the root name and \s*\( ensures that any identifier that
+# STARTS WITH the root name (e.g. urlCluster, s3Cluster, hdfsCluster,
+# icebergS3, deltaLakeCluster, azureBlobStorageCluster, clusterAllReplicas,
+# remoteSecure, mergeTreeIndex) is caught by the same pattern as the base
+# name (url, s3, hdfs, iceberg, deltaLake, azureBlobStorage, cluster,
+# remote, merge).
+# re.IGNORECASE is used so that URL(, Url(, etc. are also caught.
 for _fn in _DENIED_TABLE_FUNCTIONS:
-    _pat = re.compile(r"\b" + re.escape(_fn) + r"\s*\(", re.IGNORECASE)
+    _pat = re.compile(r"\b" + re.escape(_fn) + r"\w*\s*\(", re.IGNORECASE)
     _DENIED_PATTERNS.append(_pat)
+
+# Defense-in-depth: block any user-supplied SETTINGS clause.  This pattern
+# intentionally blocks the ENTIRE `SETTINGS key=value` clause regardless of
+# which setting name appears — any user-controlled setting override is
+# disallowed because it could bypass the readonly/row-limit caps set in
+# clickhouse_client.py.  We match SETTINGS followed by the first identifier and
+# '=' (whichever key appears first) rather than the bare word "settings" so
+# that a column named "settings" in a normal query is NOT falsely rejected.
+# Example allowed:  SELECT settings FROM t WHERE settings = 'x'
+# Example blocked:  SELECT 1 SETTINGS readonly=0
+# Example blocked:  SELECT 1 SETTINGS a=1, readonly=0  (first key triggers it)
+_DENIED_PATTERNS.append(re.compile(r"\bSETTINGS\s+\w+\s*=", re.IGNORECASE))
 
 # ---------------------------------------------------------------------------
 # LIMIT detection — simple heuristic for the *outermost* query
@@ -308,8 +359,31 @@ def validate_and_sanitize(sql: str, default_limit: int) -> str:
     #    trigger false rejections.  Real function calls in executable position
     #    (outside any literal) are still caught because only the literal
     #    *contents* are blanked — the function-name token itself remains.
+    #
+    #    Additionally, build a dedicated scan copy that collapses quoted
+    #    identifiers: ClickHouse accepts backtick- and double-quote-quoted
+    #    identifiers as function names (e.g. `url`( or "url"(), and the
+    #    \b<root>\w*\s*\( patterns cannot cross a closing quote to reach the '('.
+    #    By stripping backtick and double-quote characters from the scan copy,
+    #    a quoted function name collapses to its bare form so the existing
+    #    patterns catch it.  _mask_string_literals (single-quote literals) runs
+    #    first above, so only identifier quotes remain here; we do NOT strip
+    #    single quotes.
+    #
+    #    CRITICAL: denylist_scan is a throwaway copy used ONLY for matching.
+    #    The SQL returned from this function is `stripped` (quotes intact) so
+    #    legitimate backtick-quoted column identifiers execute correctly.
+    # NFKC folds Unicode COMPATIBILITY forms (e.g. full-width 'ｕrl' U+FF55,
+    # superscripts) to their ASCII equivalents so a denied function name cannot be
+    # disguised in identifier position. NOTE: NFKC does NOT transliterate across
+    # scripts, so a cross-script homoglyph such as Cyrillic 'у' (U+0443) is NOT
+    # folded and still passes here — this is a known, accepted gap: ClickHouse's
+    # function registry is ASCII-only, so such a name is an unknown function the
+    # server rejects, and readonly=1 is the backstop (see the strict-xfail test).
+    # Applied only to the throwaway scan copy; the returned SQL is unaffected.
+    denylist_scan = unicodedata.normalize("NFKC", stripped_masked).replace("`", "").replace('"', "")
     for pattern in _DENIED_PATTERNS:
-        m = pattern.search(stripped_masked)
+        m = pattern.search(denylist_scan)
         if m:
             raise HTTPException(status_code=400, detail={
                 "error": (

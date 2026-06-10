@@ -156,6 +156,22 @@ config:
   # Schema access control
   ALLOWED_DATABASES: "*"
 
+  # --- Per-tenant JWT auth (OIDC) ---
+  # Point these at the token-service release (see helm/token-service). The JWKS
+  # URL is the in-cluster Service DNS; ISSUER/AUDIENCE MUST match the token
+  # service's TOKEN_ISSUER / TOKEN_AUDIENCE.
+  OIDC_JWKS_URL: "http://token-service.default.svc.cluster.local/.well-known/jwks.json"
+  OIDC_ISSUER: "https://token.example.com/"
+  OIDC_AUDIENCE: "clickhouse-api"
+  JWT_ALGORITHMS: "RS256"
+
+  # --- Per-tenant row isolation ---
+  CLICKHOUSE_TENANT_SETTINGS: '{"SQL_tenant": "user_name"}'
+  CLICKHOUSE_CUSTOM_SETTINGS_PREFIX: "SQL_"
+  # readonly=1 works with the tenant custom setting. The ClickHouse server must
+  # register the prefix: <custom_settings_prefixes>SQL_</custom_settings_prefixes>.
+  CLICKHOUSE_READONLY: "1"
+
   # Server
   APP_PORT: "8000"
   LOG_LEVEL: "INFO"
@@ -195,6 +211,9 @@ secrets:
   # REQUIRED: leave empty here and supply via --set or a separate values file.
   # Installation will fail if both clickhousePassword/apiKey are empty AND
   # existingSecret.name is not provided.
+  #
+  # apiKey is now the ADMIN API key for the /admin write routes only — the
+  # per-tenant query/MCP routes authenticate with OIDC JWTs (config.OIDC_*).
   clickhousePassword: ""
   apiKey: ""
 

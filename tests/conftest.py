@@ -23,7 +23,14 @@ _TEST_ENV = {
     "CLICKHOUSE_PASSWORD": "test-password",
     "CLICKHOUSE_DATABASE": "default",
     "CLICKHOUSE_SECURE": "false",
-    "API_KEY": "test-api-key-abc123",
+    "API_KEY": "test-api-key-abc123",  # deprecated/unused; kept so old env stays valid
+    # OIDC/JWT auth config — required for auth_configured() to be True so the app
+    # starts.  The JWKS URL is never fetched in tests: the autouse _patch_jwks
+    # fixture replaces the signing-key resolver with a local public key.
+    "OIDC_JWKS_URL": "https://idp.test/.well-known/jwks.json",
+    "OIDC_ISSUER": "https://idp.test/",
+    "OIDC_AUDIENCE": "clickhouse-api",
+    "JWT_ALGORITHMS": "RS256",
     "MAX_EXECUTION_TIME": "30",
     "MAX_RESULT_ROWS": "10000",
     "MAX_ROWS_TO_READ": "100000000",
@@ -46,6 +53,29 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
+from tests.jwt_helpers import PUBLIC_KEY, make_jwt  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _patch_jwks(request, monkeypatch):
+    """Resolve every token's signing key to the local TEST public key (no network).
+
+    Applied to every test so any request/middleware that validates a JWT runs
+    offline.  Tokens signed with jwt_helpers.WRONG_PRIVATE_PEM still fail
+    signature verification against this public key — that is intentional.
+
+    Tests marked ``real_jwks`` opt out so they can exercise the genuine
+    _resolve_signing_key -> PyJWKClient -> JWKS-fetch path (see
+    tests/test_jwt_roundtrip.py).
+    """
+    if request.node.get_closest_marker("real_jwks"):
+        yield
+        return
+    monkeypatch.setattr(
+        "app.auth_jwt._resolve_signing_key",
+        lambda token, settings: PUBLIC_KEY,
+    )
+    yield
 
 
 @pytest.fixture(autouse=False)
@@ -65,14 +95,14 @@ def settings():
 
 @pytest.fixture()
 def api_key() -> str:
-    """The API key used in test env."""
+    """Deprecated — retained for backward-compat with older tests."""
     return _TEST_ENV["API_KEY"]
 
 
 @pytest.fixture()
-def auth_headers(api_key: str) -> dict:
-    """Authorization headers for authenticated requests."""
-    return {"Authorization": f"Bearer {api_key}"}
+def auth_headers() -> dict:
+    """Authorization headers carrying a valid tenant JWT (user_name='alice')."""
+    return {"Authorization": f"Bearer {make_jwt()}"}
 
 
 # ---------------------------------------------------------------------------

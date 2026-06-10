@@ -13,6 +13,14 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
+from app.errors import (
+    ClickHouseAPIError,
+    ClickHouseQueryError,
+    ClickHouseUnavailableError,
+    DatabaseNotAllowedError,
+    QueryValidationError,
+    TableNotFoundError,
+)
 from app.routers import admin, health, query, schema
 
 # ---------------------------------------------------------------------------
@@ -40,9 +48,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: RUF029
     """Startup / shutdown logic.
 
     On startup we:
-      1. Check that API_KEY is configured — the REST API always requires auth.
-         An empty key would leave the service permanently unauthenticated, so
-         we log a CRITICAL message and exit rather than serve unprotected routes.
+      1. Check that OIDC/JWT auth is configured — the REST API always requires
+         auth.  Missing config would leave the service unable to verify any
+         token, so we log a CRITICAL message and exit rather than serve routes
+         that can never authenticate.
       2. Eagerly create the ClickHouse client so connection errors surface
          immediately rather than on the first request.
     """
@@ -58,12 +67,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: RUF029
         force=True,
     )
 
-    # Fail closed: the REST API has no unauthenticated mode.  If API_KEY is
-    # not set, refuse to serve rather than allow open access.
-    if not settings.api_key or not settings.api_key.strip():
+    # Fail closed: the REST API has no unauthenticated mode.  If OIDC/JWT auth
+    # is not configured, refuse to serve rather than allow open access.
+    if not settings.auth_configured():
         logger.critical(
-            "REST API requires a non-empty API_KEY. "
-            "Set API_KEY to a real secret and restart."
+            "REST API requires OIDC config. Set OIDC_JWKS_URL, OIDC_ISSUER, and "
+            "OIDC_AUDIENCE to enable JWT validation, then restart."
         )
         sys.exit(1)
 
@@ -105,6 +114,32 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # Exception handlers
 # ---------------------------------------------------------------------------
+
+
+# Map each transport-agnostic domain error to its HTTP status.  Registering one
+# handler on the base class catches every subclass (Starlette walks the MRO), so
+# ANY route that lets a domain error propagate — not just /query — returns a
+# clean status instead of a 500.  (The /query and some schema routes still map
+# these explicitly; this is the backstop for the rest.)
+_DOMAIN_ERROR_STATUS: dict[type, int] = {
+    QueryValidationError: 400,
+    ClickHouseQueryError: 400,
+    DatabaseNotAllowedError: 403,
+    TableNotFoundError: 404,
+    ClickHouseUnavailableError: 502,
+}
+
+
+@app.exception_handler(ClickHouseAPIError)
+async def domain_error_handler(request: Request, exc: ClickHouseAPIError) -> JSONResponse:
+    """Translate a domain error to its HTTP status (default 500 if unmapped)."""
+    status_code = _DOMAIN_ERROR_STATUS.get(type(exc), 500)
+    if status_code >= 500:
+        logger.exception("Unmapped domain error for %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": exc.message, "code": exc.code},
+    )
 
 
 @app.exception_handler(Exception)

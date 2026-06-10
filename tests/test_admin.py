@@ -29,6 +29,7 @@ from app.admin_ingest import (
     compare_schemas,
     infer_column_type,
     infer_schema,
+    infer_schema_streaming,
     parse_csv_sample,
     validate_ch_type,
     validate_identifier,
@@ -151,6 +152,40 @@ class TestInferColumnType:
     def test_date_values_returns_date(self):
         assert infer_column_type(["2024-01-01", "2024-06-15"]) == "Date"
 
+    def test_datetime_with_fractional_seconds(self):
+        assert infer_column_type(
+            ["2024-01-01 12:00:00.123", "2024-06-15 08:30:00.5"]
+        ) == "DateTime"
+
+    def test_datetime_with_timezone_offset(self):
+        assert infer_column_type(
+            ["2024-01-01T12:00:00+05:30", "2024-06-15T08:30:00-04:00"]
+        ) == "DateTime"
+
+    def test_datetime_without_seconds(self):
+        assert infer_column_type(["2024-01-01 12:00", "2024-06-15 08:30"]) == "DateTime"
+
+    def test_datetime_slash_separator(self):
+        assert infer_column_type(["2024/01/01 12:00:00", "2024/06/15 08:30:00"]) == "DateTime"
+
+    def test_datetime_mixed_iso_variants(self):
+        # Mix of space, T, fractional, and offset forms in one column.
+        assert infer_column_type([
+            "2024-01-01 12:00:00",
+            "2024-06-15T08:30:00.250",
+            "2024-12-31T23:59:59Z",
+        ]) == "DateTime"
+
+    def test_date_us_mdy_format(self):
+        # US month/day/year slash dates.
+        assert infer_column_type(["01/15/2024", "12/31/2024"]) == "Date"
+
+    def test_date_us_mdy_unpadded(self):
+        assert infer_column_type(["1/5/2024", "12/31/2024"]) == "Date"
+
+    def test_datetime_us_mdy_format(self):
+        assert infer_column_type(["01/15/2024 10:30:00", "12/31/2024 23:59:59"]) == "DateTime"
+
     def test_mixed_types_returns_string(self):
         assert infer_column_type(["hello", "world", "123abc"]) == "String"
 
@@ -254,6 +289,37 @@ class TestCoerce:
         result = coerce("2024-01-15 10:30:00", "DateTime64(3)")
         assert isinstance(result, datetime)
 
+    def test_coerce_datetime_fractional_seconds(self):
+        result = coerce("2024-01-15 10:30:00.250", "DateTime")
+        assert isinstance(result, datetime)
+        assert result == datetime(2024, 1, 15, 10, 30, 0, 250000)
+
+    def test_coerce_datetime_with_offset_normalized_to_utc(self):
+        # +05:30 offset → converted to naive UTC.
+        result = coerce("2024-01-15T10:30:00+05:30", "DateTime")
+        assert isinstance(result, datetime)
+        assert result.tzinfo is None
+        assert result == datetime(2024, 1, 15, 5, 0, 0)
+
+    def test_coerce_datetime_without_seconds(self):
+        result = coerce("2024-01-15 10:30", "DateTime")
+        assert result == datetime(2024, 1, 15, 10, 30, 0)
+
+    def test_coerce_datetime_slash_separator(self):
+        result = coerce("2024/01/15 10:30:00", "DateTime")
+        assert result == datetime(2024, 1, 15, 10, 30, 0)
+
+    def test_coerce_date_us_mdy(self):
+        # US month/day/year: 03/04/2024 is March 4, not April 3.
+        assert coerce("03/04/2024", "Date") == date(2024, 3, 4)
+
+    def test_coerce_datetime_us_mdy(self):
+        assert coerce("1/5/2024 10:30:00", "DateTime") == datetime(2024, 1, 5, 10, 30, 0)
+
+    def test_coerce_date_invalid_us_month_returns_none(self):
+        # Month 13 is invalid under US m/d/y ordering → rejected.
+        assert coerce("13/01/2024", "Date") is None
+
     # Date.
     def test_coerce_date(self):
         result = coerce("2024-06-01", "Date")
@@ -334,6 +400,62 @@ class TestParseCsvSample:
         csv_bytes = b"\xef\xbb\xbfid,name\n1,Alice\n"
         header, _, _ = parse_csv_sample(csv_bytes)
         assert header[0] == "id"
+
+
+# ===========================================================================
+# infer_schema_streaming  (full-scan type inference)
+# ===========================================================================
+
+
+class TestInferSchemaStreaming:
+    def test_basic_types(self):
+        csv_bytes = b"id,name,score\n1,Alice,9.5\n2,Bob,8.0\n"
+        header, types, total = infer_schema_streaming(csv_bytes)
+        assert header == ["id", "name", "score"]
+        assert types == ["Int64", "String", "Float64"]
+        assert total == 2
+
+    def test_detects_null_appearing_after_first_rows(self):
+        # An int column whose first empty cell is deep in the file must be
+        # inferred as Nullable — a leading-sample approach would miss it.
+        rows = "".join(f"{i},{i*2}\n" for i in range(1, 2001))
+        rows += "2001,\n"  # first empty cell in the second column, well past row 1000
+        csv_bytes = ("a,b\n" + rows).encode()
+        _, types, total = infer_schema_streaming(csv_bytes)
+        assert total == 2001
+        assert types[0] == "Int64"
+        assert types[1] == "Nullable(Int64)"
+
+    def test_detects_float_widening_after_first_rows(self):
+        # A column that looks like Int for 1500 rows but has a decimal later.
+        rows = "".join(f"{i}\n" for i in range(1, 1501))
+        rows += "1.5\n"
+        csv_bytes = ("v\n" + rows).encode()
+        _, types, _ = infer_schema_streaming(csv_bytes)
+        assert types[0] == "Float64"
+
+    def test_nullable_float(self):
+        csv_bytes = b"x\n1.5\n\n3.2\n"
+        _, types, _ = infer_schema_streaming(csv_bytes)
+        assert types[0] == "Nullable(Float64)"
+
+    def test_all_empty_column_is_string(self):
+        csv_bytes = b"a,b\n1,\n2,\n"
+        _, types, _ = infer_schema_streaming(csv_bytes)
+        assert types == ["Int64", "String"]
+
+    def test_short_rows_treated_as_empty(self):
+        # Second row is missing the trailing column → counts as an empty cell.
+        csv_bytes = b"a,b\n1,2\n3\n"
+        _, types, _ = infer_schema_streaming(csv_bytes)
+        assert types[1] == "Nullable(Int64)"
+
+    def test_empty_csv(self):
+        assert infer_schema_streaming(b"") == ([], [], 0)
+
+    def test_invalid_utf8_raises(self):
+        with pytest.raises(ValueError, match="not valid UTF-8"):
+            infer_schema_streaming(b"a\n\xff\xfe\n")
 
 
 # ===========================================================================
@@ -502,11 +624,12 @@ def _make_admin_client() -> TestClient:
 SIMPLE_CSV = b"id,name,score\n1,Alice,9.5\n2,Bob,8.0\n"
 
 # ---------------------------------------------------------------------------
-# Auth constants — must match conftest.py _TEST_ENV["API_KEY"]
+# Auth — /admin uses the static admin API key (NOT a per-tenant JWT).
+# Must match conftest._TEST_ENV["API_KEY"].
 # ---------------------------------------------------------------------------
 
-API_KEY = "test-api-key-abc123"
-AUTH = {"Authorization": f"Bearer {API_KEY}"}
+ADMIN_API_KEY = "test-api-key-abc123"
+AUTH = {"Authorization": f"Bearer {ADMIN_API_KEY}"}
 
 
 class TestAnalyzeEndpoint:
@@ -901,6 +1024,73 @@ class TestIngestEndpoint:
         resp = _run_with_mocked_ingest(mock_ch, run)
         assert resp.status_code == 400
         assert "timestamp_column" in resp.json()["detail"]
+
+    def test_create_mode_maps_normalized_columns_to_raw_header(self):
+        # Regression: the UI normalizes column names (e.g. "User ID" → "user_id")
+        # and sends those in columns_json, but the CSV still has the raw header.
+        # The ingest must align declared (sanitized) names to the raw header by
+        # normalized form instead of failing with "missing columns".
+        mock_ch = MagicMock()
+        mock_ch.query.return_value = MagicMock(result_rows=[])  # table absent
+        mock_ch.command.return_value = None
+        mock_ch.insert.return_value = None
+
+        cols = json.dumps([
+            {"name": "user_id", "type": "Int64"},
+            {"name": "full_name", "type": "String"},
+        ])
+        csv_bytes = b"User ID,Full Name\n1,Alice\n2,Bob\n"
+
+        def run(client):
+            return self._post_ingest(
+                client,
+                {"mode": "create", "columns": cols, "order_by": '["user_id"]'},
+                csv_bytes=csv_bytes,
+            )
+
+        resp = _run_with_mocked_ingest(mock_ch, run)
+        assert resp.status_code == 200
+        assert resp.json()["rows_inserted"] == 2
+
+        # The values must land in the right columns despite the header mismatch.
+        insert_kwargs = mock_ch.insert.call_args.kwargs
+        assert insert_kwargs["column_names"] == ["user_id", "full_name"]
+        assert insert_kwargs["data"] == [[1, "Alice"], [2, "Bob"]]
+
+    def test_append_mode_resolves_unsanitized_timestamp_column(self):
+        # Regression: the timestamp column may arrive as the raw header name
+        # (e.g. "TS"), which differs from the sanitized table column ("ts").
+        # Append must resolve it rather than reporting it as not found.
+        mock_ch = MagicMock()
+
+        def query_side_effect(sql, parameters=None):
+            if "system.tables" in sql:
+                return MagicMock(result_rows=[[1]])
+            if "system.columns" in sql:
+                return MagicMock(result_rows=[["id", "Int64"], ["ts", "DateTime"]])
+            if sql.startswith("SELECT max("):
+                # Watermark query must reference the sanitized column name.
+                assert "`ts`" in sql
+                return MagicMock(result_rows=[[datetime(2024, 1, 1, 0, 0, 0)]])
+            return MagicMock(result_rows=[])
+
+        mock_ch.query.side_effect = query_side_effect
+        mock_ch.insert.return_value = None
+
+        # Raw header uses uppercase names that survive identifier validation but
+        # differ from their sanitized form.
+        csv_bytes = b"ID,TS\n1,2024-01-02 00:00:00\n"
+
+        def run(client):
+            return self._post_ingest(
+                client,
+                {"mode": "append", "timestamp_column": "TS"},
+                csv_bytes=csv_bytes,
+            )
+
+        resp = _run_with_mocked_ingest(mock_ch, run)
+        assert resp.status_code == 200
+        assert resp.json()["rows_inserted"] == 1
 
     def test_invalid_mode_returns_400(self):
         mock_ch = MagicMock()
@@ -1451,8 +1641,8 @@ class TestIngestEndpointAdditional:
             headers=headers if headers is not None else AUTH,
         )
 
-    def test_create_mode_issues_create_database_before_create_table(self):
-        """CREATE DATABASE IF NOT EXISTS must precede CREATE TABLE."""
+    def test_create_mode_does_not_create_database(self):
+        """Ingest must never issue CREATE DATABASE — it uses the existing database."""
         mock_ch = MagicMock()
         mock_ch.query.return_value = MagicMock(result_rows=[])  # table not exists
         mock_ch.command.return_value = None
@@ -1465,15 +1655,10 @@ class TestIngestEndpointAdditional:
 
         _run_with_mocked_ingest(mock_ch, run)
         call_args = [c.args[0] for c in mock_ch.command.call_args_list]
-        create_db_idx = next(
-            (i for i, c in enumerate(call_args) if "CREATE DATABASE IF NOT EXISTS" in c), None
+        assert not any("CREATE DATABASE" in c for c in call_args), (
+            "CREATE DATABASE must NOT be issued"
         )
-        create_tbl_idx = next(
-            (i for i, c in enumerate(call_args) if "CREATE TABLE" in c), None
-        )
-        assert create_db_idx is not None, "CREATE DATABASE must be called"
-        assert create_tbl_idx is not None, "CREATE TABLE must be called"
-        assert create_db_idx < create_tbl_idx, "CREATE DATABASE must precede CREATE TABLE"
+        assert any("CREATE TABLE" in c for c in call_args), "CREATE TABLE must be called"
 
     def test_wipe_mode_without_columns_auto_infers_from_csv(self):
         """wipe mode without columns JSON auto-infers schema from the CSV header."""
@@ -3707,3 +3892,47 @@ class TestAppendMessyHeaderIntoSanitizedTable:
         assert mock_ch.insert.called
         insert_col_names = mock_ch.insert.call_args.kwargs["column_names"]
         assert insert_col_names == ["order_date", "amount"]
+
+
+# ===========================================================================
+# Admin API-key auth contract — /admin uses the static key, NOT a tenant JWT
+# ===========================================================================
+
+class TestAdminApiKeyAuth:
+    """The /admin write routes authenticate with the static admin API key.
+
+    A per-tenant JWT (valid for the query/schema routes) must NOT authenticate
+    here — admin is a separate operational credential.
+    """
+
+    def _client(self):
+        from app.main import app
+
+        return TestClient(app, raise_server_exceptions=False)
+
+    def test_wrong_admin_key_returns_401(self):
+        resp = self._client().post(
+            "/admin/analyze", headers={"Authorization": "Bearer wrong-key"}
+        )
+        assert resp.status_code == 401
+        assert resp.json()["detail"]["code"] == "INVALID_AUTH"
+
+    def test_tenant_jwt_not_accepted_on_admin(self):
+        from tests.jwt_helpers import make_jwt
+
+        resp = self._client().post(
+            "/admin/analyze", headers={"Authorization": f"Bearer {make_jwt()}"}
+        )
+        assert resp.status_code == 401
+        assert resp.json()["detail"]["code"] == "INVALID_AUTH"
+
+    def test_valid_admin_key_passes_auth_layer(self):
+        # Valid key clears auth; the missing form body then yields 422 — proving
+        # the request got past the auth dependency (not 401/403).
+        resp = self._client().post("/admin/analyze", headers=AUTH)
+        assert resp.status_code not in (401, 403)
+
+    def test_missing_auth_returns_401(self):
+        resp = self._client().post("/admin/analyze")
+        assert resp.status_code == 401
+        assert resp.json()["detail"]["code"] == "MISSING_AUTH"

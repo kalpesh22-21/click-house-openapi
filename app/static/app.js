@@ -333,7 +333,7 @@ function renderStep2(result) {
   dom.step2Content.innerHTML = "";
   clearBanner(dom.step2Panel);
 
-  const { table_exists, schema_matches, schema_diff, csv_columns, inferred_columns, columns } = result;
+  const { table_exists, schema_matches, schema_diff, columns } = result;
 
   // ------------------------------------------------------------------
   // Branch A: Table does not exist → create
@@ -371,7 +371,10 @@ function renderStep2(result) {
       </div>
     `;
 
-    // Timestamp column picker
+    // Timestamp column picker.
+    // The option VALUE is the sanitized column name (what the table actually
+    // uses); the label shows the original CSV header so it's recognizable.
+    const tsCols = (columns || []).filter((c) => c.in_csv);
     const tsGroup = document.createElement("div");
     tsGroup.className = "form-group mt-2";
     tsGroup.innerHTML = `
@@ -380,7 +383,14 @@ function renderStep2(result) {
       </label>
       <select id="ts-col-select" aria-required="true">
         <option value="">— Select a column —</option>
-        ${csv_columns.map((c) => `<option value="${escHtml(c)}">${escHtml(c)}</option>`).join("")}
+        ${tsCols
+          .map((c) => {
+            const label = c.original_name && c.original_name !== c.name
+              ? `${escHtml(c.original_name)} → ${escHtml(c.name)}`
+              : escHtml(c.name);
+            return `<option value="${escHtml(c.name)}">${label}</option>`;
+          })
+          .join("")}
       </select>
       <small>Only rows with a value newer than the table's current maximum for this column will be inserted.</small>
     `;
@@ -388,12 +398,12 @@ function renderStep2(result) {
 
     const tsSelect = tsGroup.querySelector("#ts-col-select");
 
-    // Pre-select a DateTime-looking column if one exists
-    const dtCol = csv_columns.find((c) => {
-      const inferred = inferred_columns.find((ic) => ic.name === c);
-      return inferred && (inferred.suggested_type.includes("DateTime") || inferred.suggested_type.includes("Date"));
+    // Pre-select a DateTime-looking column if one exists.
+    const dtCol = tsCols.find((c) => {
+      const t = c.existing_type || c.inferred_type || "";
+      return t.includes("DateTime") || t.includes("Date");
     });
-    if (dtCol) tsSelect.value = dtCol;
+    if (dtCol) tsSelect.value = dtCol.name;
 
     const ingestBtn = makeButton("Append new data only", "btn-success");
     ingestBtn.addEventListener("click", async () => {

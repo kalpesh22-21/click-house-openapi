@@ -1,0 +1,17 @@
+apiVersion: v2
+name: token-service
+description: >
+  Token-issuing service (OIDC-style IdP) for the ClickHouse API. Mints per-user
+  JWTs carrying the user_name tenant claim and publishes JWKS so the ClickHouse
+  API can validate them.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - jwt
+  - oidc
+  - token
+  - clickhouse
+maintainers:
+  - name: Platform Engineering
+home: https://github.com/your-org/clickhouse-api

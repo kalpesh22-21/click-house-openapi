@@ -15,13 +15,26 @@ from functools import lru_cache
 from typing import Any
 
 import clickhouse_connect
+from clickhouse_connect import common as cc_common
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import ClickHouseError, DatabaseError
 from fastapi import HTTPException
 
 from app.config import Settings, get_settings
+from app.principal import get_current_principal
 
 logger = logging.getLogger(__name__)
+
+# LOAD-BEARING for per-tenant isolation: clickhouse-connect validates every
+# setting name against the server's known settings (system.settings) and, by
+# default, REFUSES to transmit any it doesn't recognize — raising "Setting X is
+# unknown or readonly" client-side, before the request is even sent.  Our
+# per-tenant CUSTOM setting (e.g. SQL_tenant) is NOT in system.settings, so the
+# default behaviour silently breaks row isolation.  'send' delegates validation
+# to the server, so custom settings under the configured
+# <custom_settings_prefixes> are passed through and applied.  This is a
+# process-global clickhouse-connect setting; set once at import.
+cc_common.set_setting("invalid_setting_action", "send")
 
 # Pattern that matches host:port style strings in error messages, used to
 # redact infrastructure details before forwarding errors to callers.
@@ -112,14 +125,58 @@ def readonly_settings(settings: Settings) -> dict[str, Any]:
     query path — user-submitted queries AND internal schema-discovery queries —
     must use this function so that all safety caps (readonly, execution time,
     result size) are consistently applied.
+
+    NOTE: ``readonly`` is configurable (1 by default).  readonly=1 works fine
+    with the per-tenant custom setting — the earlier blocker was clickhouse-connect
+    rejecting the unknown setting client-side, fixed by invalid_setting_action=
+    'send' at the top of this module, NOT a server-side readonly conflict.  The
+    config knob is retained for unusual ClickHouse setups; these caps are
+    authoritative regardless because we always send them ourselves.
     """
     return {
-        "readonly": 1,
+        "readonly": settings.clickhouse_readonly,
         "max_execution_time": settings.max_execution_time,
         "max_result_rows": settings.max_result_rows,
         "result_overflow_mode": "throw",
         "max_rows_to_read": settings.max_rows_to_read,
     }
+
+
+def tenant_settings(settings: Settings) -> dict[str, Any]:
+    """Build per-tenant ClickHouse custom settings from the current principal.
+
+    Reads the authenticated principal bound to the request context and maps each
+    configured ``ch_setting -> jwt_claim`` (the CLICKHOUSE_TENANT_SETTINGS env
+    object) into ``{ch_setting: claim_value}``.  ClickHouse row policies read
+    these via ``getSetting('SQL_tenant')`` to filter rows per tenant.
+
+    Returns an empty dict when there is no principal (internal schema-discovery
+    or health queries, or the local MCP stdio transport) — those run with the
+    safety caps only and no tenant scoping.
+
+    The claim's presence is already enforced at authentication time (auth_jwt
+    fails closed on a missing tenant claim), so by the time we get here a present
+    principal is guaranteed to carry every mapped claim.
+    """
+    principal = get_current_principal()
+    if principal is None:
+        return {}
+
+    out: dict[str, Any] = {}
+    for ch_key, claim_name in settings.clickhouse_tenant_settings.items():
+        value = principal.claims.get(claim_name)
+        if value is None:
+            # Defensive: should be unreachable because auth fails closed, but we
+            # never silently run a tenant-scoped query with a missing value.
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Authenticated token is missing the '{claim_name}' claim.",
+                    "code": "MISSING_TENANT_CLAIM",
+                },
+            )
+        out[ch_key] = str(value)
+    return out
 
 
 def execute_query(
@@ -154,7 +211,11 @@ def execute_query(
     # build a fresh client on every query and (historically) crash because
     # lru_cache cannot hash a Settings object.
     client = get_client()
-    ch_settings = readonly_settings(settings)
+    # Per-tenant custom settings (e.g. SQL_tenant) FIRST, safety caps LAST, so a
+    # misconfigured tenant mapping can never overwrite readonly / the row caps.
+    # The user-supplied-SETTINGS denylist in security.py keeps a caller from
+    # injecting their own SQL_tenant; the only path that sets it is this dict.
+    ch_settings = {**tenant_settings(settings), **readonly_settings(settings)}
 
     try:
         result = client.query(sql, parameters=parameters, settings=ch_settings)
@@ -212,9 +273,32 @@ def ping(settings: Settings | None = None) -> bool:
     explicit settings build a one-off client (used by tests).  Resolving
     settings eagerly here would force every probe through _build_client,
     rebuilding the connection and re-logging on each call.
+
+    Stale-socket resilience: the singleton client keeps a urllib3 pool of
+    keep-alive sockets.  When ClickHouse (or an intermediary LB/proxy) closes an
+    idle connection, the next probe reuses that dead socket and clickhouse-connect's
+    ping() sees a RemoteDisconnected — it discards the broken connection and
+    returns False.  A single retry therefore rides a fresh socket and succeeds,
+    so a healthy-but-idle server no longer makes /health flap to "error".  Only
+    the singleton path retries: an explicit *settings* builds a brand-new client
+    every call (no pooled socket to go stale), so retrying there would just churn
+    connections.
     """
+    retry_stale = settings is None
     try:
         client = get_client(settings)
-        return client.ping()
+        if client.ping():
+            return True
+    except Exception:  # noqa: BLE001
+        if not retry_stale:
+            return False
+
+    if not retry_stale:
+        return False
+
+    # Second attempt: the broken keep-alive socket has been evicted from the
+    # pool, so this ping draws a fresh connection.
+    try:
+        return get_client().ping()
     except Exception:  # noqa: BLE001
         return False

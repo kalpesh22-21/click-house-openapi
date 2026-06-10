@@ -10,7 +10,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth import require_api_key
+from app.auth import require_principal
 from app.config import Settings, get_settings
 from app.errors import (
     ClickHouseQueryError,
@@ -61,7 +61,7 @@ def _map_query_error(exc: Exception) -> HTTPException:
         "Always call getTableSchema before writing a query against an unfamiliar table. "
         "If you get a query error, call explainQuery first to validate your SQL."
     ),
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_principal)],
 )
 def run_query(
     body: QueryRequest,
@@ -93,7 +93,7 @@ def run_query(
         "If EXPLAIN succeeds, the query is syntactically valid and safe to run. "
         "EXPLAIN does not read actual data rows, so it is fast and cheap."
     ),
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_principal)],
 )
 def explain_query(
     body: ExplainRequest,

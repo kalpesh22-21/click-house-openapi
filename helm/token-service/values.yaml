@@ -1,0 +1,139 @@
+# =============================================================================
+# token-service Helm values
+# =============================================================================
+# Override any value with --set key=value or -f my-values.yaml on install.
+#
+# The token service signs JWTs with a private RSA key and publishes the public
+# half as JWKS. The ClickHouse API points OIDC_JWKS_URL / OIDC_ISSUER /
+# OIDC_AUDIENCE at this service. Generate a signing key once with:
+#   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out signing-key.pem
+# and install with:
+#   helm install token-service ./helm/token-service \
+#     --set-file secrets.signingKey=signing-key.pem \
+#     --set secrets.issuerApiKey=$(openssl rand -hex 32) \
+#     --set config.TOKEN_ISSUER=https://token.example.com/ \
+#     --set config.TOKEN_AUDIENCE=clickhouse-api
+
+# -----------------------------------------------------------------------------
+# Image — reuses the shared clickhouse-api image; MODE=token selects this service
+# -----------------------------------------------------------------------------
+image:
+  repository: your-registry/clickhouse-api
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+replicaCount: 2
+
+podAnnotations: {}
+podLabels: {}
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+# Ingress — only needed if the JWKS/token endpoints must be reachable outside
+# the cluster. The JWKS endpoint is public; POST /token is protected by the
+# issuer API key, but consider keeping /token internal-only regardless.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: token.example.com
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: true
+    secretName: token-service-tls
+
+hpa:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -----------------------------------------------------------------------------
+# Non-secret configuration — rendered into a ConfigMap (TOKEN_* env vars)
+# -----------------------------------------------------------------------------
+config:
+  # MUST match the ClickHouse API's OIDC_ISSUER / OIDC_AUDIENCE.
+  TOKEN_ISSUER: "https://token.example.com/"
+  TOKEN_AUDIENCE: "clickhouse-api"
+  TOKEN_TTL_SECONDS: "3600"
+  TOKEN_ALGORITHM: "RS256"
+  # Leave empty to derive a stable kid from the key (RFC 7638 thumbprint).
+  TOKEN_KID: ""
+  # NEVER set to "true" in a real/multi-replica deployment.
+  TOKEN_DEV_MODE: "false"
+  # Server
+  APP_PORT: "8000"
+  LOG_LEVEL: "INFO"
+
+# -----------------------------------------------------------------------------
+# Secrets — rendered into a Kubernetes Secret
+#
+# Option A (default): provide signingKey (PEM) and issuerApiKey here (typically
+#   via --set-file / --set). The chart creates a Secret.
+# Option B: reference a pre-existing Secret via existingSecret.name. It MUST
+#   contain keys:  signing-key.pem  and  TOKEN_ISSUER_API_KEY
+# -----------------------------------------------------------------------------
+secrets:
+  # RSA private key in PEM (PKCS#8). Supply with:
+  #   --set-file secrets.signingKey=signing-key.pem
+  signingKey: ""
+  # Static Bearer key that authorizes POST /token.
+  issuerApiKey: ""
+  existingSecret:
+    name: ""
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraEnv: []

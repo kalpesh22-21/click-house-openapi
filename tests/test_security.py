@@ -747,3 +747,322 @@ class TestEdgeCases:
         # The test asserts REJECTION — if this starts passing (accepting) that means
         # the guardrail changed and should be reviewed.
         assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+
+# ===========================================================================
+# 7. BYPASS FIX VERIFICATION — confirmed bypasses that must now be blocked
+#
+# Each test here corresponds to a specific exploit vector that slipped past
+# the old \b<name>\s*\( pattern because \b does not fire inside compound
+# identifiers like urlCluster( (no word boundary between 'l' and 'C').
+# ===========================================================================
+
+class TestBypassFixes:
+    """Regression tests for the HIGH-severity bypass fixes.
+
+    REJECT tests: each previously-bypassing payload must now raise 400 DISALLOWED_KEYWORD.
+    ACCEPT tests (false-positive guards): legitimate queries that share token
+    prefixes with blocked names must still pass.
+    """
+
+    # -------------------------------------------------------------------
+    # *Cluster / *S3 / *Secure variants that slipped past \b<name>\s*\(
+    # -------------------------------------------------------------------
+
+    def test_urlcluster_blocked(self):
+        """urlCluster( must be caught by the url root pattern."""
+        exc = _reject(
+            "SELECT * FROM urlCluster('default', 'http://169.254.169.254/latest/meta-data/', "
+            "'LineAsString', 'x String')"
+        )
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_icebergs3_blocked(self):
+        """icebergS3( must be caught by the iceberg root pattern."""
+        exc = _reject(
+            "SELECT * FROM icebergS3('s3://attacker-bucket/catalog', 'CSV', 'id Int32')"
+        )
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_deltaLakeCluster_blocked(self):
+        """deltaLakeCluster( must be caught by the deltaLake root pattern."""
+        exc = _reject(
+            "SELECT * FROM deltaLakeCluster('default', 's3://bucket/delta', 'CSV', 'id Int32')"
+        )
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_azureBlobStorageCluster_blocked(self):
+        """azureBlobStorageCluster( must be caught by the azureBlobStorage root pattern."""
+        exc = _reject(
+            "SELECT * FROM azureBlobStorageCluster('default', 'conn', 'c', 'f.csv', 'CSV', 'c String')"
+        )
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_hdfscluster_blocked(self):
+        """hdfsCluster( must be caught by the hdfs root pattern."""
+        exc = _reject(
+            "SELECT * FROM hdfsCluster('default', 'hdfs://namenode/path', 'CSV', 'x String')"
+        )
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    # -------------------------------------------------------------------
+    # Newly added dangerous table functions
+    # -------------------------------------------------------------------
+
+    def test_fuzzjson_blocked(self):
+        """fuzzJSON( must be blocked as a newly added table function root."""
+        exc = _reject("SELECT * FROM fuzzJSON('{\"a\":1}', 10)")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_merge_system_catalog_exfil_blocked(self):
+        """merge('system', '^tables$') hides the 'system' string inside a literal.
+
+        The old \\bSYSTEM\\b pattern never fires because 'system' is masked by
+        string-literal stripping.  The new merge root entry closes this gap.
+        """
+        exc = _reject("SELECT * FROM merge('system', '^(users|grants|quotas|tables|columns)$')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    # -------------------------------------------------------------------
+    # SETTINGS clause bypass (defense-in-depth)
+    # -------------------------------------------------------------------
+
+    def test_settings_readonly_0_blocked(self):
+        """SETTINGS readonly=0 must be caught by the SETTINGS clause pattern."""
+        exc = _reject("SELECT 1 SETTINGS readonly=0")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_settings_max_rows_to_read_0_blocked(self):
+        """SETTINGS max_rows_to_read=0 attempts to remove the row-count cap."""
+        exc = _reject("SELECT 1 SETTINGS max_rows_to_read=0")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_settings_max_execution_time_blocked(self):
+        """SETTINGS max_execution_time=9999 is a clause-form match, must be blocked."""
+        exc = _reject("SELECT a FROM t SETTINGS max_execution_time=9999")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    # -------------------------------------------------------------------
+    # Original base names still blocked (regression guard)
+    # -------------------------------------------------------------------
+
+    def test_url_base_still_blocked(self):
+        exc = _reject("SELECT * FROM url('http://attacker.example/', 'CSV', 'id Int32')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_s3_base_still_blocked(self):
+        exc = _reject("SELECT * FROM s3('s3://bucket/key', 'CSV', 'id Int32')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_remote_base_still_blocked(self):
+        exc = _reject("SELECT * FROM remote('attacker.example:9000', 'db.tbl')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_file_base_still_blocked(self):
+        exc = _reject("SELECT * FROM file('/etc/passwd', 'CSV', 'line String')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_hdfs_base_still_blocked(self):
+        exc = _reject("SELECT * FROM hdfs('hdfs://namenode/path', 'CSV', 'x String')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_clusterallreplicas_still_blocked(self):
+        exc = _reject("SELECT * FROM clusterAllReplicas('prod', 'db', 'secrets')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    # -------------------------------------------------------------------
+    # FALSE-POSITIVE GUARDS — legitimate queries that share token prefixes
+    # with blocked names must still be accepted.
+    # -------------------------------------------------------------------
+
+    def test_quantilemerge_aggregate_not_blocked(self):
+        """quantileMerge( must NOT be blocked.
+
+        The pattern is \\bmerge\\w*\\( — "merge" inside "quantileMerge" has no
+        word boundary before it (it follows 'e' in 'quantil[e]'), so \\b never
+        fires and the pattern does not match.
+        """
+        result = _accept("SELECT quantileMerge(0.5)(q) FROM t")
+        assert result
+
+    def test_arrayjoin_range_not_blocked(self):
+        """arrayJoin(range(10)) is a normal analytics expression — must pass."""
+        result = _accept("SELECT arrayJoin(range(10)) AS n")
+        assert result
+
+    def test_settings_column_name_not_blocked(self):
+        """A column literally named 'settings' is not a SETTINGS clause — must pass.
+
+        The SETTINGS pattern is \\bSETTINGS\\s+\\w+\\s*= which requires the word
+        to be followed by whitespace, an identifier, and '='.  A bare column
+        reference or equality check like settings = 'x' does NOT match that form
+        because the order is reversed: identifier comes after '=', not before.
+        """
+        result = _accept("SELECT settings FROM t WHERE settings = 'x'")
+        assert result
+
+    def test_url_slug_identifier_not_blocked(self):
+        """url_slug is an identifier (no following '(') — must pass."""
+        result = _accept("SELECT url_slug, file_size FROM t")
+        assert result
+
+    def test_max_aggregate_not_blocked(self):
+        """max(value) is a standard aggregate — must not be confused with any denied root."""
+        result = _accept("SELECT max(value) FROM t")
+        assert result
+
+    def test_normal_select_not_blocked(self):
+        """A completely ordinary SELECT must pass cleanly."""
+        result = _accept("SELECT a, b FROM db.t WHERE a > 1")
+        assert result
+
+    def test_merge_without_parens_not_blocked(self):
+        """A table named 'merge' referenced without parentheses must not be blocked.
+
+        The pattern \\bmerge\\w*\\( requires a '(' to follow.  A bare FROM merge
+        (without call syntax) does not trigger it.
+        """
+        result = _accept("SELECT id FROM merge LIMIT 10")
+        assert result
+
+
+# ===========================================================================
+# 8. QUOTED-IDENTIFIER BYPASS FIXES — round 2
+#
+# ClickHouse accepts backtick- and double-quote-quoted identifiers as function
+# names.  The \b<root>\w*\s*\( patterns do NOT match quoted forms because the
+# closing quote sits between the name and '('.  The fix strips identifier
+# quotes from the denylist scan copy so quoted names collapse to their bare
+# form and are caught.
+# ===========================================================================
+
+class TestQuotedIdentifierBypassFixes:
+    """Round-2 regression tests: quoted-function-name bypasses and new cloud table functions."""
+
+    # -------------------------------------------------------------------
+    # REJECT — backtick-quoted function names (CRITICAL fix)
+    # -------------------------------------------------------------------
+
+    def test_backtick_url_blocked(self):
+        """`url`( must be caught after identifier-quote stripping."""
+        exc = _reject("SELECT * FROM `url`('http://evil/','CSV','x String')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_double_quote_url_blocked(self):
+        '''"url"( must be caught after identifier-quote stripping.'''
+        exc = _reject('SELECT * FROM "url"(\'http://evil/\',\'CSV\',\'x String\')')
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_backtick_merge_blocked(self):
+        """`merge`('system','.*') must be caught after stripping."""
+        exc = _reject("SELECT * FROM `merge`('system','.*')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_backtick_file_blocked(self):
+        """`file`('/etc/passwd','TSV','line String') must be caught."""
+        exc = _reject("SELECT * FROM `file`('/etc/passwd','TSV','line String')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_backtick_remote_blocked(self):
+        """`remote`('attacker:9000','db.secrets') must be caught."""
+        exc = _reject("SELECT * FROM `remote`('attacker:9000','db.secrets')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_split_backtick_evasion_blocked(self):
+        """u`r`l( — backtick characters mid-name are stripped, reducing to url(."""
+        exc = _reject("SELECT * FROM u`r`l('http://x')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    # -------------------------------------------------------------------
+    # REJECT — new cloud-storage table functions (HIGH fix)
+    # -------------------------------------------------------------------
+
+    def test_oss_table_function_blocked(self):
+        """oss( — Alibaba OSS SSRF/exfil vector, must be blocked."""
+        exc = _reject("SELECT * FROM oss('oss://b/k','CSV','x String')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_cosn_table_function_blocked(self):
+        """cosn( — Tencent COS SSRF/exfil vector, must be blocked."""
+        exc = _reject("SELECT * FROM cosn('cosn://b/k','CSV','x String')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_obs_table_function_blocked(self):
+        """obs( — Huawei OBS SSRF/exfil vector, must be blocked."""
+        exc = _reject("SELECT * FROM obs('obs://b/k','CSV','x String')")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_settings_multi_clause_blocked(self):
+        """SETTINGS a=1, readonly=0 — first key triggers the SETTINGS pattern."""
+        exc = _reject("SELECT 1 SETTINGS a=1, readonly=0")
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    # -------------------------------------------------------------------
+    # ACCEPT — false-positive guards: legitimate quoted column identifiers
+    # must NOT be rejected, and the RETURNED SQL must preserve backticks.
+    # -------------------------------------------------------------------
+
+    def test_backtick_quoted_column_identifier_accepted(self):
+        """Legitimate backtick-quoted column references must pass.
+
+        The denylist normalization strips backticks only from the throwaway scan
+        copy; the returned SQL retains them so the query executes correctly.
+        """
+        result = _accept("SELECT `weird col` FROM t WHERE `weird col` > 1")
+        # Must not raise
+        assert result
+        # The returned SQL must still contain the backtick-quoted identifier
+        # so it executes correctly in ClickHouse.
+        assert "`weird col`" in result
+
+    def test_view_root_column_no_parens_accepted(self):
+        """'viewable' and 'preview' share the 'view' root but have no '(' — must pass."""
+        result = _accept("SELECT viewable, preview FROM content")
+        assert result
+
+    # -------------------------------------------------------------------
+    # REJECT — Unicode homoglyph / compatibility-form function names
+    # NFKC normalization folds these to ASCII before pattern matching.
+    # -------------------------------------------------------------------
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "NFKC does NOT fold cross-script homoglyphs: Cyrillic U+0443 'у' is a "
+            "distinct Unicode character, not a compatibility form of ASCII 'u'. "
+            "unicodedata.normalize('NFKC', 'у') == 'у' (unchanged). "
+            "Cross-script homograph detection would require a confusables table "
+            "(e.g. Unicode TR39) and is out of scope for this guardrail. "
+            "This test is xfail(strict=True) to document the known limitation "
+            "and alert if behaviour ever changes unexpectedly."
+        ),
+    )
+    def test_cyrillic_homoglyph_url_blocked(self):
+        """Cyrillic у (U+0443) + 'rl(' looks like url( visually.
+
+        NFKC does NOT catch this — Cyrillic is a distinct script, not a
+        compatibility form.  This test is xfail(strict) to document the gap.
+        """
+        # U+0443 is Cyrillic small letter 'у'; the rest is plain ASCII.
+        cyrillic_url = "уrl"
+        sql = f"SELECT * FROM {cyrillic_url}('http://evil/','CSV','x String')"
+        exc = _reject(sql)  # expected NOT to raise under current implementation
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_fullwidth_url_blocked(self):
+        """Full-width u (U+FF55) + 'rl(' — NFKC folds full-width to ASCII, must be rejected."""
+        # U+FF55 is FULLWIDTH LATIN SMALL LETTER U; NFKC normalizes it to 'u'.
+        fullwidth_url = "ｕrl"
+        sql = f"SELECT * FROM {fullwidth_url}('http://evil/','CSV','x String')"
+        exc = _reject(sql)
+        assert exc.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_unicode_in_string_literal_not_blocked(self):
+        """Accented characters inside a string literal must not cause false rejection.
+
+        NFKC normalization runs on stripped_masked (string literals already blanked),
+        so accented chars that appear only inside a quoted value are never seen by
+        NFKC or the denylist patterns.
+        """
+        result = _accept("SELECT * FROM t WHERE name = 'café'")
+        assert result

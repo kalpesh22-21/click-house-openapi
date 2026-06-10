@@ -10,7 +10,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.auth import require_api_key
+from app.auth import require_principal
 from app.config import Settings, get_settings
 from app.errors import DatabaseNotAllowedError, TableNotFoundError
 from app.models import ColumnInfo, DatabaseInfo, SchemaResponse, TableInfo, QueryResponse
@@ -37,7 +37,7 @@ router = APIRouter(tags=["Schema Discovery"])
         "Results respect the ALLOWED_DATABASES server allowlist — databases outside that "
         "list are never returned."
     ),
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_principal)],
 )
 def list_databases(settings: Settings = Depends(get_settings)) -> list[DatabaseInfo]:
     """List all databases accessible through this API."""
@@ -55,7 +55,7 @@ def list_databases(settings: Settings = Depends(get_settings)) -> list[DatabaseI
         "Use the 'database' parameter to select which database to inspect. "
         "Call listDatabases first if you are unsure which databases exist."
     ),
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_principal)],
 )
 def list_tables(
     database: str = Query(..., description="The database to list tables from"),
@@ -87,7 +87,7 @@ def list_tables(
         "DateTime64(3)), and any descriptive comments. Knowing the schema prevents type mismatch "
         "errors and helps you write correct WHERE clauses and aggregations."
     ),
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_principal)],
 )
 def get_table_schema(
     database: str = Query(..., description="The database containing the table"),
@@ -129,7 +129,7 @@ def get_table_schema(
         "Default sample size is 5 rows; maximum is 50. "
         "Use this after getTableSchema to understand the data shape."
     ),
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_principal)],
 )
 def sample_rows(
     database: str = Query(..., description="The database containing the table"),

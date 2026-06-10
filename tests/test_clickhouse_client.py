@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from app.clickhouse_client import _build_client
+from app.clickhouse_client import _build_client, ping
 from app.config import get_settings
 
 
@@ -38,3 +38,50 @@ def test_build_client_disables_session_id_for_thread_safety():
         "ClickHouse client must be built with autogenerate_session_id=False so "
         "the shared singleton is safe under concurrent threadpool requests."
     )
+
+
+# ---------------------------------------------------------------------------
+# ping() stale-socket resilience
+# ---------------------------------------------------------------------------
+
+
+def test_ping_retries_once_on_stale_singleton_socket():
+    """A stale keep-alive socket makes the first singleton ping return False;
+    the retry rides a fresh connection and succeeds, so /health does not flap.
+    """
+    client = MagicMock()
+    client.ping.side_effect = [False, True]  # stale socket, then fresh socket
+    with patch("app.clickhouse_client.get_client", return_value=client):
+        assert ping() is True
+    assert client.ping.call_count == 2
+
+
+def test_ping_recovers_when_stale_socket_raises():
+    """If the stale socket raises (RemoteDisconnected) instead of returning
+    False, the singleton path still retries on a fresh connection.
+    """
+    client = MagicMock()
+    client.ping.side_effect = [ConnectionResetError("remote disconnected"), True]
+    with patch("app.clickhouse_client.get_client", return_value=client):
+        assert ping() is True
+    assert client.ping.call_count == 2
+
+
+def test_ping_returns_false_when_server_genuinely_down():
+    """A truly unreachable server fails both attempts and reports False."""
+    client = MagicMock()
+    client.ping.return_value = False
+    with patch("app.clickhouse_client.get_client", return_value=client):
+        assert ping() is False
+    assert client.ping.call_count == 2
+
+
+def test_ping_explicit_settings_does_not_retry():
+    """The explicit-settings path builds a fresh client per call, so there is no
+    pooled socket to go stale — only a single ping is attempted (no retry churn).
+    """
+    client = MagicMock()
+    client.ping.return_value = False
+    with patch("app.clickhouse_client.get_client", return_value=client):
+        assert ping(_settings()) is False
+    assert client.ping.call_count == 1

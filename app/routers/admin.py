@@ -1,8 +1,9 @@
 """Admin CSV ingestion router.
 
-Exposes two endpoints protected by the same Bearer token auth used by the
-read-only LLM API.  All business logic lives in app.admin_ingest
-(transport-agnostic).
+Exposes two write endpoints protected by the static admin API key
+(require_admin_api_key) rather than the per-tenant JWT used by the read-only
+query/schema routes — /admin is an internal operational path, not a per-tenant
+LLM surface.  All business logic lives in app.admin_ingest (transport-agnostic).
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from app.admin_ingest import analyze, ingest
-from app.auth import require_api_key
+from app.auth import require_admin_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ MAX_CSV_BYTES = 200 * 1024 * 1024
         "parse the uploaded CSV, infer ClickHouse types per column, and return a schema "
         "comparison report."
     ),
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_api_key)],
 )
 async def analyze_endpoint(
     host: Annotated[str, Form(description="ClickHouse host")],
@@ -90,7 +91,7 @@ async def analyze_endpoint(
         "mode='create' creates a new table (fails if exists), 'wipe' drops and recreates, "
         "'append' inserts only rows newer than the current watermark."
     ),
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_api_key)],
 )
 async def ingest_endpoint(
     host: Annotated[str, Form(description="ClickHouse host")],

@@ -5,8 +5,8 @@ Coverage:
      returned, ALLOWED_DATABASES check raises domain errors.
   2. MCP tool callables — guardrail rejections surface as ToolError, domain
      errors translated correctly.
-  3. BearerAuthMiddleware / _check_bearer_token — 401 on missing/wrong token,
-     200 on correct token.
+  3. JWTAuthMiddleware — 401 on missing/invalid token, 403 on missing tenant
+     claim, 200 on a valid token; default-deny path handling.
   4. list_databases / sample_rows / explain_query / run_query end-to-end through
      service.py with mocked execute_query.
 
@@ -60,8 +60,7 @@ for _k, _v in _BASE_ENV.items():
 
 from app import service  # noqa: E402
 from app.mcp_server import (  # noqa: E402
-    BearerAuthMiddleware,
-    _check_bearer_token,
+    JWTAuthMiddleware,
     explain_query as mcp_explain_query,
     get_table_schema as mcp_get_table_schema,
     list_databases as mcp_list_databases,
@@ -69,8 +68,7 @@ from app.mcp_server import (  # noqa: E402
     run_query as mcp_run_query,
     sample_rows as mcp_sample_rows,
 )
-
-API_KEY = "test-api-key-abc123"
+from tests.jwt_helpers import WRONG_PRIVATE_PEM, make_jwt  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -420,182 +418,157 @@ class TestMcpToolGuardrails:
 
 
 # ===========================================================================
-# 8. _check_bearer_token — unit tests (no HTTP required)
+# 8. JWTAuthMiddleware — pure-ASGI auth for the MCP HTTP transport
 # ===========================================================================
 
-class TestCheckBearerToken:
-
-    def test_correct_token_accepted(self):
-        assert _check_bearer_token(f"Bearer {API_KEY}", API_KEY) is True
-
-    def test_wrong_token_rejected(self):
-        assert _check_bearer_token("Bearer wrong-token", API_KEY) is False
-
-    def test_missing_header_rejected(self):
-        assert _check_bearer_token(None, API_KEY) is False
-
-    def test_empty_string_rejected(self):
-        assert _check_bearer_token("", API_KEY) is False
-
-    def test_basic_scheme_rejected(self):
-        import base64
-        creds = base64.b64encode(b"user:pass").decode()
-        assert _check_bearer_token(f"Basic {creds}", API_KEY) is False
-
-    def test_bearer_prefix_only_rejected(self):
-        assert _check_bearer_token("Bearer ", API_KEY) is False
-
-    def test_partial_token_rejected(self):
-        partial = API_KEY[:5]
-        assert _check_bearer_token(f"Bearer {partial}", API_KEY) is False
-
-    def test_timing_safe_comparison(self):
-        """Both branches (correct/incorrect) execute in the same code path."""
-        # We can only test that both return the right bool; timing cannot be
-        # asserted in a unit test but the implementation uses hmac.compare_digest.
-        assert _check_bearer_token(f"Bearer {API_KEY}", API_KEY) is True
-        assert _check_bearer_token("Bearer x" * 100, API_KEY) is False
+from starlette.applications import Starlette  # noqa: E402
+from starlette.responses import PlainTextResponse  # noqa: E402
+from starlette.routing import Route  # noqa: E402
+from starlette.testclient import TestClient  # noqa: E402
 
 
-# ===========================================================================
-# 9. BearerAuthMiddleware — unit test the dispatch logic
-# ===========================================================================
+def _inner_app(extra_routes=()):
+    async def mcp_endpoint(request):
+        return PlainTextResponse("mcp-ok")
 
-class TestBearerAuthMiddleware:
-    """Tests for the HTTP transport Bearer auth middleware.
+    async def health_endpoint(request):
+        return PlainTextResponse("health-ok")
 
-    We use Starlette's synchronous TestClient so no pytest-asyncio is needed.
-    """
+    routes = [Route("/mcp", mcp_endpoint), Route("/health", health_endpoint)]
+    routes.extend(extra_routes)
+    return Starlette(routes=routes)
 
-    def _make_wrapped_app(self, path: str = "/mcp"):
-        """Build a minimal Starlette app wrapped in BearerAuthMiddleware."""
-        from starlette.applications import Starlette
-        from starlette.responses import PlainTextResponse
-        from starlette.routing import Route
 
-        async def mcp_endpoint(request):
-            return PlainTextResponse("mcp-ok")
+def _wrap(app=None, public_paths=("/health",)):
+    if app is None:
+        app = _inner_app()
+    return JWTAuthMiddleware(app, settings=get_settings(), public_paths=public_paths)
 
-        async def health_endpoint(request):
-            return PlainTextResponse("health-ok")
 
-        app = Starlette(
-            routes=[
-                Route("/mcp", mcp_endpoint),
-                Route("/health", health_endpoint),
-            ]
-        )
-        return BearerAuthMiddleware(app, api_key=API_KEY, mcp_path=path)
+class TestJWTAuthMiddleware:
 
-    def test_correct_token_calls_next(self):
-        """A request with the correct token must pass through to the inner app."""
-        from starlette.testclient import TestClient
-
-        wrapped = self._make_wrapped_app()
-        client = TestClient(wrapped, raise_server_exceptions=False)
-        resp = client.get("/mcp", headers={"Authorization": f"Bearer {API_KEY}"})
+    def test_valid_token_passes_through(self):
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get("/mcp", headers={"Authorization": f"Bearer {make_jwt()}"})
         assert resp.status_code == 200
         assert resp.text == "mcp-ok"
 
     def test_missing_token_returns_401(self):
-        from starlette.testclient import TestClient
-
-        wrapped = self._make_wrapped_app()
-        client = TestClient(wrapped, raise_server_exceptions=False)
+        client = TestClient(_wrap(), raise_server_exceptions=False)
         resp = client.get("/mcp")
         assert resp.status_code == 401
         assert resp.json()["code"] == "MISSING_AUTH"
 
-    def test_wrong_token_returns_401(self):
-        from starlette.testclient import TestClient
-
-        wrapped = self._make_wrapped_app()
-        client = TestClient(wrapped, raise_server_exceptions=False)
-        resp = client.get("/mcp", headers={"Authorization": "Bearer wrong-key"})
+    def test_malformed_token_returns_401(self):
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get("/mcp", headers={"Authorization": "Bearer not-a-jwt"})
         assert resp.status_code == 401
         assert resp.json()["code"] == "INVALID_AUTH"
 
-    def test_non_mcp_path_not_intercepted(self):
-        """Requests to paths outside the MCP mount (e.g. /health) pass without auth."""
-        from starlette.testclient import TestClient
+    def test_bad_signature_returns_401(self):
+        token = make_jwt(signing_key=WRONG_PRIVATE_PEM)
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get("/mcp", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 401
+        assert resp.json()["code"] == "INVALID_AUTH"
 
-        wrapped = self._make_wrapped_app()
-        client = TestClient(wrapped, raise_server_exceptions=False)
+    def test_expired_token_returns_401(self):
+        token = make_jwt(exp_delta=-3600)
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get("/mcp", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 401
+        assert resp.json()["code"] == "TOKEN_EXPIRED"
+
+    def test_missing_tenant_claim_returns_403(self):
+        token = make_jwt(include_user_name=False)
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get("/mcp", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "MISSING_TENANT_CLAIM"
+
+    def test_health_path_is_public(self):
+        client = TestClient(_wrap(), raise_server_exceptions=False)
         resp = client.get("/health")
         assert resp.status_code == 200
         assert resp.text == "health-ok"
 
+    def test_health_still_public_without_token(self):
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        assert client.get("/health").status_code == 200
+
+    def test_mcp_path_requires_auth(self):
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get("/mcp")
+        assert resp.status_code == 401
+        assert resp.json()["code"] == "MISSING_AUTH"
+
+    def test_default_deny_arbitrary_path(self):
+        async def secret(request):
+            return PlainTextResponse("secret-ok")
+
+        app = _inner_app(extra_routes=[Route("/secret", secret)])
+        client = TestClient(_wrap(app), raise_server_exceptions=False)
+
+        assert client.get("/secret").status_code == 401
+        ok = client.get("/secret", headers={"Authorization": f"Bearer {make_jwt()}"})
+        assert ok.status_code == 200
+        assert ok.text == "secret-ok"
+
+    def test_unknown_path_requires_auth_not_404(self):
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get("/does-not-exist")
+        assert resp.status_code == 401
+        assert resp.json()["code"] == "MISSING_AUTH"
+
+    def test_health_trailing_slash_is_public(self):
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get("/health/")
+        assert resp.status_code != 401
+
+    def test_custom_public_paths_allowlist(self):
+        async def livez(request):
+            return PlainTextResponse("livez-ok")
+
+        app = _inner_app(extra_routes=[Route("/livez", livez)])
+        client = TestClient(
+            _wrap(app, public_paths=("/health", "/livez")), raise_server_exceptions=False
+        )
+
+        assert client.get("/livez").status_code == 200
+        resp_mcp = client.get("/mcp")
+        assert resp_mcp.status_code == 401
+        assert resp_mcp.json()["code"] == "MISSING_AUTH"
+
+    def test_non_http_scope_passes_through(self):
+        """A non-http scope (e.g. lifespan) is forwarded, not auth-checked."""
+        import anyio
+
+        seen = {}
+
+        async def inner(scope, receive, send):
+            seen["type"] = scope["type"]
+
+        mw = JWTAuthMiddleware(inner, settings=get_settings())
+
+        async def driver():
+            await mw({"type": "lifespan"}, None, None)
+
+        anyio.run(driver)
+        assert seen["type"] == "lifespan"
+
 
 # ===========================================================================
-# 10. _check_bearer_token — empty-token fail-open regression tests
-# ===========================================================================
-
-class TestCheckBearerTokenEmptyKeyGuard:
-    """Regression tests for the empty-token fail-open vulnerability.
-
-    hmac.compare_digest(b"", b"") == True, so without an explicit guard an
-    "Authorization: Bearer " header (empty token) would pass if API_KEY were
-    also empty.  api_key now defaults to "" at the schema level (so stdio mode
-    works without it), making _check_bearer_token's own empty-provided-token
-    guard the critical line of defence in isolation.
-    """
-
-    def test_empty_provided_token_with_non_empty_key_rejected(self):
-        """Bearer <empty> must always be False even when compared with a real key."""
-        assert _check_bearer_token("Bearer ", API_KEY) is False
-
-    def test_empty_provided_token_with_empty_key_rejected(self):
-        """The critical regression: Bearer <empty> vs empty key must be False, not True."""
-        # hmac.compare_digest(b"", b"") == True — our explicit empty-provided-token
-        # guard in _check_bearer_token prevents this.
-        assert _check_bearer_token("Bearer ", "") is False
-
-    def test_whitespace_only_provided_token_rejected(self):
-        """A token that is whitespace-only is not a valid credential."""
-        assert _check_bearer_token("Bearer    ", API_KEY) is False
-
-
-# ===========================================================================
-# 11. HTTP startup guard — empty API key must fail closed
+# 9. HTTP startup guard — must fail closed when OIDC auth is not configured
 # ===========================================================================
 
 class TestHttpStartupGuard:
-    """Tests that _run_http() exits if API_KEY is empty at runtime.
 
-    api_key is now optional at the Settings schema level (so MCP stdio can
-    start without it).  _run_http() is the enforcement point for the HTTP
-    transport: it must call sys.exit(1) when api_key is empty rather than
-    serving unauthenticated requests.
-    """
-
-    def test_empty_api_key_causes_sys_exit(self):
-        """_run_http must call sys.exit(1) when settings.api_key is empty."""
+    def test_run_http_exits_when_auth_not_configured(self):
         import asyncio
         from unittest.mock import MagicMock, patch
 
         fake_settings = MagicMock()
-        fake_settings.api_key = ""
-        fake_settings.mcp_port = 8000
-        fake_settings.mcp_path = "/mcp"
-        fake_settings.log_level = "INFO"
-
-        from app import mcp_server
-
-        with patch.object(mcp_server, "settings", fake_settings):
-            with pytest.raises(SystemExit) as exc_info:
-                asyncio.run(mcp_server._run_http())
-        assert exc_info.value.code == 1
-
-    def test_whitespace_api_key_causes_sys_exit(self):
-        """_run_http must call sys.exit(1) when settings.api_key is whitespace-only."""
-        import asyncio
-        from unittest.mock import MagicMock, patch
-
-        fake_settings = MagicMock()
-        fake_settings.api_key = "   "
-        fake_settings.mcp_port = 8000
-        fake_settings.mcp_path = "/mcp"
-        fake_settings.log_level = "INFO"
+        fake_settings.auth_configured.return_value = False
 
         from app import mcp_server
 
@@ -606,175 +579,91 @@ class TestHttpStartupGuard:
 
 
 # ===========================================================================
-# 13. New contract tests: api_key optional at schema level
+# 10. Auth-config contract — stdio needs no OIDC; REST/MCP HTTP fail closed
 # ===========================================================================
 
-class TestApiKeyOptionalContract:
-    """Tests for the new api_key=optional contract.
+class TestAuthConfigContract:
 
-    api_key defaults to "" so that MCP stdio mode can start without it.
-    Auth enforcement is contextual: REST (app/auth.py) and MCP HTTP
-    (_run_http) each fail closed when api_key is empty.
-    """
-
-    def test_settings_constructs_with_empty_api_key(self):
-        """Settings() must NOT raise when API_KEY is absent or empty."""
-        import os
+    def test_settings_constructs_without_oidc(self):
+        """Settings() builds without OIDC config so MCP stdio can start."""
         from unittest.mock import patch
 
-        # Temporarily unset API_KEY so Settings() sees no value.
-        env_without_key = {k: v for k, v in os.environ.items() if k != "API_KEY"}
-        with patch.dict(os.environ, env_without_key, clear=True):
-            get_settings.cache_clear()
-            from app.config import Settings
+        from app.config import Settings
+
+        with patch.dict(os.environ):
+            for k in ("OIDC_JWKS_URL", "OIDC_ISSUER", "OIDC_AUDIENCE"):
+                os.environ.pop(k, None)
             s = Settings()
-            assert s.api_key == ""
+            assert s.auth_configured() is False
         get_settings.cache_clear()
 
-    def test_rest_auth_fails_closed_when_api_key_empty(self):
-        """REST auth dependency must return 401 for ANY request when api_key is empty.
-
-        This verifies the fail-closed behaviour in app/auth.py when api_key is "".
-        The client sends a non-empty Bearer token; it must still be rejected.
-        """
-        import os
+    def test_rest_auth_fails_closed_without_oidc(self):
+        """REST returns 503 AUTH_NOT_CONFIGURED for any request when OIDC is unset."""
         from unittest.mock import MagicMock, patch
 
-        os.environ["API_KEY"] = ""
+        with patch.dict(os.environ):
+            for k in ("OIDC_JWKS_URL", "OIDC_ISSUER", "OIDC_AUDIENCE"):
+                os.environ.pop(k, None)
+            get_settings.cache_clear()
+
+            mock_ch = MagicMock()
+            mock_ch.ping.return_value = True
+            with patch("app.clickhouse_client.get_client", return_value=mock_ch):
+                with patch("app.service.execute_query", return_value=(["c"], [["v"]])):
+                    from fastapi.testclient import TestClient as FastTestClient
+
+                    from app.main import app
+
+                    client = FastTestClient(app, raise_server_exceptions=False)
+                    resp = client.post(
+                        "/query",
+                        headers={"Authorization": f"Bearer {make_jwt()}"},
+                        json={"sql": "SELECT 1"},
+                    )
+                    assert resp.status_code == 503
+                    assert resp.json()["detail"]["code"] == "AUTH_NOT_CONFIGURED"
         get_settings.cache_clear()
 
-        mock_ch = MagicMock()
-        mock_ch.ping.return_value = True
-
-        with patch("app.clickhouse_client.get_client", return_value=mock_ch):
-            with patch("app.service.execute_query", return_value=(["col"], [["v"]])):
-                from app.main import app
-                from fastapi.testclient import TestClient
-                client = TestClient(app, raise_server_exceptions=False)
-                # Send any non-empty Bearer token — must still be rejected because
-                # the server has no api_key configured.
-                resp = client.post(
-                    "/query",
-                    headers={"Authorization": "Bearer some-token"},
-                    json={"sql": "SELECT 1"},
-                )
-                assert resp.status_code == 401
-
-        # Restore for other tests.
-        os.environ["API_KEY"] = API_KEY
-        get_settings.cache_clear()
-
-    def test_mcp_stdio_import_succeeds_without_api_key(self):
-        """app.mcp_server must be importable without API_KEY set.
-
-        This is the core stdio fix: a local desktop user running
-        'python -m app.mcp_server' with no API_KEY must not hit a crash.
-        """
-        import importlib
-        import os
+    def test_mcp_stdio_import_succeeds_without_oidc(self):
         import sys
 
-        # Remove API_KEY from environment.
-        env_backup = os.environ.pop("API_KEY", None)
-        # Remove cached module so we re-import cleanly.
-        for mod_name in list(sys.modules.keys()):
-            if mod_name.startswith("app.mcp_server") or mod_name == "app.mcp_server":
-                del sys.modules[mod_name]
-
-        get_settings.cache_clear()
-
-        try:
-            import app.mcp_server  # noqa: F401 — import succeeds without API_KEY
-        finally:
-            if env_backup is not None:
-                os.environ["API_KEY"] = env_backup
+        with patch.dict(os.environ):
+            for k in ("OIDC_JWKS_URL", "OIDC_ISSUER", "OIDC_AUDIENCE"):
+                os.environ.pop(k, None)
+            sys.modules.pop("app.mcp_server", None)
             get_settings.cache_clear()
-            # Re-import to restore the module in sys.modules for subsequent tests.
-            import importlib
-            import app.mcp_server as _mcp  # noqa: F811
-
-    def test_mcp_stdio_run_does_not_require_api_key(self):
-        """_run_stdio path (mcp.run transport='stdio') must not check API_KEY.
-
-        We mock mcp.run so it doesn't actually block, and verify no SystemExit
-        is raised when api_key is empty.
-        """
-        import os
-        from unittest.mock import MagicMock, patch
-
-        from app import mcp_server
-
-        fake_settings = MagicMock()
-        fake_settings.api_key = ""
-        fake_settings.mcp_transport = "stdio"
-        fake_settings.log_level = "INFO"
-
-        with patch.object(mcp_server, "settings", fake_settings):
-            with patch.object(mcp_server.mcp, "run") as mock_run:
-                # Call main() logic for stdio: it must call mcp.run without
-                # raising SystemExit even with empty api_key.
-                mcp_server.mcp.run(transport="stdio")
-                mock_run.assert_called_once_with(transport="stdio")
+            try:
+                import app.mcp_server  # noqa: F401
+            finally:
+                get_settings.cache_clear()
+                import app.mcp_server  # noqa: F401,F811
 
 
 # ===========================================================================
-# 12. MCP ASGI transport smoke test — exercises the real streamable-HTTP app
+# 11. MCP ASGI transport smoke test — exercises the real streamable-HTTP app
 # ===========================================================================
 
 class TestMcpHttpTransportSmoke:
-    """Smoke tests that drive the real FastMCP streamable-HTTP ASGI app.
-
-    These tests construct the actual MCP ASGI application (the same object
-    uvicorn would serve) and run requests through Starlette's TestClient.
-    This catches starlette API-version breaks that would only surface at
-    runtime if no test ever touched EventSourceResponse / the ASGI transport.
-
-    We don't attempt a full MCP tool round-trip in-process (the MCP SDK's
-    streamable-HTTP transport requires a persistent SSE session); instead we
-    verify that:
-      - The ASGI app builds without error.
-      - Auth enforcement works end-to-end against the real app (not a stub).
-      - A request without a token returns 401 (not a 500 starlette-API crash).
-      - A request with a valid token is accepted by the auth layer (not 401).
-    """
 
     def _build_authed_app(self):
-        """Return the real MCP ASGI app wrapped in BearerAuthMiddleware."""
-        from app.mcp_server import BearerAuthMiddleware, mcp
+        from app.mcp_server import mcp
 
-        starlette_app = mcp.streamable_http_app()
-        return BearerAuthMiddleware(
-            starlette_app,
-            api_key=API_KEY,
-            mcp_path="/mcp",
-        )
+        return JWTAuthMiddleware(mcp.streamable_http_app(), settings=get_settings())
 
     def test_asgi_app_builds_without_error(self):
-        """The streamable-HTTP ASGI app must instantiate cleanly with pydantic 2.11."""
-        app = self._build_authed_app()
-        assert app is not None
+        assert self._build_authed_app() is not None
 
     def test_missing_auth_returns_401_not_500(self):
-        """No-token request must hit the auth layer and return 401, not a starlette crash."""
-        from starlette.testclient import TestClient
+        from starlette.testclient import TestClient as StarletteTestClient
 
-        client = TestClient(self._build_authed_app(), raise_server_exceptions=False)
+        client = StarletteTestClient(self._build_authed_app(), raise_server_exceptions=False)
         resp = client.get("/mcp")
         assert resp.status_code == 401
         assert resp.json()["code"] == "MISSING_AUTH"
 
     def test_valid_token_passes_auth_layer(self):
-        """A valid Bearer token must not be rejected by the auth middleware.
+        from starlette.testclient import TestClient as StarletteTestClient
 
-        The underlying MCP transport may return any non-401 response (e.g. 406
-        Not Acceptable if the client doesn't send the right Accept header for
-        SSE); what matters is that a starlette-version break does not produce a
-        500 before auth is even checked, and that auth itself doesn't block a
-        valid token.
-        """
-        from starlette.testclient import TestClient
-
-        client = TestClient(self._build_authed_app(), raise_server_exceptions=False)
-        resp = client.get("/mcp", headers={"Authorization": f"Bearer {API_KEY}"})
-        # Must not be 401 (auth rejected) — any other status is acceptable here.
+        client = StarletteTestClient(self._build_authed_app(), raise_server_exceptions=False)
+        resp = client.get("/mcp", headers={"Authorization": f"Bearer {make_jwt()}"})
         assert resp.status_code != 401
