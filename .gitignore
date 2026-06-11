@@ -26,3 +26,8 @@ htmlcov/
 .idea/
 *.swp
 .DS_Store
+
+
+secret*
+signing-key*
+.venv*
