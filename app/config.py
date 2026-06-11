@@ -149,6 +149,35 @@ class Settings(BaseSettings):
         description="Public HTTPS base URL used in the OpenAPI servers block",
     )
 
+    # --- OAuth 2.0 Protected Resource Metadata (RFC 9728 / MCP Authorization) ---
+    # The MCP HTTP server is an OAuth 2.0 *Protected Resource*.  These fields let
+    # interactive MCP clients (Claude Desktop, ChatGPT, MCP Inspector, VS Code)
+    # discover the authorization server and obtain a token via authorization-code
+    # + PKCE, instead of an operator hand-minting a JWT.  Token *validation* is
+    # unchanged (see app/auth_jwt.py) — this only advertises *where* to get a
+    # token.  The authorization server is an external IdP (see docs/oauth.md).
+    oauth_authorization_servers: str = Field(
+        "",
+        description=(
+            "Comma-separated OAuth Authorization Server issuer URL(s) advertised in "
+            "Protected Resource Metadata. Each must serve RFC 8414 / OIDC discovery "
+            "metadata. Defaults to OIDC_ISSUER when empty."
+        ),
+    )
+    oauth_resource: str = Field(
+        "",
+        description=(
+            "Canonical resource identifier advertised as the Protected Resource "
+            "Metadata 'resource' value and used for RFC 8707 audience binding. "
+            "MUST equal the audience the IdP stamps as the token 'aud' claim "
+            "(see OIDC_AUDIENCE). Defaults to PUBLIC_BASE_URL + MCP_PATH when empty."
+        ),
+    )
+    oauth_scopes_supported: str = Field(
+        "",
+        description="Optional comma-separated scopes advertised in PRM 'scopes_supported'.",
+    )
+
     @field_validator("log_level")
     @classmethod
     def _normalise_log_level(cls, v: str) -> str:
@@ -210,6 +239,42 @@ class Settings(BaseSettings):
     def jwt_algorithms_list(self) -> List[str]:
         """Return the validated signing-algorithm allowlist."""
         return [a.strip() for a in self.jwt_algorithms.split(",") if a.strip()]
+
+    def oauth_authorization_servers_list(self) -> List[str]:
+        """Authorization-server issuer URL(s) advertised in Protected Resource Metadata.
+
+        Falls back to OIDC_ISSUER so a single-IdP deployment needs no extra config.
+        """
+        raw = self.oauth_authorization_servers.strip() or self.oidc_issuer.strip()
+        return [s.strip() for s in raw.split(",") if s.strip()]
+
+    def oauth_resource_identifier(self) -> str:
+        """Canonical resource URL advertised as the PRM 'resource' (RFC 9728/8707)."""
+        if self.oauth_resource.strip():
+            return self.oauth_resource.strip().rstrip("/")
+        return self.public_base_url.rstrip("/") + self.mcp_path
+
+    def protected_resource_metadata(self) -> Dict[str, object]:
+        """Build the RFC 9728 Protected Resource Metadata document for this server."""
+        doc: Dict[str, object] = {
+            "resource": self.oauth_resource_identifier(),
+            "authorization_servers": self.oauth_authorization_servers_list(),
+            "bearer_methods_supported": ["header"],
+        }
+        scopes = [s.strip() for s in self.oauth_scopes_supported.split(",") if s.strip()]
+        if scopes:
+            doc["scopes_supported"] = scopes
+        return doc
+
+    def protected_resource_metadata_url(self) -> str:
+        """The well-known URL where PRM is published (RFC 9728 §3.1 path-insertion).
+
+        For resource ``https://host/mcp`` the metadata lives at
+        ``https://host/.well-known/oauth-protected-resource/mcp``.
+        """
+        base = self.public_base_url.rstrip("/")
+        path = self.mcp_path if self.mcp_path not in ("", "/") else ""
+        return f"{base}/.well-known/oauth-protected-resource{path}"
 
     def auth_configured(self) -> bool:
         """True when enough OIDC config is present to validate JWTs.

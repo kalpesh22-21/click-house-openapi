@@ -667,3 +667,113 @@ class TestMcpHttpTransportSmoke:
         client = StarletteTestClient(self._build_authed_app(), raise_server_exceptions=False)
         resp = client.get("/mcp", headers={"Authorization": f"Bearer {make_jwt()}"})
         assert resp.status_code != 401
+
+
+# ===========================================================================
+# 12. OAuth 2.0 Protected Resource Metadata (RFC 9728) + WWW-Authenticate
+#
+# The discovery endpoint + challenge header let interactive MCP clients run the
+# authorization-code+PKCE flow against the external IdP instead of using a
+# hand-minted token. Token *validation* is unchanged (covered above).
+# ===========================================================================
+
+class TestProtectedResourceMetadata:
+
+    def _authed_app(self):
+        from app.mcp_server import mcp
+
+        return JWTAuthMiddleware(mcp.streamable_http_app(), settings=get_settings())
+
+    def test_metadata_document_shape(self):
+        """settings.protected_resource_metadata() advertises resource + AS list."""
+        s = get_settings()
+        doc = s.protected_resource_metadata()
+        # resource defaults to PUBLIC_BASE_URL + MCP_PATH
+        assert doc["resource"] == "https://test.example.com/mcp"
+        # authorization_servers falls back to OIDC_ISSUER
+        assert doc["authorization_servers"] == ["https://idp.test/"]
+        assert doc["bearer_methods_supported"] == ["header"]
+
+    def test_metadata_url_uses_rfc9728_path_insertion(self):
+        s = get_settings()
+        assert (
+            s.protected_resource_metadata_url()
+            == "https://test.example.com/.well-known/oauth-protected-resource/mcp"
+        )
+
+    def test_prm_endpoint_is_public_no_auth(self):
+        """The well-known PRM endpoint must be served WITHOUT a token."""
+        from starlette.testclient import TestClient as StarletteTestClient
+
+        client = StarletteTestClient(self._authed_app(), raise_server_exceptions=False)
+        resp = client.get("/.well-known/oauth-protected-resource")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["resource"] == "https://test.example.com/mcp"
+        assert body["authorization_servers"] == ["https://idp.test/"]
+
+    def test_prm_endpoint_path_suffixed_variant_public(self):
+        """RFC 9728 §3.1 path-insertion form (…/oauth-protected-resource/mcp)."""
+        from starlette.testclient import TestClient as StarletteTestClient
+
+        client = StarletteTestClient(self._authed_app(), raise_server_exceptions=False)
+        resp = client.get("/.well-known/oauth-protected-resource/mcp")
+        assert resp.status_code == 200
+        assert resp.json()["resource"] == "https://test.example.com/mcp"
+
+    def test_missing_token_challenge_advertises_resource_metadata(self):
+        """A 401 must carry WWW-Authenticate pointing at the PRM URL (RFC 9728 §5.1)."""
+        from starlette.testclient import TestClient as StarletteTestClient
+
+        client = StarletteTestClient(self._authed_app(), raise_server_exceptions=False)
+        resp = client.get("/mcp")
+        assert resp.status_code == 401
+        challenge = resp.headers.get("www-authenticate", "")
+        assert challenge.startswith("Bearer")
+        assert (
+            'resource_metadata="https://test.example.com'
+            '/.well-known/oauth-protected-resource/mcp"' in challenge
+        )
+
+    def test_invalid_token_challenge_has_invalid_token_error(self):
+        from starlette.testclient import TestClient as StarletteTestClient
+
+        client = StarletteTestClient(self._authed_app(), raise_server_exceptions=False)
+        resp = client.get("/mcp", headers={"Authorization": "Bearer not-a-jwt"})
+        assert resp.status_code == 401
+        challenge = resp.headers.get("www-authenticate", "")
+        assert 'error="invalid_token"' in challenge
+        assert "resource_metadata=" in challenge
+
+    def test_missing_tenant_claim_challenge_has_insufficient_scope(self):
+        from starlette.testclient import TestClient as StarletteTestClient
+
+        token = make_jwt(include_user_name=False)
+        client = StarletteTestClient(self._authed_app(), raise_server_exceptions=False)
+        resp = client.get("/mcp", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 403
+        assert 'error="insufficient_scope"' in resp.headers.get("www-authenticate", "")
+
+    def test_custom_resource_and_authorization_servers(self):
+        """OAUTH_RESOURCE / OAUTH_AUTHORIZATION_SERVERS override the defaults."""
+        os.environ["OAUTH_RESOURCE"] = "api://clickhouse-mcp"
+        os.environ["OAUTH_AUTHORIZATION_SERVERS"] = (
+            "https://login.microsoftonline.com/tenant-id/v2.0"
+        )
+        os.environ["OAUTH_SCOPES_SUPPORTED"] = "Query.Read,Schema.Read"
+        get_settings.cache_clear()
+        try:
+            doc = get_settings().protected_resource_metadata()
+            assert doc["resource"] == "api://clickhouse-mcp"
+            assert doc["authorization_servers"] == [
+                "https://login.microsoftonline.com/tenant-id/v2.0"
+            ]
+            assert doc["scopes_supported"] == ["Query.Read", "Schema.Read"]
+        finally:
+            for k in (
+                "OAUTH_RESOURCE",
+                "OAUTH_AUTHORIZATION_SERVERS",
+                "OAUTH_SCOPES_SUPPORTED",
+            ):
+                os.environ.pop(k, None)
+            get_settings.cache_clear()

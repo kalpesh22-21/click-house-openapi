@@ -18,9 +18,12 @@ stdio (default, MCP_TRANSPORT=stdio):
 
 streamable-HTTP (MCP_TRANSPORT=http):
     A Starlette application is served by uvicorn.  Every request to the MCP
-    endpoint requires a valid Bearer token matching the API_KEY environment
-    variable (same token as the REST API).  A GET /health endpoint is exposed
-    without authentication for Kubernetes probes.
+    endpoint requires a valid OIDC/JWT Bearer token, validated per request
+    against the IdP's JWKS (see app/auth_jwt.py).  Two endpoints are exposed
+    without authentication: GET /health for Kubernetes probes, and
+    GET /.well-known/oauth-protected-resource (RFC 9728 Protected Resource
+    Metadata) so OAuth-capable MCP clients can discover the authorization server
+    and obtain a token via authorization-code + PKCE (see docs/oauth.md).
     Run:  MCP_TRANSPORT=http python -m app.mcp_server
 
 Configuration (env vars)
@@ -328,18 +331,46 @@ async def _send_json_response(
     status_code: int,
     payload: dict[str, Any],
     *,
-    www_authenticate: bool = False,
+    www_authenticate: Optional[str] = None,
 ) -> None:
-    """Emit a complete JSON ASGI response (used for auth rejections)."""
+    """Emit a complete JSON ASGI response (used for auth rejections).
+
+    *www_authenticate*, when given, is the full ``WWW-Authenticate`` header value
+    (e.g. ``Bearer resource_metadata="…"``) sent verbatim.
+    """
     body = json.dumps(payload).encode("utf-8")
     headers = [
         (b"content-type", b"application/json"),
         (b"content-length", str(len(body)).encode("ascii")),
     ]
     if www_authenticate:
-        headers.append((b"www-authenticate", b"Bearer"))
+        headers.append((b"www-authenticate", www_authenticate.encode("latin-1")))
     await send({"type": "http.response.start", "status": status_code, "headers": headers})
     await send({"type": "http.response.body", "body": body})
+
+
+def _www_authenticate(
+    settings,
+    *,
+    error: Optional[str] = None,
+    description: Optional[str] = None,
+) -> str:
+    """Build an RFC 6750 / RFC 9728 ``WWW-Authenticate: Bearer`` challenge.
+
+    Always advertises ``resource_metadata`` so an MCP client that hits a 401/403
+    can discover the authorization server and start the OAuth flow (RFC 9728
+    §5.1) instead of needing a hand-minted token.
+    """
+    params: list[str] = []
+    if error:
+        params.append(f'error="{error}"')
+    if description:
+        # Strip quotes/newlines so the header stays well-formed (auth messages are
+        # already generic — no token detail leaks here).
+        safe = description.replace('"', "'").replace("\n", " ").replace("\r", " ")
+        params.append(f'error_description="{safe}"')
+    params.append(f'resource_metadata="{settings.protected_resource_metadata_url()}"')
+    return "Bearer " + ", ".join(params)
 
 
 class JWTAuthMiddleware:
@@ -357,6 +388,11 @@ class JWTAuthMiddleware:
     cached), so any replica can serve any request.
     """
 
+    # OAuth Protected Resource Metadata (RFC 9728) is public discovery data — a
+    # client fetches it *before* it has a token, so any path under this prefix is
+    # always served without auth, regardless of the configured public_paths.
+    _OAUTH_PRM_PREFIX = "/.well-known/oauth-protected-resource"
+
     def __init__(self, app, settings, public_paths: tuple[str, ...] = ("/health",)) -> None:
         self.app = app
         self.settings = settings
@@ -368,7 +404,7 @@ class JWTAuthMiddleware:
             return
 
         path = (scope.get("path", "") or "/").rstrip("/") or "/"
-        if path in self._public_paths:
+        if path in self._public_paths or path.startswith(self._OAUTH_PRM_PREFIX):
             await self.app(scope, receive, send)
             return
 
@@ -378,18 +414,27 @@ class JWTAuthMiddleware:
                 send,
                 401,
                 {"error": "Missing Authorization header.", "code": "MISSING_AUTH"},
-                www_authenticate=True,
+                www_authenticate=_www_authenticate(self.settings),
             )
             return
 
         try:
             principal = validate_token(token, self.settings)
         except JWTAuthError as exc:
+            # Map the auth failure to an OAuth error code so a spec-aware client
+            # knows whether to refresh its token (invalid_token) or that the token
+            # lacks the required tenant claim (insufficient_scope). 503 (JWKS
+            # unreachable) is a server fault, not a challenge, so no error code.
+            oauth_error = {401: "invalid_token", 403: "insufficient_scope"}.get(
+                exc.status_code
+            )
             await _send_json_response(
                 send,
                 exc.status_code,
                 {"error": exc.message, "code": exc.code},
-                www_authenticate=True,
+                www_authenticate=_www_authenticate(
+                    self.settings, error=oauth_error, description=exc.message
+                ),
             )
             return
 
@@ -427,6 +472,40 @@ async def health_check(request: Request) -> JSONResponse:
             "transport": "http",
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# OAuth 2.0 Protected Resource Metadata (RFC 9728) — HTTP transport only
+#
+# These endpoints let interactive MCP clients discover the authorization server
+# and run the authorization-code + PKCE flow themselves, instead of an operator
+# hand-minting a JWT. They are PUBLIC (no auth): a client fetches them *before*
+# it has a token. The actual login/token issuance happens at the external IdP
+# advertised in `authorization_servers` (see docs/oauth.md).
+#
+# RFC 9728 §3.1 locates the metadata for resource `https://host/mcp` at
+# `https://host/.well-known/oauth-protected-resource/mcp`, so we serve both the
+# path-suffixed form clients derive and the bare root form for compatibility.
+# ---------------------------------------------------------------------------
+
+@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+async def oauth_protected_resource(request: Request) -> JSONResponse:
+    """Return this server's OAuth 2.0 Protected Resource Metadata (RFC 9728).
+
+    Reads settings fresh (not the import-time module global) so the advertised
+    issuer/resource always reflect current config.
+    """
+    return JSONResponse(get_settings().protected_resource_metadata())
+
+
+# Also register the RFC 9728 path-suffixed variant (…/oauth-protected-resource/mcp)
+# that MCP clients construct from the resource path, unless the mount path is the
+# root (which would collide with the route above).
+if settings.mcp_path not in ("", "/"):
+    mcp.custom_route(
+        f"/.well-known/oauth-protected-resource{settings.mcp_path}",
+        methods=["GET"],
+    )(oauth_protected_resource)
 
 
 # ---------------------------------------------------------------------------

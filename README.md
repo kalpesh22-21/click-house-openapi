@@ -116,20 +116,30 @@ python -m app.mcp_server --transport stdio
 ### Remote HTTP usage (k8s / server)
 
 ```bash
-# Start MCP server in HTTP transport (Bearer auth enforced)
+# Start MCP server in HTTP transport (OIDC/JWT Bearer auth enforced per request)
 MCP_TRANSPORT=http MCP_PORT=8000 MCP_PATH=/mcp \
-  API_KEY=your-strong-api-key \
+  OIDC_JWKS_URL=https://idp.example.com/.well-known/jwks.json \
+  OIDC_ISSUER=https://idp.example.com/ \
+  OIDC_AUDIENCE=clickhouse-api \
   python -m app.mcp_server --transport http
 ```
 
 The server listens on `0.0.0.0:8000` and exposes:
-- `POST /mcp` — MCP streamable-HTTP endpoint (requires `Authorization: Bearer <API_KEY>`)
+- `POST /mcp` — MCP streamable-HTTP endpoint (requires a valid OIDC JWT as `Authorization: Bearer <token>`)
 - `GET /health` — health probe (no auth required)
+- `GET /.well-known/oauth-protected-resource` — OAuth 2.0 Protected Resource Metadata (no auth)
 
-Connect from an MCP client:
+**OAuth for interactive clients.** The MCP HTTP transport is an OAuth 2.0
+Protected Resource: OAuth-capable clients (Claude Desktop, ChatGPT, MCP
+Inspector, VS Code) discover the authorization server via the well-known
+endpoint and obtain a token through authorization-code + PKCE — no hand-minted
+tokens. See **[docs/oauth.md](docs/oauth.md)** for the full flow and an Azure
+Entra ID / Keycloak setup walkthrough.
+
+Connect from an MCP client (manual token):
 ```
 URL:   https://your-mcp-host.example.com/mcp
-Auth:  Bearer <API_KEY>
+Auth:  Bearer <OIDC JWT>
 ```
 
 ### Deploy via Helm (mode=mcp)
