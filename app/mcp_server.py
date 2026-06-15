@@ -410,10 +410,23 @@ class JWTAuthMiddleware:
 
         token = _bearer_from_scope(scope)
         if token is None:
+            # Logged so an operator can confirm the server received the request and
+            # answered with a Bearer challenge — the signal an OAuth client (e.g.
+            # ChatGPT) needs to (re)start the flow. Without this, a token-expiry
+            # round-trip leaves no server-side trace at the default INFO level.
+            logger.info(
+                "MCP auth rejected: path=%s status=401 code=MISSING_AUTH — "
+                "sent WWW-Authenticate challenge for re-auth",
+                path,
+            )
             await _send_json_response(
                 send,
                 401,
                 {"error": "Missing Authorization header.", "code": "MISSING_AUTH"},
+                # No error code on a *missing* token: RFC 6750 §3.1 says a request
+                # with no credentials SHOULD NOT carry one (reserve error codes for
+                # a token that was sent but rejected). The resource_metadata pointer
+                # is what lets the client start the flow.
                 www_authenticate=_www_authenticate(self.settings),
             )
             return
@@ -427,6 +440,19 @@ class JWTAuthMiddleware:
             # unreachable) is a server fault, not a challenge, so no error code.
             oauth_error = {401: "invalid_token", 403: "insufficient_scope"}.get(
                 exc.status_code
+            )
+            # An expired/invalid token is the routine re-auth trigger; log it (INFO,
+            # not WARNING — tokens expire on a normal cadence) so the 401+challenge
+            # is observable. If a client reports "couldn't connect" yet this line is
+            # present with status=401 oauth_error=invalid_token, the server did its
+            # job and the failure is downstream (the client's refresh / IdP step).
+            logger.info(
+                "MCP auth rejected: path=%s status=%d code=%s oauth_error=%s — "
+                "sent WWW-Authenticate challenge for re-auth",
+                path,
+                exc.status_code,
+                exc.code,
+                oauth_error,
             )
             await _send_json_response(
                 send,
