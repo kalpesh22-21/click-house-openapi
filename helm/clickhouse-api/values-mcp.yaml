@@ -3,6 +3,42 @@ mode: mcp
 config:
   MCP_PORT: "8000"
   MCP_PATH: "/mcp"
+
+  # --- OIDC token VALIDATION (Entra-direct) ---
+  # REQUIRED override: values.yaml defaults these to the old token-service, whose
+  # JWKS has none of Entra's signing keys — so an Entra token fails signing-key
+  # resolution ("JWKS signing-key resolution failed" -> JWKS_UNAVAILABLE). Point
+  # them at Entra. Per the IdP admin, the API app is configured for **v2 tokens**
+  # (manifest requestedAccessTokenVersion: 2): the token `iss` is the .../v2.0 form
+  # below, and v2 access tokens carry the `scp` claim the authorization flow needs.
+  # A v1 token (issued by the .../oauth2/authorize|token endpoints with a `resource`
+  # param) has iss=https://sts.windows.net/<tenant>/ and NO `scp` — it will fail.
+  # The CLIENT must therefore use the v2 endpoints and request a `scope`, not a
+  # `resource`:  .../oauth2/v2.0/authorize  +  .../oauth2/v2.0/token  with
+  # scope="openid profile email api://paycomhq.com/clickhouse-mcp/mcp.access".
+  OIDC_JWKS_URL: "https://login.microsoftonline.com/a7628d74-52e2-4cf6-9aed-f7ae60fac663/discovery/v2.0/keys"
+  OIDC_ISSUER: "https://login.microsoftonline.com/a7628d74-52e2-4cf6-9aed-f7ae60fac663/v2.0"
+  OIDC_AUDIENCE: "api://paycomhq.com/clickhouse-mcp"
+  # Entra has no user_name claim — use the stable Microsoft object id as tenant key.
+  CLICKHOUSE_TENANT_SETTINGS: '{"SQL_tenant":"oid"}'
+
+  # OAuth discovery (RFC 9728). PUBLIC_BASE_URL MUST be the real public MCP host —
+  # it builds the resource_metadata URL in the WWW-Authenticate challenge and the
+  # PRM `resource` value. A wrong host here also makes ChatGPT report "no OAuth".
+  PUBLIC_BASE_URL: "https://mcp.example.com"
+  # OAUTH_RESOURCE MUST equal OIDC_AUDIENCE (the token `aud`).
+  OAUTH_RESOURCE: "api://paycomhq.com/clickhouse-mcp"
+  # OAUTH_AUTHORIZATION_SERVERS defaults to OIDC_ISSUER; set explicitly if different.
+  # OAUTH_SCOPES_SUPPORTED must be the FULLY-QUALIFIED Entra scope (App ID URI +
+  # "/" + scope name) sharing OAUTH_RESOURCE's prefix — a bare "mcp.access" makes
+  # Entra reject the login with AADSTS9010010 (resource doesn't match scopes).
+  OAUTH_SCOPES_SUPPORTED: "api://paycomhq.com/clickhouse-mcp/mcp.access"
+
+# mcp.example.com is dedicated to the MCP server, so route the whole host to the
+# pod with a single `/` Prefix. This deliberately includes the public OAuth
+# discovery endpoints (/.well-known/oauth-protected-resource[/mcp]) and /health —
+# routing only /mcp would 404 the PRM and make OAuth clients (ChatGPT) report the
+# server "does not implement OAuth".
 ingress:
   enabled: true
   className: nginx
@@ -12,7 +48,7 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
   host: mcp.example.com
-  path: /mcp
+  path: /
   pathType: Prefix
   tls:
     enabled: true

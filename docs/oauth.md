@@ -183,37 +183,67 @@ identifiers (not secret); the **client secret is intentionally NOT recorded here
 — the MCP server (a resource server) never uses it, and secrets must never be
 committed. Rotate any secret that has been shared in chat/email.
 
+App registration: **Clickhouse_MCP**.
+
 | Source value | Value | Used as |
 |---|---|---|
 | Tenant ID (from the OpenID URL) | `a7628d74-52e2-4cf6-9aed-f7ae60fac663` | builds issuer / JWKS URLs |
-| Application (client) ID | `d1973b1a-3f6b-4fc8-bab8-dd1a10e2ae57` | audience → `api://<client-id>` (and the client's `client_id`) |
+| Application (client) ID | `3be17ac5-d4b5-4a82-9cd3-868750845ea8` | the client's `client_id` |
+| App ID URI | `api://paycomonline.com/clickhouse-mcp` | audience (`OIDC_AUDIENCE` / `OAUTH_RESOURCE`) |
+| API scope | `api://paycomonline.com/clickhouse-mcp/mcp.access` | scope the client requests |
 | Client secret | *(omitted — server does not use it)* | only a confidential client / `client_credentials` flow |
 
+> ⚠️ **Domain mismatch to resolve first.** The App ID URI domain
+> (`paycomonline.com`) and the scope's domain (`paycomhq.com`, as originally
+> provided) differ. A scope MUST be `<App ID URI>/<scope-name>`, so confirm the
+> real App ID URI in **Entra → Expose an API** and make both use the same domain.
+> The token `aud` equals the App ID URI, so that exact string is the audience below.
+
 ```bash
-# --- MCP server .env (derived from the tenant + client ID above) ---
+# --- MCP server .env (derived from the tenant + App ID URI above) ---
 OIDC_ISSUER=https://login.microsoftonline.com/a7628d74-52e2-4cf6-9aed-f7ae60fac663/v2.0
 OIDC_JWKS_URL=https://login.microsoftonline.com/a7628d74-52e2-4cf6-9aed-f7ae60fac663/discovery/v2.0/keys
 OAUTH_AUTHORIZATION_SERVERS=https://login.microsoftonline.com/a7628d74-52e2-4cf6-9aed-f7ae60fac663/v2.0
 JWT_ALGORITHMS=RS256
 
-OIDC_AUDIENCE=api://d1973b1a-3f6b-4fc8-bab8-dd1a10e2ae57
-OAUTH_RESOURCE=api://d1973b1a-3f6b-4fc8-bab8-dd1a10e2ae57
+OIDC_AUDIENCE=api://paycomonline.com/clickhouse-mcp
+OAUTH_RESOURCE=api://paycomonline.com/clickhouse-mcp
+# MUST be the FULLY-QUALIFIED scope (App ID URI + "/" + scope name), and its
+# prefix MUST equal OAUTH_RESOURCE. A bare "mcp.access" here makes Entra reject
+# the authorize request with AADSTS9010010 (resource param doesn't match scopes),
+# because the MCP client sends both `resource=OAUTH_RESOURCE` and `scope=this`.
+OAUTH_SCOPES_SUPPORTED=api://paycomonline.com/clickhouse-mcp/mcp.access
 
 PUBLIC_BASE_URL=https://mcp.your-host.example.com   # set to the real public MCP URL
 CLICKHOUSE_TENANT_SETTINGS={"SQL_tenant": "oid"}    # Entra has no user_name claim
 ```
 
-> **Verify the audience before trusting the above.** The `aud` Entra actually
-> stamps depends on the API app's `requestedAccessTokenVersion` and whether an App
-> ID URI is set. Mint a token, decode it at <https://jwt.ms>, and set
-> `OIDC_AUDIENCE` / `OAUTH_RESOURCE` to the **exact** `aud` you see (it is either
-> `api://d1973b1a-…` or the bare GUID `d1973b1a-…`). A mismatch → every request 401s.
-> Set the API app manifest `requestedAccessTokenVersion: 2` for a v2 access token.
+Client-side values (for the MCP *client* / OAuth flow — NOT the server env):
+`client_id = 3be17ac5-d4b5-4a82-9cd3-868750845ea8`, tenant
+`a7628d74-52e2-4cf6-9aed-f7ae60fac663`, scope
+`api://paycomonline.com/clickhouse-mcp/mcp.access`.
 
-> **Single registration note.** These values reuse one app registration as both
-> the API (audience) and the client. That is fine for testing; for production
-> prefer a separate public client app (with PKCE + redirect URIs) so the resource
-> and the client have distinct identities.
+> **Verify before trusting the above.** Set the API app manifest
+> `requestedAccessTokenVersion: 2` (otherwise `iss` is the v1
+> `https://sts.windows.net/<tenant>/` and validation 401s). Then mint a token,
+> decode it at <https://jwt.ms>, and confirm `iss` and `aud` match the values above
+> exactly. A mismatch → every request 401s.
+
+> **Troubleshooting `AADSTS9010010` ("The resource parameter provided in the
+> request doesn't match with the requested scopes").** Seen at the Microsoft login
+> step with MCP clients (ChatGPT, Cursor, Inspector). Since an Entra enforcement
+> change (~March 2026), the **v2.0 endpoint rejects any authorize request carrying
+> BOTH a `resource` parameter (RFC 8707) and a v2 `scope` — even when they match.**
+> Spec-compliant MCP clients ALWAYS send `resource` (it is derived from the
+> mandatory RFC 9728 PRM `resource` field), so **no value of `OAUTH_RESOURCE` fixes
+> this** — removing it only changes the value the client sends (to
+> `PUBLIC_BASE_URL+/mcp`), which Entra still rejects and which also breaks `aud`
+> validation. **Conclusion: Entra cannot be the *direct* authorization server for
+> these clients.** Front it with an RFC 8707-capable broker — the
+> [`helm/keycloak`](../helm/keycloak) chart below: the client sends `resource` to
+> Keycloak (which accepts/ignores it), and Keycloak brokers the login to Entra using
+> Entra's scope model, so no `resource` parameter ever reaches Entra. (Fully
+> qualifying the scope is still correct for whatever AS you end up using.)
 
 ---
 
@@ -234,6 +264,90 @@ OAUTH_RESOURCE=clickhouse-mcp
 - **Client scope → Mappers → User Property/Attribute → `user_name`** emits the tenant claim directly.
 - **Audience mapper** stamps `aud=clickhouse-mcp` so it matches `OIDC_AUDIENCE`.
 - Enable the realm's client-registration policy for DCR if your clients use it.
+
+---
+
+## Connecting the ChatGPT app (Developer-Mode connector)
+
+ChatGPT's custom connector runs the OAuth flow itself and, by default, registers
+via **Dynamic Client Registration (RFC 7591)**.
+
+> ⛔ **Entra ID has no DCR**, so ChatGPT cannot self-register against Entra
+> directly. A per-user OAuth connector pointed straight at Entra **will fail to
+> connect.** You need a DCR-capable authorization server in front of Entra.
+
+### Recommended: Keycloak brokering Entra (keeps Microsoft login + per-user isolation)
+
+Users still authenticate with Microsoft; Keycloak is the OAuth server ChatGPT can
+register with and brokers the login upstream to Entra.
+
+```
+ChatGPT ──DCR + auth-code+PKCE──▶ Keycloak ──OIDC brokering──▶ Entra (Microsoft login)
+   └─────── Bearer JWT (issued by Keycloak, carries the user's Microsoft oid) ───────┘
+                          │
+   ClickHouse MCP server validates that JWT  (OIDC_* point at Keycloak, not Entra)
+```
+
+> **A Helm chart for this is in the repo: [`helm/keycloak`](../helm/keycloak).** It
+> deploys Keycloak and imports a realm pre-wired with the Entra identity provider,
+> the `oid`→token mappers, and an `aud=clickhouse-mcp` client scope — so most of
+> steps 1–2 below are already done by the import. Install:
+>
+> ```bash
+> helm install keycloak ./helm/keycloak \
+>   --set hostname=kc.your-host.example.com \
+>   --set entra.tenantId=a7628d74-52e2-4cf6-9aed-f7ae60fac663 \
+>   --set entra.clientId=3be17ac5-d4b5-4a82-9cd3-868750845ea8 \
+>   --set secrets.entraClientSecret=<entra-client-secret> \
+>   --set secrets.adminPassword=$(openssl rand -hex 24) \
+>   --set db.url='jdbc:postgresql://postgres:5432/keycloak' \
+>   --set db.username=keycloak --set secrets.dbPassword=<db-password> \
+>   --set ingress.enabled=true --set ingress.className=nginx
+> ```
+>
+> Quick local test with no database (ephemeral H2): add `--set devMode=true`. The
+> chart's `NOTES` print the exact issuer URLs and the three one-time finishing
+> steps (add the broker redirect URI to Entra, make the scope a realm Default,
+> open DCR). The manual walkthrough below is the same config done by hand.
+
+1. **Keycloak → Identity Providers → Add → OpenID Connect / Microsoft.**
+   - Discovery URL: `https://login.microsoftonline.com/a7628d74-52e2-4cf6-9aed-f7ae60fac663/v2.0/.well-known/openid-configuration`
+   - Client ID / secret: the Entra app (`3be17ac5-…`) + its secret.
+   - Add Entra's redirect URI for this broker (Keycloak shows it on the IdP page) to the Entra app's **Authentication → Redirect URIs**.
+   - **Attribute importer mappers**: import Entra `oid` (and `email`/`preferred_username`) onto the brokered user.
+2. **Keycloak → token mappers**: emit the imported `oid` as a token claim, and add an **audience mapper** stamping `aud=clickhouse-mcp`.
+3. **Keycloak → Realm settings → Client registration**: allow anonymous/trusted DCR (or issue an initial access token) so ChatGPT can register.
+4. **Point the MCP server at Keycloak** (replaces the Entra `.env` above):
+   ```bash
+   OIDC_ISSUER=https://kc.your-host/realms/<realm>
+   OIDC_JWKS_URL=https://kc.your-host/realms/<realm>/protocol/openid-connect/certs
+   OIDC_AUDIENCE=clickhouse-mcp
+   OAUTH_AUTHORIZATION_SERVERS=https://kc.your-host/realms/<realm>
+   OAUTH_RESOURCE=clickhouse-mcp
+   CLICKHOUSE_TENANT_SETTINGS={"SQL_tenant": "oid"}   # the brokered Microsoft oid
+   ```
+5. **Add the connector in ChatGPT** (Plus/Pro/Team/Enterprise):
+   - Settings → **Connectors** → enable **Developer mode** (Advanced).
+   - **Create** → Name `ClickHouse`, MCP URL `https://mcp.your-host/mcp`, Auth **OAuth**.
+   - **Connect** → a browser opens → user signs in with **Microsoft** (brokered via Keycloak) → consents → connected.
+   - ChatGPT discovers the server through the `/.well-known/oauth-protected-resource`
+     endpoint this repo serves, registers via DCR against Keycloak, and runs PKCE.
+
+### If you must keep Entra as the only IdP (no Keycloak)
+
+Both options are heavier and you maintain a security-sensitive component:
+
+- **DCR bridge** — a small service exposing an RFC 7591 `registration_endpoint`
+  that maps every "registration" to one pre-created Entra client app. ChatGPT's
+  redirect URI must be pre-added to that Entra app.
+- **Manual client config** — *only* viable if your ChatGPT plan's connector UI
+  exposes manual OAuth `client_id`/`client_secret` fields (not just
+  auto-registration). Then point authorize/token at Entra and pre-register
+  ChatGPT's redirect URI on the Entra client app. Confirm the field exists first.
+
+Both require knowing ChatGPT's exact OAuth redirect URI to pre-register it on
+Entra; the Keycloak path avoids this because DCR conveys the redirect URI
+automatically.
 
 ## Security notes
 

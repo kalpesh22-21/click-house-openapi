@@ -241,7 +241,26 @@
       "Bash(curl -s \"http://localhost:8123/?SQL_tenant=carol&readonly=1&max_result_rows=10\" --data-binary \"SELECT getSetting\\('SQL_tenant'\\)\")",
       "Bash(curl -s \"http://localhost:8123/?readonly=1&SQL_tenant=carol\" --data-binary \"SELECT getSetting\\('SQL_tenant'\\)\")",
       "Bash(curl -s \"http://localhost:8123/?SQL_tenant=carol&readonly=2&max_result_rows=10&max_execution_time=30\" --data-binary \"SELECT getSetting\\('SQL_tenant'\\)\")",
-      "Bash(curl -s \"http://localhost:8123/?readonly=2\" --data-binary \"CREATE TABLE analytics.x\\(a UInt8\\) ENGINE=Memory\")"
+      "Bash(curl -s \"http://localhost:8123/?readonly=2\" --data-binary \"CREATE TABLE analytics.x\\(a UInt8\\) ENGINE=Memory\")",
+      "Bash(python -c \"import mcp, fastapi, pydantic, starlette; print\\('mcp', mcp.__version__\\); print\\('fastapi', fastapi.__version__\\); print\\('pydantic', pydantic.__version__\\); print\\('starlette', starlette.__version__\\)\")",
+      "Bash(.venv/bin/python -c \"import mcp; from importlib.metadata import version; print\\('mcp', version\\('mcp'\\)\\); print\\('starlette', version\\('starlette'\\)\\)\")",
+      "Bash(.venv/bin/python -c \"import mcp, os; print\\(os.path.dirname\\(mcp.__file__\\)\\)\")",
+      "Bash(grep -rn '400\\\\|Bad Request\\\\|Unauthorized\\\\|401\\\\|status_code=' __TRACKED_VAR__/server/streamable_http.py)",
+      "Bash(grep -rn '400\\\\|Bad Request\\\\|_create_error_response\\\\|Not Acceptable\\\\|406\\\\|Method Not Allowed\\\\|405\\\\|Conflict\\\\|409\\\\|Unauthorized\\\\|401\\\\|Accept header\\\\|Content-Type\\\\|content-type' __TRACKED_VAR__/server/streamable_http.py)",
+      "Bash(PYTHONPATH=/Users/kalpeshmulye/Development/clickhouse-api .venv/bin/python /tmp/repro_expired.py)",
+      "Bash(sed -i '' 's#\"CLICKHOUSE_HOST\":\"localhost\",#\"CLICKHOUSE_HOST\":\"localhost\",\"CLICKHOUSE_USER\":\"default\",\"CLICKHOUSE_PASSWORD\":\"x\",#' /tmp/repro2.py)",
+      "Bash(PYTHONPATH=/Users/kalpeshmulye/Development/clickhouse-api .venv/bin/python /tmp/repro2.py)",
+      "Bash(.venv/bin/python -c \"from mcp.types import SUPPORTED_PROTOCOL_VERSIONS, DEFAULT_NEGOTIATED_VERSION; print\\('SUPPORTED:', SUPPORTED_PROTOCOL_VERSIONS\\); print\\('DEFAULT:', DEFAULT_NEGOTIATED_VERSION\\)\")",
+      "Bash(PYTHONPATH=/Users/kalpeshmulye/Development/clickhouse-api timeout 40 .venv/bin/python /tmp/repro4.py)",
+      "Bash(PYTHONPATH=/Users/kalpeshmulye/Development/clickhouse-api .venv/bin/python /tmp/repro4.py)",
+      "Bash(cd /Users/kalpeshmulye/Development/clickhouse-api; echo \"=== image/tag in values-mcp.yaml ===\"; grep -nE \"image|tag|repository|pullPolicy\" helm/clickhouse-api/values-mcp.yaml helm/clickhouse-api/values.yaml 2>/dev/null | head -20; echo; echo \"=== when was 401/WWW-Authenticate added? ===\"; git log --oneline -- app/mcp_server.py | head; echo \"--- grep WWW-Authenticate / invalid_token introduction ---\"; git log -S 'invalid_token' --oneline -- app/mcp_server.py; rm -f /tmp/repro*.py /tmp/o4.txt /tmp/out.txt)",
+      "Bash(PYTHONPATH=. .venv/bin/python -m pytest tests/test_mcp.py -q)",
+      "Bash(PYTHONPATH=. .venv/bin/python -m pytest tests/test_auth.py tests/test_jwt_roundtrip.py -q)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:login.microsoftonline.com)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }
