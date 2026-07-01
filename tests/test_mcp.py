@@ -173,7 +173,23 @@ class TestServiceGetTableSchema:
         assert result["database"] == "default"
         assert result["table"] == "users"
         assert len(result["columns"]) == 2
-        assert result["columns"][0] == {"name": "id", "type": "UInt64", "comment": ""}
+        # "default.users" has no Semantic Catalog entry -> catalogued:false,
+        # structural-only path (design §1.3): introspection fields only, overlay
+        # fields nulled/defaulted, still carries catalog_sha (D84).
+        assert result["catalogued"] is False
+        assert result["columns"][0] == {
+            "name": "id",
+            "type": "UInt64",
+            "comment": "",
+            "description": None,
+            "synonyms": None,
+            "unit": None,
+            "values": None,
+            "observed_values": None,
+            "client_defined": False,
+            "sensitive": False,
+        }
+        assert "catalog_sha" in result
 
     def test_raises_database_not_allowed(self, mock_execute):
         os.environ["ALLOWED_DATABASES"] = "analytics"

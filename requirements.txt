@@ -1,4 +1,6 @@
 sqlglot>=25,<31
+# YAML parsing for the copied-in Semantic Catalog (app/semantic_catalog/, D83/D84).
+PyYAML==6.0.3
 fastapi==0.124.4
 python-multipart==0.0.20
 uvicorn[standard]==0.32.1

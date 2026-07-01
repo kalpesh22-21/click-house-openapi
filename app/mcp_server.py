@@ -226,18 +226,21 @@ def list_tables(
 @mcp.tool(
     name="getTableSchema",
     description=(
-        "Return the full column schema (name, ClickHouse data type, comment) for the specified table. "
+        "Return the column schema for the specified table, merged with the curated Semantic "
+        "Catalog (description, synonyms, units, known values, grain, primary key, join keys, "
+        "measures, rules, and disambiguation guidance) when the table is catalogued. "
         "ALWAYS call this before writing a SELECT query against an unfamiliar table. "
         "Knowing the schema tells you exact column names, types (e.g. UInt64, Nullable(String), "
         "DateTime64(3)), and descriptive comments — preventing type-mismatch errors and helping "
-        "you write correct WHERE clauses and aggregations."
+        "you write correct WHERE clauses and aggregations. "
+        "Columns and catalog entries outside your permitted access scope are omitted."
     ),
 )
 def get_table_schema(
     database: Annotated[str, Field(description="The database containing the table")],
     table: Annotated[str, Field(description="The table to describe")],
 ) -> dict[str, Any]:
-    """Return column names, types, and comments for the given table."""
+    """Return the merged, scope-filtered column schema for the given table (D83/D84)."""
     try:
         return svc_get_table_schema(database, table)
     except Exception as exc:
@@ -251,7 +254,10 @@ def get_table_schema(
         "actual data values, formats, and nullability before writing analytical queries. "
         "Default sample size is 5 rows; maximum is 50. "
         "Call getTableSchema first to know the column names, then use sampleRows to "
-        "understand real data distributions."
+        "understand real data distributions. "
+        "If the table has any column outside your permitted access scope, the call is rejected "
+        "outright (no partial row projection) — use runQuery with an explicit in-scope column "
+        "list instead."
     ),
 )
 def sample_rows(

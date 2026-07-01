@@ -39,6 +39,11 @@ from app.errors import (
 )
 from app.principal import get_current_scope, get_current_session_id
 from app.security import validate_and_sanitize
+from app.semantic_catalog import (
+    build_table_schema_response,
+    get_catalog_sha,
+    get_semantic_catalog,
+)
 from app.sqlparse import (
     ProvenanceExtractionError,
     ScratchSessionError,
@@ -177,9 +182,18 @@ def get_table_schema(
     table: str,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """Return column schema for *database*.*table*.
+    """Return the merged, scope-filtered column schema for *database*.*table* (D83/D84).
 
-    Returns a dict with keys: database, table, columns (list of {name, type, comment}).
+    Pipeline (mcp-overlay-design.md §1): introspect (unchanged system.columns
+    query) -> merge with the Semantic Catalog overlay (case-sensitive exact
+    column-name join, D70) -> scope-filter the merged result (skipped when
+    `current_scope` is None [stdio/local-trust] or empty [allow-all, D80b]).
+
+    Returns the design §1.2 shape: database, table, catalogued, description,
+    grain, temporal, primary_key, join_keys, columns, measures, rules,
+    ambiguities, catalog_sha. An uncatalogued table returns catalogued=False
+    with all catalog-derived fields null and columns carrying introspection
+    fields only (design §1.3) — still scope-filtered.
 
     Raises:
         DatabaseNotAllowedError: if *database* is not in the allowlist.
@@ -207,11 +221,28 @@ def get_table_schema(
             code="TABLE_NOT_FOUND",
         )
 
-    columns = [
+    introspected_columns = [
         {"name": row[0], "type": row[1], "comment": row[2] or ""}
         for row in rows
     ]
-    return {"database": database, "table": table, "columns": columns}
+
+    scope = get_current_scope()
+    # The introspected universe (real system.columns data for every table) is
+    # only needed to resolve cross-table free-text references inside
+    # rules[]/ambiguities[] when scope-filtering is actually active (FIX 1,
+    # security review) — skip the extra query entirely when enforcement is a
+    # no-op (scope is None or the empty/allow-all frozenset).
+    introspected_schema = get_catalog_schema() if scope else None
+    response = build_table_schema_response(
+        database=database,
+        table=table,
+        introspected_columns=introspected_columns,
+        catalog=get_semantic_catalog(),
+        scope=scope,
+        introspected_schema=introspected_schema,
+    )
+    response["catalog_sha"] = get_catalog_sha()
+    return response
 
 
 def sample_rows(
@@ -226,8 +257,24 @@ def sample_rows(
 
     Returns the compact {columns, rows, row_count, truncated=False} shape.
 
+    Column-scope enforcement (D83, matching runQuery's SELECT * treatment,
+    D69/OQ-2): sampleRows is effectively `SELECT * LIMIT n`, so the exact same
+    provenance-extraction + scope-allowlist check `run_query` applies is reused
+    here, unmodified — the query is REJECTED (never partially projected) if any
+    column it would return is outside `column_scope`. If the table can't be
+    enumerated (not in the provenance catalog), extraction fails closed and the
+    sample is rejected (same fail-closed rule SELECT * gets in runQuery).
+    Skipped entirely when scope is None (stdio/local-trust) or empty
+    (allow-all, D80b) — identical three-state model as run_query.
+
     Raises:
         DatabaseNotAllowedError: if *database* is not in the allowlist.
+        ColumnScopeError:        if any column of the table is outside scope
+                                  (COLUMN_SCOPE_VIOLATION) or the table can't be
+                                  enumerated under scope enforcement.
+        ParseFailedError:        if column provenance can't be extracted
+                                  (PARSE_FAILED_CLOSED) — the sample is rejected,
+                                  never executed.
     """
     if settings is None:
         settings = get_settings()
@@ -242,6 +289,61 @@ def sample_rows(
     safe_db = database.replace("`", "``")
     safe_table = table.replace("`", "``")
     sql = f"SELECT * FROM `{safe_db}`.`{safe_table}` LIMIT {effective_limit}"
+
+    # ---------------------------------------------------------------------------
+    # Column-scope enforcement (D83) — reuses run_query's exact enforcement path.
+    # ---------------------------------------------------------------------------
+    scope = get_current_scope()
+    session_id = get_current_session_id()
+
+    if scope is not None:
+        catalog = get_catalog_schema()
+
+        try:
+            uses = extract_column_provenance(sql, catalog, session_id=session_id)
+        except ScratchSessionError as exc:
+            logger.error(
+                "sample_rows: scratch session violation code=SCRATCH_SESSION_VIOLATION"
+            )
+            raise ColumnScopeError(
+                message="Table sampled is a scratch table that does not belong to this session.",
+                code="SCRATCH_SESSION_VIOLATION",
+            ) from exc
+        except ProvenanceExtractionError as exc:
+            logger.error(
+                "sample_rows: provenance extraction failed code=PARSE_FAILED_CLOSED"
+            )
+            raise ParseFailedError(
+                message=(
+                    "Column provenance could not be extracted for this table "
+                    "(it may not be in the catalog). Sample rejected — fail-closed."
+                ),
+                code="PARSE_FAILED_CLOSED",
+            ) from exc
+
+        if scope:
+            forbidden = {
+                f"{db_tbl}.{col}"
+                for db_tbl, col in uses
+                if not db_tbl.startswith("scratch.")
+                and f"{db_tbl}.{col}" not in scope
+            }
+
+            if forbidden:
+                logger.warning(
+                    "sample_rows: column scope violation forbidden_count=%d code=COLUMN_SCOPE_VIOLATION",
+                    len(forbidden),
+                )
+                raise ColumnScopeError(
+                    message=(
+                        "This table has columns outside your permitted scope. "
+                        "sampleRows cannot partially project columns — request "
+                        "access to all of the table's columns, or use runQuery "
+                        "with an explicit column list within your scope."
+                    ),
+                    code="COLUMN_SCOPE_VIOLATION",
+                )
+    # ---------------------------------------------------------------------------
 
     columns, rows = _execute(sql, settings)
 
