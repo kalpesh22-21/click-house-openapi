@@ -19,21 +19,33 @@ Key design decisions:
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from fastapi import HTTPException
 
+from app.catalog import get_catalog_schema
 from app.clickhouse_client import execute_query
 from app.config import Settings, get_settings
 from app.errors import (
     ClickHouseQueryError,
     ClickHouseUnavailableError,
+    ColumnScopeError,
     DatabaseNotAllowedError,
+    ParseFailedError,
     QueryValidationError,
     TableNotFoundError,
 )
+from app.principal import get_current_scope, get_current_session_id
 from app.security import validate_and_sanitize
+from app.sqlparse import (
+    ProvenanceExtractionError,
+    ScratchSessionError,
+    extract_column_provenance,
+)
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -263,6 +275,67 @@ def run_query(
             message=exc.detail.get("error", "Query validation failed"),
             code=exc.detail.get("code", "QUERY_VALIDATION_ERROR"),
         ) from exc
+
+    # ---------------------------------------------------------------------------
+    # Column-scope and scratch-isolation enforcement (D57, D63, D64)
+    # ---------------------------------------------------------------------------
+    scope = get_current_scope()
+    session_id = get_current_session_id()
+
+    if scope is not None:
+        # Scope is set (HTTP/JWT transport) — enforce column-level access control.
+        catalog = get_catalog_schema()
+
+        try:
+            uses = extract_column_provenance(clean_sql, catalog, session_id=session_id)
+        except ScratchSessionError as exc:
+            # Scratch table belongs to a different session (D64).
+            logger.error(
+                "run_query: scratch session violation code=SCRATCH_SESSION_VIOLATION"
+            )
+            raise ColumnScopeError(
+                message="Query accesses a scratch table that does not belong to this session.",
+                code="SCRATCH_SESSION_VIOLATION",
+            ) from exc
+        except ProvenanceExtractionError as exc:
+            # Parse/qualify failed — fail-closed (D63): never execute.
+            logger.error(
+                "run_query: provenance extraction failed code=PARSE_FAILED_CLOSED"
+            )
+            raise ParseFailedError(
+                message=(
+                    "Column provenance could not be extracted from this query. "
+                    "Use explainQuery to diagnose, then resubmit."
+                ),
+                code="PARSE_FAILED_CLOSED",
+            ) from exc
+
+        # Empty frozenset == ALLOW-ALL: skip the column-allowlist check entirely.
+        # Only a non-empty scope enforces the column allowlist (D57).
+        # Scratch columns (database prefix == "scratch") are session-gated, not
+        # scope-gated (D69/OQ-4) — they are intentionally excluded regardless.
+        if scope:
+            forbidden = {
+                f"{db_tbl}.{col}"
+                for db_tbl, col in uses
+                if not db_tbl.startswith("scratch.")
+                and f"{db_tbl}.{col}" not in scope
+            }
+
+            if forbidden:
+                # Log only the count — column names are a secret (scope token content).
+                logger.warning(
+                    "run_query: column scope violation forbidden_count=%d code=COLUMN_SCOPE_VIOLATION",
+                    len(forbidden),
+                )
+                raise ColumnScopeError(
+                    message=(
+                        "Query references columns outside your permitted scope. "
+                        "Request access to the required columns or rewrite the query."
+                    ),
+                    code="COLUMN_SCOPE_VIOLATION",
+                )
+    # ---------------------------------------------------------------------------
 
     # Apply caller-supplied limit override.
     # The substitution pattern preserves a trailing OFFSET clause (captured in

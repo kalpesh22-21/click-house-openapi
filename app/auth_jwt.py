@@ -22,6 +22,7 @@ Both transports call :func:`validate_token`; on success it returns a
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Optional
 
@@ -156,5 +157,49 @@ def validate_token(token: str, settings: Optional[Settings] = None) -> Principal
                 status_code=403,
             )
 
+    # --- Extract column_scope claim ---
+    # Expected: a JSON-encoded list of "database.table.column" strings.
+    raw_scope = claims.get("column_scope")
+    if raw_scope is None:
+        logger.info("Token missing required 'column_scope' claim.")
+        raise JWTAuthError(
+            "Token is missing the required 'column_scope' claim.",
+            code="MISSING_SCOPE_CLAIM",
+            status_code=403,
+        )
+    if isinstance(raw_scope, str):
+        try:
+            scope_list = json.loads(raw_scope)
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.info("Token 'column_scope' claim is not valid JSON: %s", exc)
+            raise JWTAuthError(
+                "Token 'column_scope' claim is not a valid JSON list.",
+                code="MISSING_SCOPE_CLAIM",
+                status_code=403,
+            ) from exc
+    elif isinstance(raw_scope, list):
+        scope_list = raw_scope
+    else:
+        logger.info(
+            "Token 'column_scope' claim has unexpected type: %s", type(raw_scope).__name__
+        )
+        raise JWTAuthError(
+            "Token 'column_scope' claim must be a JSON list.",
+            code="MISSING_SCOPE_CLAIM",
+            status_code=403,
+        )
+    if not isinstance(scope_list, list) or not all(isinstance(s, str) for s in scope_list):
+        logger.info("Token 'column_scope' is not a list of strings.")
+        raise JWTAuthError(
+            "Token 'column_scope' claim must be a list of strings.",
+            code="MISSING_SCOPE_CLAIM",
+            status_code=403,
+        )
+    column_scope: frozenset[str] = frozenset(scope_list)
+
     subject = str(claims.get("sub", "")) or "unknown"
-    return Principal(subject=subject, claims=claims)
+    return Principal(
+        subject=subject,
+        claims=claims,
+        column_scope=column_scope,
+    )

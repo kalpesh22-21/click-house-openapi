@@ -152,6 +152,10 @@ def _mint(
         "nbf": now,
         "exp": now + ttl_seconds,
         "user_name": user_name,
+        # column_scope: empty list means no column restrictions (all columns permitted).
+        # Enforcement only fires when scope is non-empty and query uses disallowed columns.
+        # session_id is NOT a JWT claim — it is sent by the agent backend as X-Session-Id.
+        "column_scope": json.dumps([]),
     }
     if extra_claims:
         claims.update(extra_claims)

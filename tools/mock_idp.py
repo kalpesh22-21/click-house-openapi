@@ -74,6 +74,10 @@ def mint_token(
 
     *ttl* is seconds until expiry; pass a negative value to mint an expired
     token for negative tests.  The `kid` header must match the JWKS `kid`.
+
+    Includes ``column_scope`` (empty JSON list — no column restrictions) so tokens
+    pass validate_token's required-claim checks out of the box.
+    session_id is NOT a JWT claim — it flows via the X-Session-Id request header.
     """
     now = int(time.time())
     claims: dict[str, Any] = {
@@ -84,6 +88,10 @@ def mint_token(
         "nbf": now,
         "exp": now + ttl,
         "user_name": user_name,
+        # column_scope: empty list means no column restrictions (all columns permitted).
+        # Enforcement only fires when scope is non-empty and query uses disallowed columns.
+        # session_id is NOT a JWT claim — it is sent by the agent backend as X-Session-Id.
+        "column_scope": json.dumps([]),
     }
     if extra_claims:
         claims.update(extra_claims)

@@ -556,6 +556,126 @@ class TestJWTAuthMiddleware:
         anyio.run(driver)
         assert seen["type"] == "lifespan"
 
+    def test_x_session_id_header_sets_current_session_id(self):
+        """X-Session-Id header value is propagated to current_session_id ContextVar."""
+        from app.principal import get_current_session_id
+
+        captured = {}
+
+        async def inner_capturing(scope, receive, send):
+            captured["session_id"] = get_current_session_id()
+            from starlette.responses import PlainTextResponse
+            resp = PlainTextResponse("ok")
+            await resp(scope, receive, send)
+
+        mw = JWTAuthMiddleware(inner_capturing, settings=get_settings())
+        client = TestClient(mw, raise_server_exceptions=False)
+        resp = client.get(
+            "/mcp",
+            headers={
+                "Authorization": f"Bearer {make_jwt()}",
+                "X-Session-Id": "sess-xyz-789",
+            },
+        )
+        assert resp.status_code == 200
+        assert captured["session_id"] == "sess-xyz-789"
+
+    def test_absent_x_session_id_sets_current_session_id_to_none(self):
+        """Missing X-Session-Id header → current_session_id is None."""
+        from app.principal import get_current_session_id
+
+        captured = {}
+
+        async def inner_capturing(scope, receive, send):
+            captured["session_id"] = get_current_session_id()
+            from starlette.responses import PlainTextResponse
+            resp = PlainTextResponse("ok")
+            await resp(scope, receive, send)
+
+        mw = JWTAuthMiddleware(inner_capturing, settings=get_settings())
+        client = TestClient(mw, raise_server_exceptions=False)
+        resp = client.get(
+            "/mcp",
+            headers={"Authorization": f"Bearer {make_jwt()}"},
+        )
+        assert resp.status_code == 200
+        assert captured["session_id"] is None
+
+    def test_e2e_scratch_cross_session_via_x_session_id_header(self):
+        """End-to-end: X-Session-Id header value reaches run_query's scratch check.
+
+        Drives the full JWTAuthMiddleware-wrapped MCP streamable-HTTP app with a
+        real tools/call JSON-RPC request (stateless mode, lifespan started by
+        TestClient context manager).  The SQL references a scratch table owned by
+        a DIFFERENT session — the middleware reads X-Session-Id: sess-abc, sets
+        current_session_id, and the service enforcement raises
+        ColumnScopeError(SCRATCH_SESSION_VIOLATION).  The MCP layer converts it to
+        a ToolError and the response carries isError=true with the code in the text.
+        execute_query must NOT be called.
+        """
+        import json as _json
+
+        # Minimal catalog — only warehouse tables; scratch is not catalogued.
+        _catalog = {
+            "analytics.employees": {
+                "employee_id": "UInt64",
+                "department": "String",
+            },
+        }
+        # Grant all warehouse columns so column-scope enforcement does not interfere.
+        _scope_jwt = make_jwt(
+            column_scope=[
+                "analytics.employees.employee_id",
+                "analytics.employees.department",
+            ]
+        )
+        # SQL references scratch.s_othersession_foo — owned by a DIFFERENT session.
+        # The caller's session (from X-Session-Id) is "sess-abc".
+        sql = (
+            "SELECT e.employee_id FROM scratch.s_othersession_foo AS s "
+            "JOIN analytics.employees AS e ON s.employee_id = e.employee_id"
+        )
+        tools_call_payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "runQuery", "arguments": {"sql": sql}},
+        }
+
+        from app.mcp_server import mcp
+
+        authed_app = JWTAuthMiddleware(mcp.streamable_http_app(), settings=get_settings())
+
+        with patch("app.service.execute_query") as mock_execute:
+            with patch("app.service.get_catalog_schema", return_value=_catalog):
+                with TestClient(authed_app, raise_server_exceptions=False) as client:
+                    resp = client.post(
+                        "/mcp",
+                        json=tools_call_payload,
+                        headers={
+                            "Authorization": f"Bearer {_scope_jwt}",
+                            "Accept": "application/json, text/event-stream",
+                            "X-Session-Id": "sess-abc",
+                        },
+                    )
+
+        assert resp.status_code == 200
+        # Response is SSE; extract the JSON from the "data:" line.
+        data_line = next(
+            line[len("data:"):].strip()
+            for line in resp.text.splitlines()
+            if line.startswith("data:")
+        )
+        result = _json.loads(data_line)
+        tool_result = result["result"]
+        # The MCP layer must mark the result as an error (isError=true).
+        assert tool_result["isError"] is True
+        # The ToolError text must carry the SCRATCH_SESSION_VIOLATION code.
+        error_text = tool_result["content"][0]["text"]
+        assert "SCRATCH_SESSION_VIOLATION" in error_text
+        # execute_query must NOT have been called — enforcement fires before execution.
+        mock_execute.assert_not_called()
+
 
 # ===========================================================================
 # 9. HTTP startup guard — must fail closed when OIDC auth is not configured

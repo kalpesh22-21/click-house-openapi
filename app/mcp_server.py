@@ -66,11 +66,13 @@ from starlette.responses import JSONResponse
 
 from app.auth_jwt import JWTAuthError, validate_token
 from app.config import get_settings
-from app.principal import current_principal
+from app.principal import current_principal, current_scope, current_session_id
 from app.errors import (
     ClickHouseQueryError,
     ClickHouseUnavailableError,
+    ColumnScopeError,
     DatabaseNotAllowedError,
+    ParseFailedError,
     QueryValidationError,
     TableNotFoundError,
 )
@@ -153,6 +155,18 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
         return ToolError(
             f"[{exc.code}] {exc.message}. "
             "The ClickHouse server is temporarily unreachable."
+        )
+    if isinstance(exc, ColumnScopeError):
+        return ToolError(
+            f"[{exc.code}] This query references columns outside your permitted scope. "
+            "Request access to the required columns or rewrite the query to use "
+            "only columns within your scope."
+        )
+    if isinstance(exc, ParseFailedError):
+        return ToolError(
+            f"[{exc.code}] The query could not be parsed for column-scope verification "
+            "and was rejected without execution. "
+            "Call explainQuery to diagnose SQL syntax issues, then resubmit."
         )
     # Log full detail server-side so operators can investigate, but return a
     # generic message to the LLM to avoid leaking internal stack traces or
@@ -314,6 +328,20 @@ def explain_query(
 # HTTP transport: Bearer auth middleware
 # ---------------------------------------------------------------------------
 
+# Header name for the session identifier, sent by the agent backend per-request.
+# The trusted agent backend is expected to always include this header so that
+# scratch-table session isolation (D64) applies.
+#
+# If the header is absent, current_session_id is set to None.  None does NOT
+# silently allow all scratch access: the provenance extractor still runs and any
+# scratch table reference will fail at the catalogue-lookup step — the scratch
+# database is not in the allowed-databases catalogue, so the extractor raises
+# ProvenanceExtractionError (fail-closed, D63), and the query is rejected.
+# The session_id=None path in the extractor only skips the *owner-prefix* check;
+# the table still has to resolve against the catalogue to proceed.
+SESSION_ID_HEADER = "x-session-id"
+
+
 def _bearer_from_scope(scope: dict[str, Any]) -> Optional[str]:
     """Extract the Bearer token from an ASGI scope, or None if absent/malformed."""
     for name, value in scope.get("headers", []):
@@ -323,6 +351,16 @@ def _bearer_from_scope(scope: dict[str, Any]) -> Optional[str]:
                 token = header[len("Bearer "):].strip()
                 return token or None
             return None
+    return None
+
+
+def _session_id_from_scope(scope: dict[str, Any]) -> Optional[str]:
+    """Extract the X-Session-Id header from an ASGI scope, or None if absent/empty."""
+    target = SESSION_ID_HEADER.encode("latin-1")
+    for name, value in scope.get("headers", []):
+        if name == target:
+            decoded = value.decode("latin-1").strip()
+            return decoded or None
     return None
 
 
@@ -379,8 +417,8 @@ class JWTAuthMiddleware:
     Why pure-ASGI rather than BaseHTTPMiddleware: BaseHTTPMiddleware runs the
     downstream app in a separate task, so a ContextVar set in it does NOT reach
     the MCP tool functions.  A pure-ASGI middleware awaits the app in the SAME
-    context, so ``current_principal`` set here propagates into the tool call (and
-    into the anyio threadpool that runs the sync tools).
+    async task, so ``current_principal`` set here is directly visible to FastMCP
+    sync tools (which run inline in the event loop, not on a threadpool).
 
     Default-deny: every request is rejected unless it carries a valid token,
     except an explicit public-path allowlist (default: /health for k8s probes).
@@ -464,11 +502,20 @@ class JWTAuthMiddleware:
             )
             return
 
+        # scope ← JWT claim (principal.column_scope)
+        # session_id ← X-Session-Id request header (not a JWT claim)
+        # The trusted agent backend is expected to always send X-Session-Id;
+        # absent header → None → extractor skips scratch-table validation.
+        session_id_value = _session_id_from_scope(scope)
         ctx_token = current_principal.set(principal)
+        scope_token = current_scope.set(principal.column_scope)
+        session_token = current_session_id.set(session_id_value)
         try:
             await self.app(scope, receive, send)
         finally:
             current_principal.reset(ctx_token)
+            current_scope.reset(scope_token)
+            current_session_id.reset(session_token)
 
 
 # ---------------------------------------------------------------------------
