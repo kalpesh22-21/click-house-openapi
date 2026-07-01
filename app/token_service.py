@@ -35,7 +35,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.algorithms import RSAAlgorithm
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -139,11 +139,18 @@ def _mint(
     user_name: str,
     sub: Optional[str] = None,
     ttl: Optional[int] = None,
+    column_scope: Optional[list[str]] = None,
     extra_claims: Optional[dict[str, Any]] = None,
 ) -> tuple[str, int]:
-    """Mint a signed JWT for *user_name*. Returns (token, ttl_seconds)."""
+    """Mint a signed JWT for *user_name*. Returns (token, ttl_seconds).
+
+    *column_scope* is the list of "database.table.column" triples to embed.
+    ``None`` or ``[]`` both produce an allow-all token (empty JSON list).
+    A non-empty list produces a restricted token that the MCP enforces.
+    """
     now = int(time.time())
     ttl_seconds = ttl or settings.token_ttl_seconds
+    scope_list = column_scope or []
     claims: dict[str, Any] = {
         "sub": sub or f"user:{user_name}",
         "iss": settings.token_issuer,
@@ -152,15 +159,21 @@ def _mint(
         "nbf": now,
         "exp": now + ttl_seconds,
         "user_name": user_name,
-        # column_scope: empty list means no column restrictions (all columns permitted).
-        # Enforcement only fires when scope is non-empty and query uses disallowed columns.
+        # column_scope: empty list = allow-all (no column restrictions).
+        # A non-empty list = restricted scope; enforcement fires in the MCP layer.
         # session_id is NOT a JWT claim — it is sent by the agent backend as X-Session-Id.
-        "column_scope": json.dumps([]),
+        "column_scope": json.dumps(scope_list),
     }
     if extra_claims:
         claims.update(extra_claims)
     token = jwt.encode(
         claims, private_key, algorithm=settings.token_algorithm, headers={"kid": kid}
+    )
+    logger.debug(
+        "Minted token: user=%s scope_size=%d kid=%s",
+        user_name,
+        len(scope_list),
+        kid,
     )
     return token, ttl_seconds
 
@@ -175,7 +188,29 @@ class TokenRequest(BaseModel):
     ttl_seconds: Optional[int] = Field(
         None, ge=1, le=86_400_000, description="Token lifetime override (1s–24h)."
     )
+    column_scope: Optional[list[str]] = Field(
+        None,
+        description=(
+            "Optional list of 'database.table.column' triples. "
+            "Omitted or empty = allow-all (no column restrictions). "
+            "Non-empty = restricted token enforced by the MCP layer."
+        ),
+    )
     claims: Optional[dict[str, Any]] = Field(None, description="Extra non-reserved claims to include.")
+
+    @field_validator("column_scope")
+    @classmethod
+    def _validate_column_scope(cls, v: Optional[list[str]]) -> Optional[list[str]]:
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            raise ValueError("column_scope must be a list of strings")
+        for item in v:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(
+                    "each entry in column_scope must be a non-empty string"
+                )
+        return v
 
 
 class TokenResponse(BaseModel):
@@ -279,9 +314,15 @@ def create_app(settings: Optional[TokenSettings] = None) -> FastAPI:
             user_name=body.user_name,
             sub=body.sub,
             ttl=body.ttl_seconds,
+            column_scope=body.column_scope,
             extra_claims=body.claims,
         )
         return TokenResponse(access_token=token, expires_in=ttl, user_name=body.user_name, kid=kid)
 
-    logger.info("Token service ready: issuer=%s audience=%s kid=%s", issuer, settings.token_audience, kid)
+    logger.info(
+        "Token service ready: issuer=%s audience=%s kid=%s",
+        issuer,
+        settings.token_audience,
+        kid,
+    )
     return app
