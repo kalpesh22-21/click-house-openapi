@@ -220,21 +220,26 @@ class TestD64ScratchNoSessionIdNoCheck:
         # No catalog query was needed
         mock_catalog.assert_not_called()
 
-    def test_D64_scope_set_but_no_session_id_passes(self, mock_execute, mock_catalog):
-        """When scope is set but session_id is None, scratch validation is skipped
-        (session_id=None is the 'skip validation' sentinel in the extractor).
+    def test_D64_scope_set_but_no_session_id_fails_closed_on_scratch(
+        self, mock_execute, mock_catalog
+    ):
+        """When scope is set but session_id is None, a scratch reference now FAILS
+        CLOSED (auth-hardening Slice 1 / D64): a scratch table whose owning session
+        is unknown can never be proven to belong to the caller.
 
-        Note: scratch column names must NOT overlap with catalog column names to
-        avoid triggering the step-8 fail-closed path on unresolved column names.
+        This is the reconciliation of the omit-the-header bypass — previously this
+        path silently passed (session_id=None was a 'skip validation' sentinel),
+        which let a scoped caller read another session's scratch by dropping the
+        X-Session-Id header. It must now reject before execution.
         """
         sql = (
             "SELECT hire_date_override "
             "FROM scratch.s_sess_abc_data"
         )
-        # session_id=None with scope set → extractor skips session validation
-        result = _run_with_scope(sql, _FULL_SCOPE, session_id=None)
-        assert result is not None
-        mock_execute.assert_called_once()
+        with pytest.raises(ColumnScopeError) as exc_info:
+            _run_with_scope(sql, _FULL_SCOPE, session_id=None)
+        assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
+        mock_execute.assert_not_called()
 
 
 class TestD64ScratchIsolationSurvivesAllowAll:

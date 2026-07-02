@@ -76,6 +76,7 @@ from app.errors import (
     QueryValidationError,
     TableNotFoundError,
 )
+from app.session_binding import sid_hash_matches
 from app.service import (
     explain_query as svc_explain_query,
     get_table_schema as svc_get_table_schema,
@@ -339,12 +340,16 @@ def explain_query(
 # scratch-table session isolation (D64) applies.
 #
 # If the header is absent, current_session_id is set to None.  None does NOT
-# silently allow all scratch access: the provenance extractor still runs and any
-# scratch table reference will fail at the catalogue-lookup step — the scratch
-# database is not in the allowed-databases catalogue, so the extractor raises
-# ProvenanceExtractionError (fail-closed, D63), and the query is rejected.
-# The session_id=None path in the extractor only skips the *owner-prefix* check;
-# the table still has to resolve against the catalogue to proceed.
+# allow cross-session scratch access: for a scoped caller, the provenance
+# extractor (app/sqlparse/provenance.py::_validate_scratch_name) FAILS CLOSED on
+# any scratch.* reference when session_id is None — a scratch table whose owning
+# session is unknown can never be proven to belong to the caller (D64,
+# auth-hardening Slice 1).  This is what closes the "omit the X-Session-Id header
+# to read another session's scratch" bypass: the sid_hash binding check below
+# only fires when the header is *present*, so the extractor's None-fail-closed is
+# the defense for the header-absent case.  (The stdio/local-trust path —
+# current_scope is None — skips the extractor entirely and is a separate,
+# intentionally-trusted transport.)
 SESSION_ID_HEADER = "x-session-id"
 
 
@@ -513,6 +518,42 @@ class JWTAuthMiddleware:
         # The trusted agent backend is expected to always send X-Session-Id;
         # absent header → None → extractor skips scratch-table validation.
         session_id_value = _session_id_from_scope(scope)
+
+        # --- X-Session-Id ↔ sid_hash binding (auth-hardening Slice 1) ---
+        # If the request carries a session id, it MUST hash to the token's
+        # 'sid_hash' claim; otherwise a caller holding one valid JWT could set
+        # X-Session-Id to another user's session and read their scratch/PII (the
+        # scratch gate downstream trusts this header). Reject BEFORE binding the
+        # session into the context / running any tool. Fail-closed (D63/D64):
+        # a present header with a missing/mismatched claim is rejected. A
+        # session-less request (no header) is unaffected. Gated by
+        # require_sid_binding for the mint-then-enforce transition.
+        if session_id_value is not None and self.settings.require_sid_binding:
+            claim = principal.claims.get("sid_hash")
+            if not isinstance(claim, str) or not claim or not sid_hash_matches(
+                session_id_value, claim
+            ):
+                logger.info(
+                    "MCP auth rejected: path=%s status=403 code=SESSION_BINDING_MISMATCH "
+                    "sub=%s — X-Session-Id does not match the token's sid_hash claim",
+                    path,
+                    principal.subject,
+                )
+                await _send_json_response(
+                    send,
+                    403,
+                    {
+                        "error": "Session binding mismatch.",
+                        "code": "SESSION_BINDING_MISMATCH",
+                    },
+                    www_authenticate=_www_authenticate(
+                        self.settings,
+                        error="insufficient_scope",
+                        description="X-Session-Id does not match the token's session binding.",
+                    ),
+                )
+                return
+
         ctx_token = current_principal.set(principal)
         scope_token = current_scope.set(principal.column_scope)
         session_token = current_session_id.set(session_id_value)

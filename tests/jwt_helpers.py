@@ -52,6 +52,7 @@ def make_jwt(
     include_user_name: bool = True,
     include_column_scope: bool = True,
     column_scope: list | None = None,
+    session_id: str | None = None,
     extra_claims: dict | None = None,
 ) -> str:
     """Mint a signed JWT for tests.
@@ -86,6 +87,13 @@ def make_jwt(
     if include_column_scope:
         scope_list = column_scope if column_scope is not None else []
         claims["column_scope"] = _json.dumps(scope_list)
+    if session_id is not None:
+        # Bind the token to this session id exactly as app.token_service does, so
+        # a request carrying X-Session-Id=<session_id> passes the MCP's sid_hash
+        # check. Reuses the production encoding (single source of truth).
+        from app.session_binding import sid_hash
+
+        claims["sid_hash"] = sid_hash(session_id)
     if extra_claims:
         claims.update(extra_claims)
 

@@ -285,6 +285,94 @@ class TestColumnScopeIssuance:
         assert resp.status_code == 422
 
 
+class TestSessionIdBinding:
+    """The token service stamps a sid_hash claim iff a session_id is supplied
+    (auth-hardening Slice 1). This is the mint-side half of the binding contract.
+    """
+
+    @staticmethod
+    def _payload(token: str) -> dict:
+        import base64
+        import json as _json
+
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        return _json.loads(base64.urlsafe_b64decode(payload_b64))
+
+    def test_session_id_stamps_sid_hash_claim(self, client):
+        """POST /token with session_id → JWT carries sid_hash = b64url(sha256(session_id))."""
+        from app.session_binding import sid_hash
+
+        session_id = "sess-uuid-1234"
+        resp = client.post(
+            "/token",
+            json={"user_name": "mallory", "session_id": session_id},
+            headers=_ISSUER_AUTH,
+        )
+        assert resp.status_code == 200, resp.text
+        payload = self._payload(resp.json()["access_token"])
+        assert payload["sid_hash"] == sid_hash(session_id)
+
+    def test_omitted_session_id_stamps_no_sid_hash(self, client):
+        """POST /token without session_id → token carries NO sid_hash (generic token)."""
+        resp = client.post("/token", json={"user_name": "trent"}, headers=_ISSUER_AUTH)
+        assert resp.status_code == 200, resp.text
+        payload = self._payload(resp.json()["access_token"])
+        assert "sid_hash" not in payload
+
+    def test_extra_claims_cannot_override_sid_hash(self, client):
+        """A caller-supplied claims={'sid_hash': <forged>} is rejected (422), so the
+        service-computed binding can never be shadowed (reviewer S2)."""
+        resp = client.post(
+            "/token",
+            json={
+                "user_name": "eve",
+                "session_id": "sess-real",
+                "claims": {"sid_hash": "Zm9yZ2Vk"},  # attacker-chosen hash
+            },
+            headers=_ISSUER_AUTH,
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_extra_claims_cannot_override_reserved_names(self, client):
+        """sub / column_scope / exp / user_name are equally protected from injection."""
+        for reserved in ("sub", "column_scope", "exp", "user_name", "iss", "aud"):
+            resp = client.post(
+                "/token",
+                json={"user_name": "eve", "claims": {reserved: "x"}},
+                headers=_ISSUER_AUTH,
+            )
+            assert resp.status_code == 422, f"{reserved} must be rejected: {resp.text}"
+
+    def test_non_reserved_extra_claim_still_allowed(self, client):
+        """A genuinely extra (non-reserved) claim is still embedded — the guard is
+        surgical, not a blanket ban on extra claims."""
+        resp = client.post(
+            "/token",
+            json={"user_name": "eve", "claims": {"department": "eng"}},
+            headers=_ISSUER_AUTH,
+        )
+        assert resp.status_code == 200, resp.text
+        assert self._payload(resp.json()["access_token"])["department"] == "eng"
+
+    def test_sid_hash_rides_with_column_scope(self, client):
+        """session_id + column_scope both present → both claims stamped independently."""
+        from app.session_binding import sid_hash
+
+        scope = ["db.t.a"]
+        resp = client.post(
+            "/token",
+            json={"user_name": "peggy", "column_scope": scope, "session_id": "s-9"},
+            headers=_ISSUER_AUTH,
+        )
+        assert resp.status_code == 200, resp.text
+        import json as _json
+
+        payload = self._payload(resp.json()["access_token"])
+        assert payload["sid_hash"] == sid_hash("s-9")
+        assert payload["column_scope"] == _json.dumps(scope)
+
+
 class TestColumnScopeMintValidateRoundTrip:
     """Mint a scoped token via token_service, then run it through validate_token.
 

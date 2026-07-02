@@ -143,6 +143,24 @@ class Settings(BaseSettings):
     mcp_port: int = Field(8000, description="Port the MCP HTTP server listens on (default 8000)")
     mcp_path: str = Field("/mcp", description="Mount path for the MCP streamable-HTTP endpoint")
 
+    # --- X-Session-Id ↔ JWT binding (auth-hardening Slice 1) ---
+    # When true, any MCP HTTP request that carries an X-Session-Id header MUST
+    # also carry a matching 'sid_hash' JWT claim (base64url(sha256(session_id)));
+    # a mismatch or a missing claim is rejected 403 SESSION_BINDING_MISMATCH,
+    # before the request reaches the scratch-isolation extractor.  This closes
+    # the session-hijack gap (a caller sending another user's session id).
+    # Defaults true (fail-closed / deploy posture); a short-lived false is the
+    # mint-then-enforce transition escape hatch (remove once every minting path
+    # stamps sid_hash — see the design's OQ-2).  Session-less requests (no
+    # X-Session-Id header) are unaffected regardless of this flag.
+    require_sid_binding: bool = Field(
+        True,
+        description=(
+            "Require a matching 'sid_hash' JWT claim whenever an X-Session-Id "
+            "header is present (session-hijack protection). Fail-closed default."
+        ),
+    )
+
     # --- OpenAPI / GPT Action ---
     public_base_url: str = Field(
         "https://your-public-host.example.com",
