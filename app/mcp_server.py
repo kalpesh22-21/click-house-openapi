@@ -590,6 +590,9 @@ async def health_check(request: Request) -> JSONResponse:
             "status": "ok",
             "clickhouse": "ok" if ch_ok else "error",
             "transport": "http",
+            # Advertise the scratch-write side-channel contract version so a
+            # runtime can assert the capability at startup (contract §Q6).
+            "scratch_api": "v1",
         }
     )
 
@@ -626,6 +629,109 @@ if settings.mcp_path not in ("", "/"):
         f"/.well-known/oauth-protected-resource{settings.mcp_path}",
         methods=["GET"],
     )(oauth_protected_resource)
+
+
+# ---------------------------------------------------------------------------
+# Scratch-write side-channel (table-intermediate Slice 1) — HTTP transport only
+#
+# These are PRIVILEGED, NON-TOOL routes (D19).  They are NOT registered with
+# @mcp.tool — the agent LLM never sees them and cannot call them (invariant #5).
+# They ride as custom HTTP routes on the same MCP app, so JWTAuthMiddleware
+# validates the JWT and (D92) binds `current_session_id` from X-Session-Id BEFORE
+# a handler runs.  The scratch table name derives ONLY from that bound session_id
+# (never the request body), so a caller can only write to its OWN scratch
+# namespace (isolation invariant #2).  The ClickHouse write itself runs under a
+# distinct, server-side scratch-only credential (invariant #1) via
+# app.scratch_ingest.  Row cells are native-bulk-inserted as DATA (invariant #4).
+# ---------------------------------------------------------------------------
+
+from app.scratch_ingest import (  # noqa: E402
+    ScratchWriteError,
+    drop as scratch_drop,
+    materialize as scratch_materialize,
+)
+
+
+def _scratch_error(status_code: int, code: str, message: str) -> JSONResponse:
+    """Consistent JSON error shape for the scratch routes."""
+    return JSONResponse({"error": message, "code": code}, status_code=status_code)
+
+
+@mcp.custom_route("/scratch/v1/materialize", methods=["POST"])
+async def scratch_materialize_route(request: Request) -> JSONResponse:
+    """Create a session-scoped scratch table and native-bulk-load the rows.
+
+    Auth: JWTAuthMiddleware (JWT validated + X-Session-Id ↔ sid_hash bound, D92).
+    The table name is derived from the bound session_id ONLY — a body-supplied
+    table/session is ignored.  Returns {"table", "row_count"}.
+    """
+    session_id = current_session_id.get()
+    if not session_id:
+        return _scratch_error(
+            400,
+            "SCRATCH_SESSION_MISSING",
+            "X-Session-Id is required to materialize a scratch table.",
+        )
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return _scratch_error(
+            400, "SCRATCH_MATERIALIZE_REJECTED", "Request body must be valid JSON."
+        )
+    if not isinstance(body, dict):
+        return _scratch_error(
+            400, "SCRATCH_MATERIALIZE_REJECTED", "Request body must be a JSON object."
+        )
+    columns = body.get("columns")
+    rows = body.get("rows")
+    settings_now = get_settings()
+    try:
+        # ClickHouse I/O is blocking; run it off the event loop so the MCP app
+        # stays responsive.  session_id is passed explicitly (not re-read from the
+        # context inside the thread).
+        result = await anyio.to_thread.run_sync(
+            scratch_materialize, session_id, columns, rows, settings_now
+        )
+    except ScratchWriteError as exc:
+        return _scratch_error(exc.status_code, exc.code, exc.message)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("scratch materialize failed: %s", exc)
+        return _scratch_error(
+            500, "SCRATCH_MATERIALIZE_REJECTED", "An internal error occurred."
+        )
+    return JSONResponse(result)
+
+
+@mcp.custom_route("/scratch/v1/drop", methods=["POST"])
+async def scratch_drop_route(request: Request) -> JSONResponse:
+    """Best-effort drop of a scratch table the caller's session owns.
+
+    A cross-session drop (table prefix != s_<bound-session>_) is rejected 403
+    SCRATCH_SESSION_VIOLATION.  The TTL is the real cleanup guarantee.
+    """
+    session_id = current_session_id.get()
+    if not session_id:
+        return _scratch_error(
+            400, "SCRATCH_SESSION_MISSING", "X-Session-Id is required to drop a scratch table."
+        )
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return _scratch_error(
+            400, "SCRATCH_MATERIALIZE_REJECTED", "Request body must be valid JSON."
+        )
+    table = body.get("table") if isinstance(body, dict) else None
+    settings_now = get_settings()
+    try:
+        result = await anyio.to_thread.run_sync(
+            scratch_drop, session_id, table, settings_now
+        )
+    except ScratchWriteError as exc:
+        return _scratch_error(exc.status_code, exc.code, exc.message)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("scratch drop failed: %s", exc)
+        return _scratch_error(500, "SCRATCH_MATERIALIZE_REJECTED", "An internal error occurred.")
+    return JSONResponse(result)
 
 
 # ---------------------------------------------------------------------------

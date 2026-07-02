@@ -161,6 +161,56 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Scratch-write side-channel (table-intermediate Slice 1) ---
+    # The scratch-write endpoints (/scratch/v1/materialize, /scratch/v1/drop) run
+    # under a DISTINCT, server-side-only ClickHouse credential that is GRANTed
+    # CREATE/INSERT/DROP/SELECT on the `scratch` database ONLY — never the
+    # warehouse.  The runtime never holds this credential; the privilege lives in
+    # MCP deploy config.  When these SCRATCH_CH_* fields are left unset they fall
+    # back to the main CLICKHOUSE_* connection (dev/single-user convenience); a
+    # production deploy MUST set SCRATCH_CH_USER / SCRATCH_CH_PASSWORD to the
+    # scratch-only account so the grant confines the blast radius (invariant #1).
+    scratch_ch_host: str = Field(
+        "", description="Scratch-credential ClickHouse host (falls back to CLICKHOUSE_HOST)."
+    )
+    scratch_ch_port: int = Field(
+        0, description="Scratch-credential ClickHouse port (0 → falls back to CLICKHOUSE_PORT)."
+    )
+    scratch_ch_user: str = Field(
+        "", description="Scratch-only ClickHouse username (falls back to CLICKHOUSE_USER)."
+    )
+    scratch_ch_password: Optional[str] = Field(
+        None,
+        description=(
+            "Scratch-only ClickHouse password (secret). None → falls back to "
+            "CLICKHOUSE_PASSWORD. Set explicitly (even to empty) to override."
+        ),
+    )
+    scratch_ch_secure: Optional[bool] = Field(
+        None, description="TLS for the scratch credential (None → falls back to CLICKHOUSE_SECURE)."
+    )
+    scratch_database: str = Field(
+        "scratch",
+        description="ClickHouse database that holds session-scoped scratch tables (never the warehouse).",
+    )
+    scratch_ttl_seconds: int = Field(
+        3600,
+        ge=1,
+        description=(
+            "Wall-clock TTL (seconds) stamped on every scratch table so orphans from "
+            "a crash/abandoned pause GC themselves (D20/D45). Must exceed a human "
+            "approval-pause window (OQ-E)."
+        ),
+    )
+    scratch_max_rows: int = Field(
+        10_000,
+        ge=1,
+        description=(
+            "Hard cap on rows a single /scratch/v1/materialize may load. Over-cap is "
+            "rejected SCRATCH_TOO_LARGE so the runtime falls back to the raw loop (OQ-C)."
+        ),
+    )
+
     # --- OpenAPI / GPT Action ---
     public_base_url: str = Field(
         "https://your-public-host.example.com",
@@ -305,6 +355,33 @@ class Settings(BaseSettings):
             and self.oidc_issuer.strip()
             and self.oidc_audience.strip()
         )
+
+    def scratch_client_params(self) -> Dict[str, object]:
+        """Resolve the scratch-credential connection params (with CLICKHOUSE_* fallback).
+
+        Each SCRATCH_CH_* field independently overrides the corresponding main
+        CLICKHOUSE_* field; unset fields inherit the main connection.  This lets a
+        dev/single-user deploy run the scratch endpoints against the same account
+        while a production deploy points them at a scratch-only grant (invariant #1)
+        by setting SCRATCH_CH_USER / SCRATCH_CH_PASSWORD.
+        """
+        password = (
+            self.scratch_ch_password
+            if self.scratch_ch_password is not None
+            else self.clickhouse_password
+        )
+        secure = (
+            self.scratch_ch_secure
+            if self.scratch_ch_secure is not None
+            else self.clickhouse_secure
+        )
+        return {
+            "host": self.scratch_ch_host or self.clickhouse_host,
+            "port": self.scratch_ch_port or self.clickhouse_port,
+            "user": self.scratch_ch_user or self.clickhouse_user,
+            "password": password,
+            "secure": secure,
+        }
 
     def allowed_databases_list(self) -> Optional[List[str]]:
         """Return the parsed allowlist, or None if '*' (all databases allowed)."""
