@@ -160,11 +160,30 @@ def scratch_table_name(session_id: str) -> str:
     hostile session_id and enforces the pre-existing scratch contract that a
     session_id must be a safe SQL identifier (the unqualified ``scratch.s_..``
     name must parse without backtick quoting for the read gate to see it).
+
+    UNDERSCORE-FREE is enforced STRUCTURALLY here (HIGH fix): the D64 read gate
+    (``_validate_scratch_name``) recovers a table's owning session by extracting the
+    run after ``s_`` up to the NEXT ``_`` — which is only unambiguous when the
+    session_id itself contains no ``_``.  ``validate_identifier`` PERMITS ``_``, so
+    a session_id like ``a_b`` would otherwise mint ``s_a_b_bp_<hex>``, which the
+    read gate mis-attributes to session ``a`` (an ownership INVERSION: ``a`` reads
+    it, the true owner ``a_b`` is denied).  Rejecting a ``_``-containing session_id
+    at THIS write boundary makes the underscore-free invariant a structural
+    property of every scratch table that can exist — the read gate never faces an
+    ambiguous name — rather than a discipline enforced only at the UI BFF.
     """
     if not session_id:
         raise ScratchWriteError(
             "No bound session; cannot derive a scratch table name.",
             code="SCRATCH_SESSION_MISSING",
+        )
+    if "_" in session_id:
+        # Defense-in-depth for the D64 read gate's exact session extraction: an
+        # underscore-containing sid breaks the `_`-delimited ownership recovery.
+        raise ScratchWriteError(
+            "Session id must be underscore-free (the scratch namespace is "
+            "'_'-delimited; a '_' in the session id breaks ownership extraction).",
+            code="SCRATCH_MATERIALIZE_REJECTED",
         )
     name = f"s_{session_id}_bp_{uuid.uuid4().hex}"
     try:

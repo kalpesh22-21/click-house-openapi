@@ -99,14 +99,14 @@ def settings():
 
 class TestScratchTableName:
     def test_name_derives_from_session_prefix(self):
-        name = scratch_table_name("sess_abc123")
-        assert name.startswith("s_sess_abc123_bp_")
+        name = scratch_table_name("sessabc123")
+        assert name.startswith("s_sessabc123_bp_")
         # read-gate prefix contract (D64): startswith s_<session_id>_ and longer
-        assert name.startswith("s_sess_abc123_") and len(name) > len("s_sess_abc123_")
+        assert name.startswith("s_sessabc123_") and len(name) > len("s_sessabc123_")
 
     def test_two_names_in_one_session_are_distinct(self):
-        a = scratch_table_name("sess_abc123")
-        b = scratch_table_name("sess_abc123")
+        a = scratch_table_name("sessabc123")
+        b = scratch_table_name("sessabc123")
         assert a != b
 
     def test_empty_session_rejected(self):
@@ -202,13 +202,13 @@ class TestMaterialize:
     def test_native_insert_rows_are_data_not_sql(self, fake_client, settings):
         hostile = "a'; DROP TABLE analytics.employees; --"
         res = scratch_ingest.materialize(
-            "sess_abc123",
+            "sessabc123",
             [{"name": "k", "type": "Int64"}, {"name": "note", "type": "String"}],
             [[1, hostile], [2, "b"]],
             settings,
         )
         # name derived from session, scratch-qualified
-        assert res["table"].startswith("scratch.s_sess_abc123_bp_")
+        assert res["table"].startswith("scratch.s_sessabc123_bp_")
         assert res["row_count"] == 2
 
         # exactly one native insert; rows passed as data=, hostile cell verbatim
@@ -227,26 +227,26 @@ class TestMaterialize:
         create_db = [c for c in fake_client.commands if c.upper().startswith("CREATE DATABASE")]
         create_tbl = [c for c in fake_client.commands if c.upper().startswith("CREATE TABLE")]
         assert create_db and "scratch" in create_db[0]
-        assert create_tbl and "`scratch`.`s_sess_abc123_bp_" in create_tbl[0]
+        assert create_tbl and "`scratch`.`s_sessabc123_bp_" in create_tbl[0]
         assert fake_client.closed is True
 
     def test_body_cannot_override_table_name(self, fake_client, settings):
         # There is no table/session field in the contract; even if a caller smuggles
         # extra keys in a column dict they cannot influence the derived name.
         res = scratch_ingest.materialize(
-            "sess_owner",
+            "sessowner",
             [{"name": "k", "type": "Int64", "table": "scratch.s_victim_bp_x"}],
             [[1]],
             settings,
         )
-        assert res["table"].startswith("scratch.s_sess_owner_bp_")
+        assert res["table"].startswith("scratch.s_sessowner_bp_")
         assert "victim" not in res["table"]
 
     def test_oversized_result_fails_closed(self, fake_client, settings):
         capped = settings.model_copy(update={"scratch_max_rows": 3})
         with pytest.raises(ScratchTooLargeError) as e:
             scratch_ingest.materialize(
-                "sess_abc123",
+                "sessabc123",
                 [{"name": "k", "type": "Int64"}],
                 [[i] for i in range(4)],
                 capped,
@@ -260,7 +260,7 @@ class TestMaterialize:
     def test_ragged_row_rejected(self, fake_client, settings):
         with pytest.raises(ScratchWriteError) as e:
             scratch_ingest.materialize(
-                "sess_abc123",
+                "sessabc123",
                 [{"name": "k", "type": "Int64"}, {"name": "v", "type": "Int64"}],
                 [[1]],  # too short
                 settings,
@@ -270,7 +270,7 @@ class TestMaterialize:
     def test_string_cell_coerced_by_type(self, fake_client, settings):
         # A numeric string for an Int64 column is coerced to int native data.
         scratch_ingest.materialize(
-            "sess_abc123",
+            "sessabc123",
             [{"name": "k", "type": "Int64"}],
             [["42"]],
             settings,
@@ -394,23 +394,23 @@ class TestMaterializeRoute:
         resp = client.post(
             "/scratch/v1/materialize",
             headers={
-                "Authorization": f"Bearer {make_jwt(session_id='sess_owner')}",
-                "X-Session-Id": "sess_owner",
+                "Authorization": f"Bearer {make_jwt(session_id='sessowner')}",
+                "X-Session-Id": "sessowner",
             },
             json={
                 # A body attempt to name a foreign table/session is IGNORED.
                 "table": "scratch.s_victim_bp_x",
-                "session_id": "sess_victim",
+                "session_id": "sessvictim",
                 "columns": [{"name": "k", "type": "Int64"}],
                 "rows": [[1]],
             },
         )
         assert resp.status_code == 200
-        assert resp.json()["table"].startswith("scratch.s_sess_owner_bp_")
+        assert resp.json()["table"].startswith("scratch.s_sessowner_bp_")
         assert "victim" not in resp.json()["table"]
         # the DDL executed against the fake client targets the owner's namespace
         create = [c for c in fc.commands if c.upper().startswith("CREATE TABLE")]
-        assert create and "`scratch`.`s_sess_owner_bp_" in create[0]
+        assert create and "`scratch`.`s_sessowner_bp_" in create[0]
         assert "victim" not in create[0]
 
     def test_service_error_maps_to_code(self):
@@ -420,8 +420,8 @@ class TestMaterializeRoute:
         resp = client.post(
             "/scratch/v1/materialize",
             headers={
-                "Authorization": f"Bearer {make_jwt(session_id='sess_owner')}",
-                "X-Session-Id": "sess_owner",
+                "Authorization": f"Bearer {make_jwt(session_id='sessowner')}",
+                "X-Session-Id": "sessowner",
             },
             json={"columns": [{"name": "k", "type": "Array(Int64)"}], "rows": [[1]]},
         )
@@ -435,10 +435,10 @@ class TestDropRoute:
         resp = client.post(
             "/scratch/v1/drop",
             headers={
-                "Authorization": f"Bearer {make_jwt(session_id='sess_owner')}",
-                "X-Session-Id": "sess_owner",
+                "Authorization": f"Bearer {make_jwt(session_id='sessowner')}",
+                "X-Session-Id": "sessowner",
             },
-            json={"table": "scratch.s_sess_victim_bp_x"},
+            json={"table": "scratch.s_sessvictim_bp_x"},
         )
         assert resp.status_code == 403
         assert resp.json()["code"] == "SCRATCH_SESSION_VIOLATION"

@@ -142,18 +142,18 @@ class TestWarehouseWriteRefused:
         never even receives the body's table/database fields.
         """
         res = scratch_ingest.materialize(
-            "sess_owner",
+            "sessowner",
             [{"name": "k", "type": "Int64"}],
             [[1]],
             settings,
         )
-        assert res["table"].startswith("scratch.s_sess_owner_bp_")
+        assert res["table"].startswith("scratch.s_sessowner_bp_")
         sql = _all_sql(fake_client)
         # Nothing the attacker could name appears anywhere in the emitted SQL.
         assert WAREHOUSE not in sql
         assert "victim" not in sql
         create_tbl = [c for c in fake_client.commands if c.upper().startswith("CREATE TABLE")]
-        assert create_tbl and "`scratch`.`s_sess_owner_bp_" in create_tbl[0]
+        assert create_tbl and "`scratch`.`s_sessowner_bp_" in create_tbl[0]
         # Every command targets the scratch schema; no other database is named.
         for c in fake_client.commands:
             assert "`scratch`" in c or c.upper().startswith("CREATE DATABASE")
@@ -179,7 +179,7 @@ class TestWarehouseWriteRefused:
         if a connection is attempted)."""
         with pytest.raises(ScratchWriteError) as e:
             scratch_ingest.materialize(
-                "sess_owner",
+                "sessowner",
                 [{"name": bad_name, "type": "Int64"}],
                 [[1]],
                 settings,
@@ -202,7 +202,7 @@ class TestWarehouseWriteRefused:
     ):
         with pytest.raises(ScratchWriteError) as e:
             scratch_ingest.materialize(
-                "sess_owner",
+                "sessowner",
                 [{"name": "k", "type": bad_type}],
                 [[1]],
                 settings,
@@ -240,9 +240,9 @@ class TestWarehouseWriteRefused:
         # Yet the schema the code writes to is still exactly "scratch".
         assert s.scratch_database == "scratch"
         ddl = build_scratch_create_sql(
-            s.scratch_database, "s_sess_x_bp_abc", [{"name": "k", "type": "Int64"}], 3600
+            s.scratch_database, "s_sessx_bp_abc", [{"name": "k", "type": "Int64"}], 3600
         )
-        assert ddl.startswith("CREATE TABLE `scratch`.`s_sess_x_bp_abc`")
+        assert ddl.startswith("CREATE TABLE `scratch`.`s_sessx_bp_abc`")
         assert WAREHOUSE not in ddl
 
     def test_materialize_with_fallback_creds_still_targets_scratch(self, fake_client):
@@ -259,13 +259,13 @@ class TestWarehouseWriteRefused:
             public_base_url="https://test.example.com",
         )
         scratch_ingest.materialize(
-            "sess_x", [{"name": "k", "type": "Int64"}], [[1]], s
+            "sessx", [{"name": "k", "type": "Int64"}], [[1]], s
         )
         for c in fake_client.commands:
             if c.upper().startswith("CREATE DATABASE"):
                 assert "`scratch`" in c
             else:
-                assert "`scratch`.`s_sess_x_bp_" in c
+                assert "`scratch`.`s_sessx_bp_" in c
         assert fake_client.inserts[0]["database"] == "scratch"
 
 
@@ -323,9 +323,9 @@ class TestCrossSession:
     def test_write_name_is_header_derived_cannot_forge_other_session(self):
         """Session B can only ever produce an s_<B>_ name — there is no code path
         that yields an s_<A>_ name for a caller bound to B (isolation invariant #2)."""
-        b = scratch_table_name("sess_b")
-        assert b.startswith("s_sess_b_bp_")
-        assert "sess_a" not in b
+        b = scratch_table_name("sessb")
+        assert b.startswith("s_sessb_bp_")
+        assert "sessa" not in b
 
 
 # ===========================================================================
@@ -344,7 +344,7 @@ class TestRowsAsData:
             one_mb,
         ]
         cols = [{"name": f"c{i}", "type": "String"} for i in range(len(cells))]
-        res = scratch_ingest.materialize("sess_x", cols, [cells], settings)
+        res = scratch_ingest.materialize("sessx", cols, [cells], settings)
         assert res["row_count"] == 1
         # Exactly one native insert; every hostile cell verbatim in data=, not SQL.
         assert len(fake_client.inserts) == 1
@@ -362,7 +362,7 @@ class TestRowsAsData:
         """Fewer OR more cells than columns → reject BEFORE any connection/DDL."""
         with pytest.raises(ScratchWriteError) as e:
             scratch_ingest.materialize(
-                "sess_x",
+                "sessx",
                 [{"name": "a", "type": "Int64"}, {"name": "b", "type": "Int64"}],
                 [row],
                 settings,
@@ -376,14 +376,14 @@ class TestRowsAsData:
         security hole (the value never reaches SQL), but callers must be aware the
         write does not fail on a type-mismatched cell."""
         scratch_ingest.materialize(
-            "sess_x", [{"name": "k", "type": "Int64"}], [["not-a-number"]], settings
+            "sessx", [{"name": "k", "type": "Int64"}], [["not-a-number"]], settings
         )
         assert fake_client.inserts[0]["data"] == [[None]]
 
     def test_non_string_cell_passes_through_untouched(self, fake_client, settings):
         """int/float/bool/None cells bypass coerce() and go straight to insert data=."""
         scratch_ingest.materialize(
-            "sess_x",
+            "sessx",
             [
                 {"name": "i", "type": "Int64"},
                 {"name": "f", "type": "Float64"},
@@ -397,7 +397,7 @@ class TestRowsAsData:
 
     def test_empty_rows_list_creates_table_zero_rows(self, fake_client, settings):
         res = scratch_ingest.materialize(
-            "sess_x", [{"name": "k", "type": "Int64"}], [], settings
+            "sessx", [{"name": "k", "type": "Int64"}], [], settings
         )
         assert res["row_count"] == 0
         # The table is still created (a downstream JOIN can reference an empty table).
@@ -407,7 +407,7 @@ class TestRowsAsData:
     def test_duplicate_column_rejected_before_connect(self, no_connect, settings):
         with pytest.raises(ScratchWriteError) as e:
             scratch_ingest.materialize(
-                "sess_x",
+                "sessx",
                 [{"name": "k", "type": "Int64"}, {"name": "k", "type": "String"}],
                 [[1, "x"]],
                 settings,
@@ -426,7 +426,7 @@ class TestLimits:
         capped = get_settings().model_copy(update={"scratch_max_rows": 2})
         with pytest.raises(ScratchTooLargeError) as e:
             scratch_ingest.materialize(
-                "sess_x",
+                "sessx",
                 [{"name": "k", "type": "Int64"}],
                 [[1], [2], [3]],
                 capped,
@@ -438,7 +438,7 @@ class TestLimits:
     def test_exactly_at_cap_allowed(self, fake_client):
         capped = get_settings().model_copy(update={"scratch_max_rows": 3})
         res = scratch_ingest.materialize(
-            "sess_x", [{"name": "k", "type": "Int64"}], [[1], [2], [3]], capped
+            "sessx", [{"name": "k", "type": "Int64"}], [[1], [2], [3]], capped
         )
         assert res["row_count"] == 3
 
@@ -576,7 +576,7 @@ class TestAuthAndBindingRoutes:
             "/scratch/v1/materialize",
             headers={
                 "Authorization": f"Bearer {make_jwt()}",  # no session_id → no sid_hash
-                "X-Session-Id": "sess_x",
+                "X-Session-Id": "sessx",
             },
             json={"columns": [{"name": "k", "type": "Int64"}], "rows": [[1]]},
         )
@@ -625,28 +625,28 @@ class TestMaterializeRouteWarehouseWrite:
         client = TestClient(_authed_app(), raise_server_exceptions=False)
         resp = client.post(
             "/scratch/v1/materialize",
-            headers=_hdrs("sess_owner"),
+            headers=_hdrs("sessowner"),
             json={
                 "table": f"{WAREHOUSE}.employee",
                 "database": WAREHOUSE,
-                "session_id": "sess_victim",
+                "session_id": "sessvictim",
                 "columns": [{"name": "k", "type": "Int64"}],
                 "rows": [[1]],
             },
         )
         assert resp.status_code == 200
-        assert resp.json()["table"].startswith("scratch.s_sess_owner_bp_")
+        assert resp.json()["table"].startswith("scratch.s_sessowner_bp_")
         sql = "\n".join(fc.commands)
         assert WAREHOUSE not in sql
         assert "victim" not in sql
         create = [c for c in fc.commands if c.upper().startswith("CREATE TABLE")]
-        assert create and "`scratch`.`s_sess_owner_bp_" in create[0]
+        assert create and "`scratch`.`s_sessowner_bp_" in create[0]
 
     def test_ddl_injection_column_name_rejected_route(self, no_connect):
         client = TestClient(_authed_app(), raise_server_exceptions=False)
         resp = client.post(
             "/scratch/v1/materialize",
-            headers=_hdrs("sess_owner"),
+            headers=_hdrs("sessowner"),
             json={
                 "columns": [
                     {
@@ -684,7 +684,7 @@ class TestMaterializeRouteWarehouseWrite:
             client = TestClient(_authed_app(), raise_server_exceptions=False)
             resp = client.post(
                 "/scratch/v1/materialize",
-                headers=_hdrs("sess_owner"),
+                headers=_hdrs("sessowner"),
                 json={"columns": [{"name": "k", "type": "Int64"}], "rows": [[1], [2]]},
             )
         finally:
@@ -696,12 +696,12 @@ class TestMaterializeRouteWarehouseWrite:
 
 class TestDropRouteCrossSession:
     def test_cross_session_drop_403_binds_to_header(self, no_connect):
-        """Bound to sess_owner, body names sess_victim's table → 403, no connection."""
+        """Bound to sessowner, body names sessvictim's table → 403, no connection."""
         client = TestClient(_authed_app(), raise_server_exceptions=False)
         resp = client.post(
             "/scratch/v1/drop",
-            headers=_hdrs("sess_owner"),
-            json={"table": "scratch.s_sess_victim_bp_x"},
+            headers=_hdrs("sessowner"),
+            json={"table": "scratch.s_sessvictim_bp_x"},
         )
         assert resp.status_code == 403
         assert resp.json()["code"] == "SCRATCH_SESSION_VIOLATION"
@@ -715,8 +715,8 @@ class TestDropRouteCrossSession:
         client = TestClient(_authed_app(), raise_server_exceptions=False)
         resp = client.post(
             "/scratch/v1/drop",
-            headers=_hdrs("sess_owner"),
-            json={"table": "scratch.s_sess_owner_bp_x`; DROP TABLE dbpcm_warehouse.employee --"},
+            headers=_hdrs("sessowner"),
+            json={"table": "scratch.s_sessowner_bp_x`; DROP TABLE dbpcm_warehouse.employee --"},
         )
         assert resp.status_code == 403
         assert resp.json()["code"] == "SCRATCH_SESSION_VIOLATION"

@@ -114,9 +114,11 @@ def scratch_settings():
 
 
 def _sid() -> str:
-    # identifier-safe session id (underscores only) so the derived table name is a
-    # valid unqualified scratch identifier the read gate can parse.
-    return "sess_" + uuid.uuid4().hex
+    # Identifier-safe AND UNDERSCORE-FREE session id (the Slice-2 contract): the
+    # tightened D64 read gate extracts the owning session as the run after `s_` up
+    # to the next `_`, so a sid must carry no `_` for a write→read round trip to
+    # validate. `s<32hex>` is identifier-safe with no underscore.
+    return "s" + uuid.uuid4().hex
 
 
 # ---------------------------------------------------------------------------

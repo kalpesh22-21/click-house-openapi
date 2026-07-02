@@ -120,11 +120,11 @@ class TestD64ScratchOwnSessionPasses:
         # Scratch table name follows the s_<session_id>_<suffix> pattern.
         sql = (
             "SELECT s.employee_id, s.hire_date_override, e.department "
-            "FROM scratch.s_sess_abc123_onboarding AS s "
+            "FROM scratch.s_sessabc123_onboarding AS s "
             "JOIN analytics.employees AS e ON s.employee_id = e.employee_id "
             "WHERE e.status = 'A'"
         )
-        result = _run_with_scope(sql, _FULL_SCOPE, session_id="sess_abc123")
+        result = _run_with_scope(sql, _FULL_SCOPE, session_id="sessabc123")
         assert result is not None
         mock_execute.assert_called_once()
 
@@ -137,9 +137,9 @@ class TestD64ScratchOwnSessionPasses:
         """
         sql = (
             "SELECT hire_date_override, salary_adj "
-            "FROM scratch.s_sess_xyz_compensation"
+            "FROM scratch.s_sessxyz_compensation"
         )
-        result = _run_with_scope(sql, _FULL_SCOPE, session_id="sess_xyz")
+        result = _run_with_scope(sql, _FULL_SCOPE, session_id="sessxyz")
         assert result is not None
         mock_execute.assert_called_once()
 
@@ -148,25 +148,25 @@ class TestD64ScratchCrossSessionRejected:
     """D64-scratch-cross-session-rejected — querying another session's scratch table is blocked."""
 
     def test_D64_scratch_cross_session_rejected(self, mock_execute, mock_catalog):
-        # Table name has session prefix s_sess_xyz789_ but caller is sess_abc123.
+        # Table name has session prefix s_sessxyz789_ but caller is sessabc123.
         sql = (
             "SELECT s.employee_id, s.salary_adjustment, e.department "
-            "FROM scratch.s_sess_xyz789_compensation AS s "
+            "FROM scratch.s_sessxyz789_compensation AS s "
             "JOIN analytics.employees AS e ON s.employee_id = e.employee_id "
             "WHERE e.status = 'A'"
         )
         with pytest.raises(ColumnScopeError) as exc_info:
-            _run_with_scope(sql, _FULL_SCOPE, session_id="sess_abc123")
+            _run_with_scope(sql, _FULL_SCOPE, session_id="sessabc123")
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
         mock_execute.assert_not_called()
 
     def test_D64_scratch_different_session_rejected(self, mock_execute, mock_catalog):
         sql = (
             "SELECT employee_id "
-            "FROM scratch.s_sess_other_onboarding"
+            "FROM scratch.s_sessother_onboarding"
         )
         with pytest.raises(ColumnScopeError) as exc_info:
-            _run_with_scope(sql, _FULL_SCOPE, session_id="sess_mine")
+            _run_with_scope(sql, _FULL_SCOPE, session_id="sessmine")
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
         mock_execute.assert_not_called()
 
@@ -181,18 +181,18 @@ class TestD64ScratchParseFailClosed:
             "FROM scratch.compensation_export"
         )
         with pytest.raises(ColumnScopeError) as exc_info:
-            _run_with_scope(sql, _FULL_SCOPE, session_id="sess_abc123")
+            _run_with_scope(sql, _FULL_SCOPE, session_id="sessabc123")
         # Malformed scratch name -> ScratchSessionError -> SCRATCH_SESSION_VIOLATION
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
         mock_execute.assert_not_called()
 
     def test_D64_scratch_table_no_suffix_fail_closed(self, mock_execute, mock_catalog):
-        """s_sess_abc123_ with no suffix is also invalid."""
-        # The provenance extractor checks len(tbl_name) > len(expected_prefix) so
-        # exactly `s_sess_abc123_` with nothing after is rejected.
-        sql = "SELECT x FROM scratch.s_sess_abc123_"
+        """s_sessabc123_ with no suffix is also invalid."""
+        # The provenance extractor requires a non-empty suffix after the extracted
+        # session, so exactly `s_sessabc123_` with nothing after is rejected.
+        sql = "SELECT x FROM scratch.s_sessabc123_"
         with pytest.raises(ColumnScopeError) as exc_info:
-            _run_with_scope(sql, _FULL_SCOPE, session_id="sess_abc123")
+            _run_with_scope(sql, _FULL_SCOPE, session_id="sessabc123")
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
         mock_execute.assert_not_called()
 
@@ -205,7 +205,7 @@ class TestD64ScratchNoSessionIdNoCheck:
         # scope=None → enforcement is entirely skipped, no session validation.
         sql = (
             "SELECT employee_id "
-            "FROM scratch.s_sess_xyz_whatever"
+            "FROM scratch.s_sessxyz_whatever"
         )
         from app.principal import current_scope, current_session_id
         scope_token = current_scope.set(None)
@@ -234,7 +234,7 @@ class TestD64ScratchNoSessionIdNoCheck:
         """
         sql = (
             "SELECT hire_date_override "
-            "FROM scratch.s_sess_abc_data"
+            "FROM scratch.s_sessabc_data"
         )
         with pytest.raises(ColumnScopeError) as exc_info:
             _run_with_scope(sql, _FULL_SCOPE, session_id=None)
@@ -257,11 +257,11 @@ class TestD64ScratchIsolationSurvivesAllowAll:
         """
         sql = (
             "SELECT s.hire_date_override, e.department "
-            "FROM scratch.s_sess_other_xyz_onboarding AS s "
+            "FROM scratch.s_sessotherxyz_onboarding AS s "
             "JOIN analytics.employees AS e ON s.employee_id = e.employee_id "
             "WHERE e.status = 'A'"
         )
         with pytest.raises(ColumnScopeError) as exc_info:
-            _run_with_scope(sql, frozenset(), session_id="sess_mine")
+            _run_with_scope(sql, frozenset(), session_id="sessmine")
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
         mock_execute.assert_not_called()
