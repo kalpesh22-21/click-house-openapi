@@ -115,6 +115,14 @@ class TestD83SampleRowsOutOfScopeRejected:
         # execute_query must NOT have been called — reject, never partially project.
         mock_execute.assert_not_called()
 
+    def test_D83_message_names_the_out_of_scope_column(self, mock_execute, mock_catalog):
+        """The denial message must NAME the specific out-of-scope column so the
+        model sees WHY sampleRows was rejected (gross_pay is not in scope)."""
+        with pytest.raises(ColumnScopeError) as exc_info:
+            _sample_with_scope("analytics", "orders", _RESTRICTED_SCOPE, session_id="sess-001")
+        assert "analytics.orders.gross_pay" in exc_info.value.message
+        mock_execute.assert_not_called()
+
 
 class TestD83SampleRowsFullScopeExecutes:
     def test_D83_sample_rows_full_scope_executes(self, mock_execute, mock_catalog):

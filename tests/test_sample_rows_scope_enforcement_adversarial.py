@@ -178,21 +178,20 @@ class TestD83AdvSampleRowsCaseSensitiveScopeMismatchRejected:
         mock_execute.assert_not_called()
 
 
-class TestD83AdvSampleRowsRejectMessageDoesNotLeakColumnNames:
-    def test_D83_adv_sample_rows_reject_message_does_not_leak_column_names(
+class TestD83AdvSampleRowsRejectMessageNamesColumn:
+    def test_D83_adv_sample_rows_reject_message_names_the_forbidden_column(
         self, mock_execute, mock_catalog
     ):
-        """The forbidden column's real name ('gross_pay') must never appear in
-        the exception message surfaced to the caller -- only a generic
-        message (column names are scope-token content, not something to echo
-        back to a caller who, by definition, isn't supposed to know they
-        exist). This locks in app/service.py's existing 'log only the count'
-        discipline as an explicit regression guard for sample_rows."""
+        """Posture update: the forbidden column's name ('gross_pay') MUST appear
+        in the denial message so the agent (and the Phoenix trace) sees WHY the
+        sample was rejected. Column NAMES are catalog metadata (not PII / cell
+        values, D25) — safe to surface. This inverts the previous 'do not echo
+        column names' guard now that naming the out-of-scope column is the
+        intended, actionable behavior. (Server LOGS still record only the count.)"""
         with pytest.raises(ColumnScopeError) as exc_info:
             _sample_with_scope(
                 "analytics", "orders", _MISSING_ONE_SCOPE, session_id="sess-001"
             )
         message = str(exc_info.value.message)
-        assert "gross_pay" not in message
-        assert "gross_pay" not in repr(exc_info.value)
+        assert "gross_pay" in message
         mock_execute.assert_not_called()

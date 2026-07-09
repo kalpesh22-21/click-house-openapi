@@ -160,11 +160,10 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
             "The ClickHouse server is temporarily unreachable."
         )
     if isinstance(exc, ColumnScopeError):
-        return ToolError(
-            f"[{exc.code}] This query references columns outside your permitted scope. "
-            "Request access to the required columns or rewrite the query to use "
-            "only columns within your scope."
-        )
+        # Forward the service-layer message verbatim: it is an author-controlled
+        # string that NAMES the out-of-scope columns (catalog metadata, not PII /
+        # cell values per D25), so the model can see WHICH columns it lacks.
+        return ToolError(f"[{exc.code}] {exc.message}")
     if isinstance(exc, ParseFailedError):
         return ToolError(
             f"[{exc.code}] The query could not be parsed for column-scope verification "

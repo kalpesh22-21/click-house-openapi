@@ -172,6 +172,27 @@ class TestD57OutOfScopeColumnRejected:
         assert exc_info.value.code == "COLUMN_SCOPE_VIOLATION"
         mock_execute.assert_not_called()
 
+    def test_D57_message_names_the_out_of_scope_column(self, mock_execute, mock_catalog):
+        """The denial message must NAME the specific out-of-scope column(s) so the
+        model (and the Phoenix trace) sees WHY the query was rejected. Column names
+        are catalog metadata (not PII / cell values, D25) — safe to surface."""
+        # gross_pay and email are out of scope; order_id/name are in scope.
+        sql = (
+            "SELECT o.order_id, o.gross_pay, c.email "
+            "FROM analytics.orders o JOIN analytics.customers c "
+            "ON o.customer_id = c.customer_id"
+        )
+        with pytest.raises(ColumnScopeError) as exc_info:
+            _run_with_scope(sql, _RESTRICTED_SCOPE, session_id="sess-001")
+        msg = exc_info.value.message
+        assert "analytics.orders.gross_pay" in msg
+        assert "analytics.customers.email" in msg
+        # Sorted ordering: customers.email precedes orders.gross_pay.
+        assert msg.index("analytics.customers.email") < msg.index("analytics.orders.gross_pay")
+        # In-scope columns must NOT appear as forbidden.
+        assert "order_id" not in msg
+        mock_execute.assert_not_called()
+
 
 class TestD57DerivedAggOverForbiddenRejected:
     """D57-derived-agg-over-forbidden-rejected — AVG(gross_pay) must be blocked even though

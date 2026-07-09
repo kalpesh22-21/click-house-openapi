@@ -382,6 +382,28 @@ class TestMcpToolGuardrails:
             mcp_explain_query(sql="DROP TABLE t")
         mock_execute.assert_not_called()
 
+    def test_column_scope_tool_error_forwards_column_names(self):
+        """_domain_to_tool_error must forward the service-layer ColumnScopeError
+        message verbatim (behind the [CODE] marker) so the out-of-scope column
+        NAMES reach the runtime/model — not a generic canned string."""
+        from app.errors import ColumnScopeError
+        from app.mcp_server import _domain_to_tool_error
+
+        exc = ColumnScopeError(
+            message=(
+                "This query needs access to columns outside your permitted "
+                "scope: employee.EmployeeStatus, employee.HireDate. You do not "
+                "have access to those columns — remove them from the query, or "
+                "ask the user to grant access."
+            ),
+            code="COLUMN_SCOPE_VIOLATION",
+        )
+        tool_error = _domain_to_tool_error(exc)
+        text = str(tool_error)
+        assert "[COLUMN_SCOPE_VIOLATION]" in text
+        assert "employee.EmployeeStatus" in text
+        assert "employee.HireDate" in text
+
     def test_list_tables_forbidden_database_raises_tool_error(self, mock_execute):
         from mcp.server.fastmcp.exceptions import ToolError
 

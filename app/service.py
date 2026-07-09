@@ -334,12 +334,16 @@ def sample_rows(
                     "sample_rows: column scope violation forbidden_count=%d code=COLUMN_SCOPE_VIOLATION",
                     len(forbidden),
                 )
+                # Column NAMES are catalog metadata (not PII / cell values, D25),
+                # so it is safe to name the out-of-scope columns here — this is
+                # what lets the model see WHICH columns it lacks.
                 raise ColumnScopeError(
                     message=(
-                        "This table has columns outside your permitted scope. "
+                        "This table has columns outside your permitted scope: "
+                        f"{', '.join(sorted(forbidden))}. "
                         "sampleRows cannot partially project columns — request "
-                        "access to all of the table's columns, or use runQuery "
-                        "with an explicit column list within your scope."
+                        "access to those columns, or use runQuery with an "
+                        "explicit column list within your scope."
                     ),
                     code="COLUMN_SCOPE_VIOLATION",
                 )
@@ -425,15 +429,22 @@ def run_query(
             }
 
             if forbidden:
-                # Log only the count — column names are a secret (scope token content).
+                # Log only the count to keep server logs terse; the column
+                # NAMES themselves are catalog metadata (surfaced to the model
+                # in the error message below), not a secret.
                 logger.warning(
                     "run_query: column scope violation forbidden_count=%d code=COLUMN_SCOPE_VIOLATION",
                     len(forbidden),
                 )
+                # Column NAMES are catalog metadata (not PII / cell values, D25),
+                # so it is safe to name the out-of-scope columns here — this is
+                # what lets the model see WHICH columns it lacks.
                 raise ColumnScopeError(
                     message=(
-                        "Query references columns outside your permitted scope. "
-                        "Request access to the required columns or rewrite the query."
+                        "This query needs access to columns outside your "
+                        f"permitted scope: {', '.join(sorted(forbidden))}. "
+                        "You do not have access to those columns — remove them "
+                        "from the query, or ask the user to grant access."
                     ),
                     code="COLUMN_SCOPE_VIOLATION",
                 )
