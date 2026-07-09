@@ -3,6 +3,12 @@ sqlglot>=25,<31
 PyYAML==6.0.3
 fastapi==0.124.4
 python-multipart==0.0.20
+# XLSX parsing for the external-dataset upload front door (UI Slice 4). Read in
+# read_only + data_only mode on byte-capped input (no formula eval, streamed rows).
+openpyxl==3.1.5
+# openpyxl auto-detects defusedxml and routes its XML parsing through it, guarding
+# against XML entity-expansion (billion-laughs) on untrusted uploads. Explicit dep.
+defusedxml==0.7.1
 uvicorn[standard]==0.32.1
 clickhouse-connect==0.7.16
 pydantic-settings==2.7.1

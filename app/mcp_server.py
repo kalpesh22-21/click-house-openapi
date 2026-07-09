@@ -61,6 +61,8 @@ import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.formparsers import MultiPartException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -650,6 +652,13 @@ from app.scratch_ingest import (  # noqa: E402
     drop as scratch_drop,
     materialize as scratch_materialize,
 )
+from app.upload_ingest import (  # noqa: E402
+    UploadMappingError,
+    UploadParseError,
+    UploadTooLargeError,
+    apply_mapping,
+    parse_upload,
+)
 
 
 def _scratch_error(status_code: int, code: str, message: str) -> JSONResponse:
@@ -730,6 +739,206 @@ async def scratch_drop_route(request: Request) -> JSONResponse:
         return _scratch_error(exc.status_code, exc.code, exc.message)
     except Exception as exc:  # noqa: BLE001
         logger.exception("scratch drop failed: %s", exc)
+        return _scratch_error(500, "SCRATCH_MATERIALIZE_REJECTED", "An internal error occurred.")
+    return JSONResponse(result)
+
+
+# ---------------------------------------------------------------------------
+# External-dataset upload front door (UI Slice 4) — HTTP transport only.
+#
+# The parse + column-mapping half in front of the built scratch materialize
+# back-half.  Same posture as the scratch routes above: PRIVILEGED, NON-TOOL
+# custom routes (the agent LLM never sees them), behind JWTAuthMiddleware so the
+# session is D92-bound from X-Session-Id BEFORE a handler runs.  The materialized
+# table name derives ONLY from that bound session_id (never the body), so a caller
+# can only write to its OWN scratch namespace.  Both routes are multipart:
+#   POST /scratch/v1/analyze  — parse + preview (NO materialize)
+#   POST /scratch/v1/upload   — parse + rename + materialize (authoritative)
+# A byte cap is enforced BEFORE the whole body is buffered (Content-Length
+# pre-check + per-part max_part_size + a bounded read), and again on the read
+# bytes; the row cap (scratch_max_rows) is enforced during parse and inside
+# materialize.
+# ---------------------------------------------------------------------------
+
+# Slack over the raw byte cap to allow for the multipart boundary + part headers
+# when comparing against the request's declared Content-Length.
+_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+async def _read_upload_part(request: Request, max_bytes: int) -> tuple[bytes, str, Any]:
+    """Read the multipart body under a strict byte cap: (file bytes, filename, form).
+
+    Resource-exhaustion hardening (UI Slice 4 §3/§7). The cap is enforced in five
+    layers so an authenticated caller cannot make the server buffer/spool an
+    oversized body BEFORE the 413, regardless of Content-Length honesty or how the
+    body is split into parts:
+      1. A declared ``Content-Length`` over the hard limit is rejected WITHOUT
+         reading the stream at all (honest-client fast path).
+      2. A bounded ASGI receive-wrapper caps TOTAL ingested bytes (RAM AND disk) in
+         one place, so a chunked / lying-Content-Length body trips DURING form
+         parsing — before a huge file part finishes spooling to disk, and before a
+         multiplicity of text fields fills RAM (the pre-check can't fire without a
+         Content-Length).
+      3. ``max_files=2, max_fields=4`` cap the PART COUNT — only ``file`` +
+         ``mapping`` are ever legitimate, so ~999 text fields (Starlette's default
+         ``max_fields``) can never accumulate in FormData.
+      4. ``max_part_size=64 KiB`` caps the non-file ``mapping`` field (a 512-column
+         mapping is ≤ ~30 KiB); the file part streams/spools and is NOT truncated
+         by this.
+      5. The file part is pulled into RAM with a BOUNDED read of at most
+         ``max_bytes + 1`` bytes, then length-checked.
+
+    Raises ``UploadTooLargeError`` (→ 413 UPLOAD_TOO_LARGE) when a cap is exceeded,
+    or ``UploadParseError`` (→ 400) for a non-multipart / missing-file body.
+    """
+    hard_limit = max_bytes + _MULTIPART_OVERHEAD_BYTES
+
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > hard_limit:
+        raise UploadTooLargeError("Uploaded body exceeds the maximum allowed size.")
+
+    # Layer 2: bounded receive-wrapper — the total-bytes backstop.  It counts every
+    # ASGI body chunk as `form()` pulls it and raises the moment the cumulative
+    # ingested size crosses the hard limit, so nothing (RAM or disk spool) grows
+    # past it even when Content-Length is absent/lying or the body is chunked.
+    total = 0
+    orig_receive = request.receive
+
+    async def _bounded_receive() -> Any:
+        nonlocal total
+        message = await orig_receive()
+        total += len(message.get("body", b""))
+        if total > hard_limit:
+            raise UploadTooLargeError("Uploaded body exceeds the maximum allowed size.")
+        return message
+
+    request = Request(request.scope, _bounded_receive)
+
+    try:
+        form = await request.form(max_files=2, max_fields=4, max_part_size=64 * 1024)
+    except UploadTooLargeError:
+        raise  # our backstop tripped inside form parsing — keep it a 413
+    except (MultiPartException, StarletteHTTPException) as exc:
+        # Starlette wraps a max_part_size / max_files / max_fields violation into
+        # HTTPException(400); surface a resource-cap violation as the byte-cap 413
+        # rather than a generic parse 400.  The substring checks are pinned to
+        # starlette==0.50.0.
+        detail = str(getattr(exc, "detail", "") or exc)
+        if "exceeded maximum size" in detail or "Too many" in detail:
+            raise UploadTooLargeError(
+                "Uploaded file exceeds the maximum allowed size."
+            ) from exc
+        raise UploadParseError("Request must be multipart/form-data.") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise UploadParseError("Request must be multipart/form-data.") from exc
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise UploadParseError("Missing 'file' upload part.")
+    # Bounded read: never pull more than max_bytes + 1 into RAM even though the
+    # spooled file part is not covered by max_part_size.
+    content = await upload.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise UploadTooLargeError("Uploaded file exceeds the maximum allowed size.")
+    filename = getattr(upload, "filename", "") or ""
+    return content, filename, form
+
+
+@mcp.custom_route("/scratch/v1/analyze", methods=["POST"])
+async def scratch_analyze_route(request: Request) -> JSONResponse:
+    """Parse an uploaded CSV/XLSX and return a preview — NO materialize.
+
+    Returns ``{"columns": [{name,type}], "row_count": N, "sample_rows": [...]}``
+    so the browser can render the column-mapping UI.  Fails 413 SCRATCH_TOO_LARGE
+    if the parsed row count exceeds scratch_max_rows (before any mapping UI is
+    shown), and 413 UPLOAD_TOO_LARGE if the file is over the byte cap.
+    """
+    session_id = current_session_id.get()
+    if not session_id:
+        return _scratch_error(
+            400, "SCRATCH_SESSION_MISSING", "X-Session-Id is required to analyze an upload."
+        )
+    settings_now = get_settings()
+    try:
+        content, filename, _ = await _read_upload_part(
+            request, settings_now.upload_max_bytes
+        )
+    except UploadTooLargeError as exc:
+        return _scratch_error(413, "UPLOAD_TOO_LARGE", exc.message)
+    except UploadParseError as exc:
+        return _scratch_error(400, "UPLOAD_PARSE_ERROR", exc.message)
+    try:
+        # Parsing (esp. openpyxl) is blocking CPU work; run it off the event loop.
+        columns, rows = await anyio.to_thread.run_sync(
+            parse_upload, content, filename, settings_now.scratch_max_rows
+        )
+    except ScratchWriteError as exc:  # ScratchTooLargeError → 413 SCRATCH_TOO_LARGE
+        return _scratch_error(exc.status_code, exc.code, exc.message)
+    except UploadParseError as exc:
+        return _scratch_error(400, "UPLOAD_PARSE_ERROR", exc.message)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("upload analyze failed: %s", exc)
+        return _scratch_error(500, "UPLOAD_PARSE_ERROR", "An internal error occurred.")
+    return JSONResponse(
+        {
+            "columns": columns,
+            "row_count": len(rows),
+            "sample_rows": rows[:10],
+        }
+    )
+
+
+@mcp.custom_route("/scratch/v1/upload", methods=["POST"])
+async def scratch_upload_route(request: Request) -> JSONResponse:
+    """Parse + rename + materialize an uploaded CSV/XLSX (authoritative).
+
+    Re-parses the file server-side (Option B — stateless), applies the column
+    mapping, and materializes a session-scoped scratch table.  Returns the
+    materialize shape verbatim: ``{"table": "scratch.s_<sid>_bp_<uuid>",
+    "row_count": N}``.
+    """
+    session_id = current_session_id.get()
+    if not session_id:
+        return _scratch_error(
+            400, "SCRATCH_SESSION_MISSING", "X-Session-Id is required to upload a scratch table."
+        )
+    settings_now = get_settings()
+    try:
+        content, filename, form = await _read_upload_part(
+            request, settings_now.upload_max_bytes
+        )
+    except UploadTooLargeError as exc:
+        return _scratch_error(413, "UPLOAD_TOO_LARGE", exc.message)
+    except UploadParseError as exc:
+        return _scratch_error(400, "UPLOAD_PARSE_ERROR", exc.message)
+    mapping_raw = form.get("mapping")
+    try:
+        mapping = json.loads(mapping_raw) if mapping_raw else {}
+    except (TypeError, ValueError):
+        return _scratch_error(
+            400, "UPLOAD_MAPPING_INVALID", "The 'mapping' field must be valid JSON."
+        )
+    if not isinstance(mapping, dict):
+        return _scratch_error(
+            400, "UPLOAD_MAPPING_INVALID", "The 'mapping' field must be a JSON object."
+        )
+
+    def _do_upload() -> dict[str, Any]:
+        columns, rows = parse_upload(content, filename, settings_now.scratch_max_rows)
+        columns, rows = apply_mapping(columns, rows, mapping)
+        # The table name derives ONLY from the D92-bound session_id, never the body.
+        return scratch_materialize(session_id, columns, rows, settings_now)
+
+    try:
+        # Blocking parse + ClickHouse DDL/insert — run off the event loop.
+        result = await anyio.to_thread.run_sync(_do_upload)
+    except ScratchWriteError as exc:  # incl. ScratchTooLargeError (413 SCRATCH_TOO_LARGE)
+        return _scratch_error(exc.status_code, exc.code, exc.message)
+    except UploadParseError as exc:
+        return _scratch_error(400, "UPLOAD_PARSE_ERROR", exc.message)
+    except UploadMappingError as exc:
+        return _scratch_error(400, "UPLOAD_MAPPING_INVALID", exc.message)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("upload failed: %s", exc)
         return _scratch_error(500, "SCRATCH_MATERIALIZE_REJECTED", "An internal error occurred.")
     return JSONResponse(result)
 

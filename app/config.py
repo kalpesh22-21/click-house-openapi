@@ -210,6 +210,17 @@ class Settings(BaseSettings):
             "rejected SCRATCH_TOO_LARGE so the runtime falls back to the raw loop (OQ-C)."
         ),
     )
+    upload_max_bytes: int = Field(
+        8 * 1024 * 1024,
+        ge=1,
+        description=(
+            "Hard cap (bytes) on an external-dataset upload (/scratch/v1/analyze, "
+            "/scratch/v1/upload) enforced BEFORE the file is parsed (UI Slice 4 §3). "
+            "Mirrors scratch_max_rows as a session-appropriate front-door guard — far "
+            "below admin's 200 MB CSV cap — and bounds a compressed XLSX before it "
+            "reaches openpyxl (decompression-bomb defence)."
+        ),
+    )
 
     # --- OpenAPI / GPT Action ---
     public_base_url: str = Field(
