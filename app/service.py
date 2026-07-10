@@ -48,6 +48,7 @@ from app.sqlparse import (
     ProvenanceExtractionError,
     ScratchSessionError,
     extract_column_provenance,
+    scratch_table_belongs_to_session,
 )
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,15 @@ def list_tables(
 ) -> list[dict[str, str]]:
     """Return all tables in *database*.
 
+    Scratch-table isolation (D64): when *database* is the scratch database, the
+    result is filtered to ONLY the caller's own scratch tables (those whose name
+    identifies the current session as owner, via the shared
+    ``scratch_table_belongs_to_session`` D64 parser). This closes the metadata
+    leak where listTables('scratch') returned every session's scratch tables.
+    FAIL-CLOSED: if no session is bound (session_id is None), the scratch listing
+    is EMPTY — a session-less caller can never prove ownership, so nothing leaks.
+    Non-scratch databases are unaffected (full list).
+
     Raises:
         DatabaseNotAllowedError: if *database* is not in the allowlist.
     """
@@ -171,10 +181,23 @@ def list_tables(
     )
     _, rows = _execute(sql, settings, parameters={"db": database})
 
-    return [
+    tables = [
         {"database": row[0], "name": row[1], "engine": row[2]}
         for row in rows
     ]
+
+    if database == settings.scratch_database:
+        # Session-gate the scratch database: keep only tables owned by the caller.
+        # scratch_table_belongs_to_session fails closed on a None/empty session_id
+        # and on any name not owned exactly by session_id, so a session-less caller
+        # gets an empty list and no foreign scratch table ever appears.
+        session_id = get_current_session_id()
+        tables = [
+            t for t in tables
+            if scratch_table_belongs_to_session(t["name"], session_id)
+        ]
+
+    return tables
 
 
 def get_table_schema(
@@ -195,14 +218,42 @@ def get_table_schema(
     with all catalog-derived fields null and columns carrying introspection
     fields only (design §1.3) — still scope-filtered.
 
+    Scratch-table isolation (D64): when *database* is the scratch database, the
+    requested table must belong to the caller's session (same owning-session check
+    run_query/sample_rows apply, via the shared ``scratch_table_belongs_to_session``
+    D64 parser). A foreign — or session-less — scratch table's schema is NEVER
+    returned; instead the SAME violation run_query raises is surfaced
+    (SCRATCH_SESSION_VIOLATION), so the MCP reports it identically. Non-scratch
+    databases are unaffected.
+
     Raises:
         DatabaseNotAllowedError: if *database* is not in the allowlist.
+        ColumnScopeError:        SCRATCH_SESSION_VIOLATION if *database* is the
+                                  scratch db and *table* does not belong to the
+                                  current session (or no session is bound).
         TableNotFoundError:      if the table has no columns (does not exist).
     """
     if settings is None:
         settings = get_settings()
 
     _check_database_allowed(database, settings)
+
+    if database == settings.scratch_database:
+        # Session-gate the scratch database (D64): only the owning session may read
+        # a scratch table's schema. Fails closed on a None/empty session and on any
+        # foreign/malformed name — identical semantics to the run_query read gate.
+        session_id = get_current_session_id()
+        if not scratch_table_belongs_to_session(table, session_id):
+            logger.error(
+                "get_table_schema: scratch session violation code=SCRATCH_SESSION_VIOLATION"
+            )
+            raise ColumnScopeError(
+                message=(
+                    "Schema requested for a scratch table that does not belong to "
+                    "this session."
+                ),
+                code="SCRATCH_SESSION_VIOLATION",
+            )
 
     sql = (
         "SELECT name, type, comment "

@@ -302,6 +302,25 @@ def _validate_scratch_name(tbl_name: str, session_id: str | None) -> None:
         )
 
 
+def scratch_table_belongs_to_session(tbl_name: str, session_id: str | None) -> bool:
+    """Non-raising D64 ownership predicate: is scratch ``tbl_name`` owned by ``session_id``?
+
+    Thin wrapper around :func:`_validate_scratch_name` (the single source of truth
+    for the ``s_<session_id>_<suffix>`` owning-session extraction) so metadata reads
+    (list_tables/get_table_schema) can FILTER/GATE without duplicating the parse.
+
+    FAIL-CLOSED: a ``None``/empty session, a name that doesn't match the scratch
+    pattern, or a name whose extracted owner != ``session_id`` all return ``False``
+    (``_validate_scratch_name`` raises ``ScratchSessionError`` in each of those
+    cases). Only a validly-named table owned EXACTLY by ``session_id`` returns True.
+    """
+    try:
+        _validate_scratch_name(tbl_name, session_id)
+    except ScratchSessionError:
+        return False
+    return True
+
+
 def _has_select_star(ast: exp.Expression) -> bool:
     """Return True if the AST contains an unresolved star in a select list.
 
