@@ -85,3 +85,61 @@ class TestStaticKeyConfig:
     def test_auth_configured_true_with_static_key_and_no_jwks(self):
         settings = _settings(oidc_public_key=_public_pem(), oidc_jwks_url="")
         assert settings.auth_configured() is True
+
+    def test_auth_configured_true_with_key_source_and_no_issuer_audience(self):
+        """Issuer/audience are no longer mandatory: a key source alone configures auth."""
+        settings = _settings(
+            oidc_public_key=_public_pem(),
+            oidc_jwks_url="",
+            oidc_issuer="",
+            oidc_audience="",
+        )
+        assert settings.auth_configured() is True
+
+
+class TestIssuerAudienceOptional:
+    """OIDC_ISSUER / OIDC_AUDIENCE are optional — verified when set, skipped when
+    empty (external-minter posture).  Signature + expiry stay unconditional."""
+
+    def test_arbitrary_issuer_and_audience_accepted_when_unset(self):
+        """With issuer/audience unconfigured, a token carrying *any* iss/aud validates."""
+        settings = _settings(
+            oidc_public_key=_public_pem(),
+            oidc_jwks_url="",
+            oidc_issuer="",
+            oidc_audience="",
+        )
+        token = make_jwt(issuer="https://some-other-idp/", audience="some-other-api")
+        principal = validate_token(token, settings)
+        assert principal.claims["user_name"] == "alice"
+
+    def test_audience_still_enforced_when_configured(self):
+        """Setting OIDC_AUDIENCE re-enables the check — a wrong aud is rejected."""
+        settings = _settings(oidc_public_key=_public_pem(), oidc_jwks_url="")
+        with pytest.raises(JWTAuthError) as exc:
+            validate_token(make_jwt(audience="some-other-api"), settings)
+        assert exc.value.code == "INVALID_AUDIENCE"
+
+    def test_expiry_still_required_when_issuer_audience_unset(self):
+        """Relaxing iss/aud must NOT relax expiry — an expired token is still rejected."""
+        settings = _settings(
+            oidc_public_key=_public_pem(),
+            oidc_jwks_url="",
+            oidc_issuer="",
+            oidc_audience="",
+        )
+        with pytest.raises(JWTAuthError) as exc:
+            validate_token(make_jwt(exp_delta=-3600), settings)
+        assert exc.value.code == "TOKEN_EXPIRED"
+
+    def test_signature_still_verified_when_issuer_audience_unset(self):
+        """Relaxing iss/aud must NOT relax signature — a wrong-key token is rejected."""
+        settings = _settings(
+            oidc_public_key=_public_pem(),
+            oidc_jwks_url="",
+            oidc_issuer="",
+            oidc_audience="",
+        )
+        with pytest.raises(JWTAuthError) as exc:
+            validate_token(make_jwt(signing_key=WRONG_PRIVATE_PEM), settings)
+        assert exc.value.code == "INVALID_AUTH"

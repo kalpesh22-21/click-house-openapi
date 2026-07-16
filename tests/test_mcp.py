@@ -899,9 +899,11 @@ class TestAuthConfigContract:
 
         from app.config import Settings
 
+        # Set to "" (not pop): empty env vars override any .env file a developer
+        # has on disk, so the "no key source" state is reproduced deterministically.
         with patch.dict(os.environ):
-            for k in ("OIDC_JWKS_URL", "OIDC_ISSUER", "OIDC_AUDIENCE"):
-                os.environ.pop(k, None)
+            for k in ("OIDC_JWKS_URL", "OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_PUBLIC_KEY"):
+                os.environ[k] = ""
             s = Settings()
             assert s.auth_configured() is False
         get_settings.cache_clear()
@@ -911,8 +913,8 @@ class TestAuthConfigContract:
         from unittest.mock import MagicMock, patch
 
         with patch.dict(os.environ):
-            for k in ("OIDC_JWKS_URL", "OIDC_ISSUER", "OIDC_AUDIENCE"):
-                os.environ.pop(k, None)
+            for k in ("OIDC_JWKS_URL", "OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_PUBLIC_KEY"):
+                os.environ[k] = ""
             get_settings.cache_clear()
 
             mock_ch = MagicMock()

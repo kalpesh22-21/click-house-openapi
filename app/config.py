@@ -45,19 +45,32 @@ class Settings(BaseSettings):
     clickhouse_secure: bool = Field(True, description="Use TLS for ClickHouse connection")
 
     # --- API authentication (external JWT / OIDC) ---
-    # Callers present a signed JWT as a Bearer token.  We validate the signature
-    # against the IdP's JWKS endpoint and verify issuer / audience / expiry, then
+    # Callers present a signed JWT as a Bearer token.  We always verify the
+    # signature (against the IdP's JWKS or a static public key) and expiry, then
     # derive the tenant identity from a claim (see clickhouse_tenant_settings).
-    # All three fields are required for the REST API and MCP HTTP transport; the
-    # MCP stdio transport (local trust model) performs no auth.  They are optional
-    # at the schema level so stdio mode can start without them — the REST app
-    # lifespan and MCP _run_http fail closed if they are unset (see those modules).
+    # Only a KEY SOURCE (OIDC_JWKS_URL or OIDC_PUBLIC_KEY) is required for the
+    # REST API and MCP HTTP transport — the REST app lifespan and MCP _run_http
+    # fail closed (see auth_configured) if none is set.  OIDC_ISSUER / OIDC_AUDIENCE
+    # are OPTIONAL: verified when set, skipped when empty (for a minter that stamps
+    # neither).  The MCP stdio transport (local trust model) performs no auth.
     oidc_jwks_url: str = Field(
         "",
         description="JWKS endpoint (e.g. https://idp/.well-known/jwks.json) used to verify JWT signatures.",
     )
-    oidc_issuer: str = Field("", description="Expected JWT 'iss' claim (token issuer).")
-    oidc_audience: str = Field("", description="Expected JWT 'aud' claim (this API's audience).")
+    oidc_issuer: str = Field(
+        "",
+        description=(
+            "Expected JWT 'iss' claim (token issuer). Optional: verified when set, "
+            "issuer check skipped when empty."
+        ),
+    )
+    oidc_audience: str = Field(
+        "",
+        description=(
+            "Expected JWT 'aud' claim (this API's audience). Optional: verified when "
+            "set, audience check skipped when empty."
+        ),
+    )
     # --- Static public key (JWKS-less verification) ---
     # For an external token creator that mints RS*/ES*/PS* JWTs but does NOT
     # publish a JWKS endpoint — you only hold its public key.  When set, the
@@ -401,17 +414,12 @@ class Settings(BaseSettings):
         """True when enough OIDC config is present to validate JWTs.
 
         Used by the REST lifespan and MCP HTTP entrypoint to fail closed: a
-        network-exposed transport must not start without a way to verify tokens.
-
-        A key source is EITHER a JWKS endpoint OR a static public key; issuer and
-        audience are always required.
+        network-exposed transport must not start without a way to verify token
+        *signatures*.  Only a key source is mandatory — EITHER a JWKS endpoint OR
+        a static public key.  Issuer and audience are OPTIONAL: when set they are
+        verified (see app/auth_jwt.py), when empty that claim check is skipped.
         """
-        has_key_source = bool(self.oidc_jwks_url.strip() or self.oidc_public_key.strip())
-        return bool(
-            has_key_source
-            and self.oidc_issuer.strip()
-            and self.oidc_audience.strip()
-        )
+        return bool(self.oidc_jwks_url.strip() or self.oidc_public_key.strip())
 
     def scratch_client_params(self) -> Dict[str, object]:
         """Resolve the scratch-credential connection params (with CLICKHOUSE_* fallback).

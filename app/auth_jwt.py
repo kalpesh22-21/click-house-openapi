@@ -12,7 +12,10 @@ the entire authorization boundary and is deliberately strict:
     token whose header ``alg`` is outside it, defeating 'none' and RS/HS
     algorithm-confusion attacks (the config validator also refuses to *configure*
     HS*/none, so a public key can never be coerced into an HMAC secret).
-  * issuer / audience / expiry / not-before all required and verified.
+  * expiry / not-before are always required and verified.  issuer / audience are
+    verified only when configured (OIDC_ISSUER / OIDC_AUDIENCE); left empty, that
+    claim check is skipped — for an external minter that stamps neither.  The
+    signature and algorithm pinning above are unconditional and are the core.
   * Every JWT claim that a tenant setting maps to must be present and non-empty,
     or the request is rejected (fail closed) — never run a query with an absent
     tenant, which would make row policies match nothing or (mis-policied)
@@ -100,15 +103,29 @@ def _decode_and_map(token: str, key: Any, algorithms: list[str], settings: Setti
     outside it.  All JWTAuthError mapping lives here so both callers behave
     identically.
     """
+    # Issuer/audience are optional: verify each only when it is configured, so an
+    # external minter that stamps neither still validates.  Expiry is always
+    # required; the signature and algorithm pinning are unconditional.
+    issuer = settings.oidc_issuer.strip()
+    audience = settings.oidc_audience.strip()
+    require = ["exp"]
+    decode_kwargs: dict[str, Any] = {}
+    if issuer:
+        require.append("iss")
+        decode_kwargs["issuer"] = settings.oidc_issuer
+    if audience:
+        require.append("aud")
+        decode_kwargs["audience"] = settings.oidc_audience
     try:
         return jwt.decode(
             token,
             key,
             algorithms=algorithms,
-            audience=settings.oidc_audience,
-            issuer=settings.oidc_issuer,
             leeway=60,  # tolerate up to 60s of clock skew on exp/nbf/iat
-            options={"require": ["exp", "iss", "aud"]},
+            # verify_aud is False when no audience is configured, so a token that
+            # DOES carry an aud claim is not rejected for being unverifiable.
+            options={"require": require, "verify_aud": bool(audience)},
+            **decode_kwargs,
         )
     except jwt.ExpiredSignatureError as exc:
         raise JWTAuthError("Token has expired.", code="TOKEN_EXPIRED") from exc
