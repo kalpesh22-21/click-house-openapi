@@ -19,21 +19,39 @@ Key design decisions:
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from fastapi import HTTPException
 
+from app.catalog import get_catalog_schema
 from app.clickhouse_client import execute_query
 from app.config import Settings, get_settings
 from app.errors import (
     ClickHouseQueryError,
     ClickHouseUnavailableError,
+    ColumnScopeError,
     DatabaseNotAllowedError,
+    ParseFailedError,
     QueryValidationError,
     TableNotFoundError,
 )
+from app.principal import get_current_scope, get_current_session_id
 from app.security import validate_and_sanitize
+from app.semantic_catalog import (
+    build_table_schema_response,
+    get_catalog_sha,
+    get_semantic_catalog,
+)
+from app.sqlparse import (
+    ProvenanceExtractionError,
+    ScratchSessionError,
+    extract_column_provenance,
+    scratch_table_belongs_to_session,
+)
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -138,6 +156,15 @@ def list_tables(
 ) -> list[dict[str, str]]:
     """Return all tables in *database*.
 
+    Scratch-table isolation (D64): when *database* is the scratch database, the
+    result is filtered to ONLY the caller's own scratch tables (those whose name
+    identifies the current session as owner, via the shared
+    ``scratch_table_belongs_to_session`` D64 parser). This closes the metadata
+    leak where listTables('scratch') returned every session's scratch tables.
+    FAIL-CLOSED: if no session is bound (session_id is None), the scratch listing
+    is EMPTY — a session-less caller can never prove ownership, so nothing leaks.
+    Non-scratch databases are unaffected (full list).
+
     Raises:
         DatabaseNotAllowedError: if *database* is not in the allowlist.
     """
@@ -154,10 +181,23 @@ def list_tables(
     )
     _, rows = _execute(sql, settings, parameters={"db": database})
 
-    return [
+    tables = [
         {"database": row[0], "name": row[1], "engine": row[2]}
         for row in rows
     ]
+
+    if database == settings.scratch_database:
+        # Session-gate the scratch database: keep only tables owned by the caller.
+        # scratch_table_belongs_to_session fails closed on a None/empty session_id
+        # and on any name not owned exactly by session_id, so a session-less caller
+        # gets an empty list and no foreign scratch table ever appears.
+        session_id = get_current_session_id()
+        tables = [
+            t for t in tables
+            if scratch_table_belongs_to_session(t["name"], session_id)
+        ]
+
+    return tables
 
 
 def get_table_schema(
@@ -165,18 +205,55 @@ def get_table_schema(
     table: str,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """Return column schema for *database*.*table*.
+    """Return the merged, scope-filtered column schema for *database*.*table* (D83/D84).
 
-    Returns a dict with keys: database, table, columns (list of {name, type, comment}).
+    Pipeline (mcp-overlay-design.md §1): introspect (unchanged system.columns
+    query) -> merge with the Semantic Catalog overlay (case-sensitive exact
+    column-name join, D70) -> scope-filter the merged result (skipped when
+    `current_scope` is None [stdio/local-trust] or empty [allow-all, D80b]).
+
+    Returns the design §1.2 shape: database, table, catalogued, description,
+    grain, temporal, primary_key, join_keys, columns, measures, rules,
+    ambiguities, catalog_sha. An uncatalogued table returns catalogued=False
+    with all catalog-derived fields null and columns carrying introspection
+    fields only (design §1.3) — still scope-filtered.
+
+    Scratch-table isolation (D64): when *database* is the scratch database, the
+    requested table must belong to the caller's session (same owning-session check
+    run_query/sample_rows apply, via the shared ``scratch_table_belongs_to_session``
+    D64 parser). A foreign — or session-less — scratch table's schema is NEVER
+    returned; instead the SAME violation run_query raises is surfaced
+    (SCRATCH_SESSION_VIOLATION), so the MCP reports it identically. Non-scratch
+    databases are unaffected.
 
     Raises:
         DatabaseNotAllowedError: if *database* is not in the allowlist.
+        ColumnScopeError:        SCRATCH_SESSION_VIOLATION if *database* is the
+                                  scratch db and *table* does not belong to the
+                                  current session (or no session is bound).
         TableNotFoundError:      if the table has no columns (does not exist).
     """
     if settings is None:
         settings = get_settings()
 
     _check_database_allowed(database, settings)
+
+    if database == settings.scratch_database:
+        # Session-gate the scratch database (D64): only the owning session may read
+        # a scratch table's schema. Fails closed on a None/empty session and on any
+        # foreign/malformed name — identical semantics to the run_query read gate.
+        session_id = get_current_session_id()
+        if not scratch_table_belongs_to_session(table, session_id):
+            logger.error(
+                "get_table_schema: scratch session violation code=SCRATCH_SESSION_VIOLATION"
+            )
+            raise ColumnScopeError(
+                message=(
+                    "Schema requested for a scratch table that does not belong to "
+                    "this session."
+                ),
+                code="SCRATCH_SESSION_VIOLATION",
+            )
 
     sql = (
         "SELECT name, type, comment "
@@ -195,11 +272,28 @@ def get_table_schema(
             code="TABLE_NOT_FOUND",
         )
 
-    columns = [
+    introspected_columns = [
         {"name": row[0], "type": row[1], "comment": row[2] or ""}
         for row in rows
     ]
-    return {"database": database, "table": table, "columns": columns}
+
+    scope = get_current_scope()
+    # The introspected universe (real system.columns data for every table) is
+    # only needed to resolve cross-table free-text references inside
+    # rules[]/ambiguities[] when scope-filtering is actually active (FIX 1,
+    # security review) — skip the extra query entirely when enforcement is a
+    # no-op (scope is None or the empty/allow-all frozenset).
+    introspected_schema = get_catalog_schema() if scope else None
+    response = build_table_schema_response(
+        database=database,
+        table=table,
+        introspected_columns=introspected_columns,
+        catalog=get_semantic_catalog(),
+        scope=scope,
+        introspected_schema=introspected_schema,
+    )
+    response["catalog_sha"] = get_catalog_sha()
+    return response
 
 
 def sample_rows(
@@ -214,8 +308,24 @@ def sample_rows(
 
     Returns the compact {columns, rows, row_count, truncated=False} shape.
 
+    Column-scope enforcement (D83, matching runQuery's SELECT * treatment,
+    D69/OQ-2): sampleRows is effectively `SELECT * LIMIT n`, so the exact same
+    provenance-extraction + scope-allowlist check `run_query` applies is reused
+    here, unmodified — the query is REJECTED (never partially projected) if any
+    column it would return is outside `column_scope`. If the table can't be
+    enumerated (not in the provenance catalog), extraction fails closed and the
+    sample is rejected (same fail-closed rule SELECT * gets in runQuery).
+    Skipped entirely when scope is None (stdio/local-trust) or empty
+    (allow-all, D80b) — identical three-state model as run_query.
+
     Raises:
         DatabaseNotAllowedError: if *database* is not in the allowlist.
+        ColumnScopeError:        if any column of the table is outside scope
+                                  (COLUMN_SCOPE_VIOLATION) or the table can't be
+                                  enumerated under scope enforcement.
+        ParseFailedError:        if column provenance can't be extracted
+                                  (PARSE_FAILED_CLOSED) — the sample is rejected,
+                                  never executed.
     """
     if settings is None:
         settings = get_settings()
@@ -230,6 +340,65 @@ def sample_rows(
     safe_db = database.replace("`", "``")
     safe_table = table.replace("`", "``")
     sql = f"SELECT * FROM `{safe_db}`.`{safe_table}` LIMIT {effective_limit}"
+
+    # ---------------------------------------------------------------------------
+    # Column-scope enforcement (D83) — reuses run_query's exact enforcement path.
+    # ---------------------------------------------------------------------------
+    scope = get_current_scope()
+    session_id = get_current_session_id()
+
+    if scope is not None:
+        catalog = get_catalog_schema()
+
+        try:
+            uses = extract_column_provenance(sql, catalog, session_id=session_id)
+        except ScratchSessionError as exc:
+            logger.error(
+                "sample_rows: scratch session violation code=SCRATCH_SESSION_VIOLATION"
+            )
+            raise ColumnScopeError(
+                message="Table sampled is a scratch table that does not belong to this session.",
+                code="SCRATCH_SESSION_VIOLATION",
+            ) from exc
+        except ProvenanceExtractionError as exc:
+            logger.error(
+                "sample_rows: provenance extraction failed code=PARSE_FAILED_CLOSED"
+            )
+            raise ParseFailedError(
+                message=(
+                    "Column provenance could not be extracted for this table "
+                    "(it may not be in the catalog). Sample rejected — fail-closed."
+                ),
+                code="PARSE_FAILED_CLOSED",
+            ) from exc
+
+        if scope:
+            forbidden = {
+                f"{db_tbl}.{col}"
+                for db_tbl, col in uses
+                if not db_tbl.startswith("scratch.")
+                and f"{db_tbl}.{col}" not in scope
+            }
+
+            if forbidden:
+                logger.warning(
+                    "sample_rows: column scope violation forbidden_count=%d code=COLUMN_SCOPE_VIOLATION",
+                    len(forbidden),
+                )
+                # Column NAMES are catalog metadata (not PII / cell values, D25),
+                # so it is safe to name the out-of-scope columns here — this is
+                # what lets the model see WHICH columns it lacks.
+                raise ColumnScopeError(
+                    message=(
+                        "This table has columns outside your permitted scope: "
+                        f"{', '.join(sorted(forbidden))}. "
+                        "sampleRows cannot partially project columns — request "
+                        "access to those columns, or use runQuery with an "
+                        "explicit column list within your scope."
+                    ),
+                    code="COLUMN_SCOPE_VIOLATION",
+                )
+    # ---------------------------------------------------------------------------
 
     columns, rows = _execute(sql, settings)
 
@@ -263,6 +432,74 @@ def run_query(
             message=exc.detail.get("error", "Query validation failed"),
             code=exc.detail.get("code", "QUERY_VALIDATION_ERROR"),
         ) from exc
+
+    # ---------------------------------------------------------------------------
+    # Column-scope and scratch-isolation enforcement (D57, D63, D64)
+    # ---------------------------------------------------------------------------
+    scope = get_current_scope()
+    session_id = get_current_session_id()
+
+    if scope is not None:
+        # Scope is set (HTTP/JWT transport) — enforce column-level access control.
+        catalog = get_catalog_schema()
+
+        try:
+            uses = extract_column_provenance(clean_sql, catalog, session_id=session_id)
+        except ScratchSessionError as exc:
+            # Scratch table belongs to a different session (D64).
+            logger.error(
+                "run_query: scratch session violation code=SCRATCH_SESSION_VIOLATION"
+            )
+            raise ColumnScopeError(
+                message="Query accesses a scratch table that does not belong to this session.",
+                code="SCRATCH_SESSION_VIOLATION",
+            ) from exc
+        except ProvenanceExtractionError as exc:
+            # Parse/qualify failed — fail-closed (D63): never execute.
+            logger.error(
+                "run_query: provenance extraction failed code=PARSE_FAILED_CLOSED"
+            )
+            raise ParseFailedError(
+                message=(
+                    "Column provenance could not be extracted from this query. "
+                    "Use explainQuery to diagnose, then resubmit."
+                ),
+                code="PARSE_FAILED_CLOSED",
+            ) from exc
+
+        # Empty frozenset == ALLOW-ALL: skip the column-allowlist check entirely.
+        # Only a non-empty scope enforces the column allowlist (D57).
+        # Scratch columns (database prefix == "scratch") are session-gated, not
+        # scope-gated (D69/OQ-4) — they are intentionally excluded regardless.
+        if scope:
+            forbidden = {
+                f"{db_tbl}.{col}"
+                for db_tbl, col in uses
+                if not db_tbl.startswith("scratch.")
+                and f"{db_tbl}.{col}" not in scope
+            }
+
+            if forbidden:
+                # Log only the count to keep server logs terse; the column
+                # NAMES themselves are catalog metadata (surfaced to the model
+                # in the error message below), not a secret.
+                logger.warning(
+                    "run_query: column scope violation forbidden_count=%d code=COLUMN_SCOPE_VIOLATION",
+                    len(forbidden),
+                )
+                # Column NAMES are catalog metadata (not PII / cell values, D25),
+                # so it is safe to name the out-of-scope columns here — this is
+                # what lets the model see WHICH columns it lacks.
+                raise ColumnScopeError(
+                    message=(
+                        "This query needs access to columns outside your "
+                        f"permitted scope: {', '.join(sorted(forbidden))}. "
+                        "You do not have access to those columns — remove them "
+                        "from the query, or ask the user to grant access."
+                    ),
+                    code="COLUMN_SCOPE_VIOLATION",
+                )
+    # ---------------------------------------------------------------------------
 
     # Apply caller-supplied limit override.
     # The substitution pattern preserves a trailing OFFSET clause (captured in

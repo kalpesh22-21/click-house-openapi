@@ -58,6 +58,21 @@ class Settings(BaseSettings):
     )
     oidc_issuer: str = Field("", description="Expected JWT 'iss' claim (token issuer).")
     oidc_audience: str = Field("", description="Expected JWT 'aud' claim (this API's audience).")
+    # --- Static public key (JWKS-less verification) ---
+    # For an external token creator that mints RS*/ES*/PS* JWTs but does NOT
+    # publish a JWKS endpoint — you only hold its public key.  When set, the
+    # asymmetric path verifies against THIS key directly (no network) and takes
+    # precedence over OIDC_JWKS_URL.  Only ever used on the asymmetric path
+    # (pinned to JWT_ALGORITHMS), so it never touches HMAC verification.  A single
+    # key only: rotation needs a JWKS endpoint (multiple published keys by kid).
+    # Escaped '\n' sequences (common in env/secret stores) are normalised.
+    oidc_public_key: str = Field(
+        "",
+        description=(
+            "Optional PEM-encoded public key to verify asymmetric JWTs without a "
+            "JWKS endpoint. Takes precedence over OIDC_JWKS_URL when set."
+        ),
+    )
     jwt_algorithms: str = Field(
         "RS256",
         description=(
@@ -143,6 +158,90 @@ class Settings(BaseSettings):
     mcp_port: int = Field(8000, description="Port the MCP HTTP server listens on (default 8000)")
     mcp_path: str = Field("/mcp", description="Mount path for the MCP streamable-HTTP endpoint")
 
+    # --- X-Session-Id ↔ JWT binding (auth-hardening Slice 1) ---
+    # When true, any MCP HTTP request that carries an X-Session-Id header MUST
+    # also carry a matching 'sid_hash' JWT claim (base64url(sha256(session_id)));
+    # a mismatch or a missing claim is rejected 403 SESSION_BINDING_MISMATCH,
+    # before the request reaches the scratch-isolation extractor.  This closes
+    # the session-hijack gap (a caller sending another user's session id).
+    # Defaults FALSE: the external token minter does not stamp a 'sid_hash'
+    # claim, so enforcing the binding would 403 every session-carrying request.
+    # In this posture the session id is taken purely from the X-Session-Id header
+    # and the caller (a trusted agent backend) is relied on not to forward a
+    # hostile session id.  Set true once every minting path stamps sid_hash
+    # (base64url(sha256(session_id)); see app/session_binding.py) to re-enable the
+    # session-hijack protection.  Session-less requests (no X-Session-Id header)
+    # are unaffected regardless of this flag.
+    require_sid_binding: bool = Field(
+        False,
+        description=(
+            "Require a matching 'sid_hash' JWT claim whenever an X-Session-Id "
+            "header is present (session-hijack protection). Default false because "
+            "the external minter does not stamp sid_hash; set true once it does."
+        ),
+    )
+
+    # --- Scratch-write side-channel (table-intermediate Slice 1) ---
+    # The scratch-write endpoints (/scratch/v1/materialize, /scratch/v1/drop) run
+    # under a DISTINCT, server-side-only ClickHouse credential that is GRANTed
+    # CREATE/INSERT/DROP/SELECT on the `scratch` database ONLY — never the
+    # warehouse.  The runtime never holds this credential; the privilege lives in
+    # MCP deploy config.  When these SCRATCH_CH_* fields are left unset they fall
+    # back to the main CLICKHOUSE_* connection (dev/single-user convenience); a
+    # production deploy MUST set SCRATCH_CH_USER / SCRATCH_CH_PASSWORD to the
+    # scratch-only account so the grant confines the blast radius (invariant #1).
+    scratch_ch_host: str = Field(
+        "", description="Scratch-credential ClickHouse host (falls back to CLICKHOUSE_HOST)."
+    )
+    scratch_ch_port: int = Field(
+        0, description="Scratch-credential ClickHouse port (0 → falls back to CLICKHOUSE_PORT)."
+    )
+    scratch_ch_user: str = Field(
+        "", description="Scratch-only ClickHouse username (falls back to CLICKHOUSE_USER)."
+    )
+    scratch_ch_password: Optional[str] = Field(
+        None,
+        description=(
+            "Scratch-only ClickHouse password (secret). None → falls back to "
+            "CLICKHOUSE_PASSWORD. Set explicitly (even to empty) to override."
+        ),
+    )
+    scratch_ch_secure: Optional[bool] = Field(
+        None, description="TLS for the scratch credential (None → falls back to CLICKHOUSE_SECURE)."
+    )
+    scratch_database: str = Field(
+        "scratch",
+        description="ClickHouse database that holds session-scoped scratch tables (never the warehouse).",
+    )
+    scratch_ttl_seconds: int = Field(
+        3600,
+        ge=1,
+        description=(
+            "Wall-clock TTL (seconds) stamped on every scratch table so orphans from "
+            "a crash/abandoned pause GC themselves (D20/D45). Must exceed a human "
+            "approval-pause window (OQ-E)."
+        ),
+    )
+    scratch_max_rows: int = Field(
+        10_000,
+        ge=1,
+        description=(
+            "Hard cap on rows a single /scratch/v1/materialize may load. Over-cap is "
+            "rejected SCRATCH_TOO_LARGE so the runtime falls back to the raw loop (OQ-C)."
+        ),
+    )
+    upload_max_bytes: int = Field(
+        8 * 1024 * 1024,
+        ge=1,
+        description=(
+            "Hard cap (bytes) on an external-dataset upload (/scratch/v1/analyze, "
+            "/scratch/v1/upload) enforced BEFORE the file is parsed (UI Slice 4 §3). "
+            "Mirrors scratch_max_rows as a session-appropriate front-door guard — far "
+            "below admin's 200 MB CSV cap — and bounds a compressed XLSX before it "
+            "reaches openpyxl (decompression-bomb defence)."
+        ),
+    )
+
     # --- OpenAPI / GPT Action ---
     public_base_url: str = Field(
         "https://your-public-host.example.com",
@@ -209,6 +308,28 @@ class Settings(BaseSettings):
             if not (alg.startswith("RS") or alg.startswith("ES") or alg.startswith("PS")):
                 raise ValueError(f"Unsupported JWT algorithm '{alg}'.")
         return ",".join(algs)
+
+    @field_validator("oidc_public_key")
+    @classmethod
+    def _validate_public_key(cls, v: str) -> str:
+        """Normalise and validate a static public key at config time (fail fast).
+
+        Accepts escaped ``\\n`` (env/secret stores often flatten PEMs to one line).
+        Rejects anything that is not a loadable PEM *public* key — including a
+        pasted private key — so a misconfiguration cannot silently disable auth.
+        """
+        if not v or not v.strip():
+            return ""
+        pem = v.replace("\\n", "\n").strip()
+        try:
+            from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+            load_pem_public_key(pem.encode())
+        except Exception as exc:  # noqa: BLE001 — surface any parse failure as config error
+            raise ValueError(
+                f"oidc_public_key must be a valid PEM-encoded public key: {exc}"
+            ) from exc
+        return pem
 
     @model_validator(mode="after")
     def _validate_tenant_settings(self) -> "Settings":
@@ -281,12 +402,43 @@ class Settings(BaseSettings):
 
         Used by the REST lifespan and MCP HTTP entrypoint to fail closed: a
         network-exposed transport must not start without a way to verify tokens.
+
+        A key source is EITHER a JWKS endpoint OR a static public key; issuer and
+        audience are always required.
         """
+        has_key_source = bool(self.oidc_jwks_url.strip() or self.oidc_public_key.strip())
         return bool(
-            self.oidc_jwks_url.strip()
+            has_key_source
             and self.oidc_issuer.strip()
             and self.oidc_audience.strip()
         )
+
+    def scratch_client_params(self) -> Dict[str, object]:
+        """Resolve the scratch-credential connection params (with CLICKHOUSE_* fallback).
+
+        Each SCRATCH_CH_* field independently overrides the corresponding main
+        CLICKHOUSE_* field; unset fields inherit the main connection.  This lets a
+        dev/single-user deploy run the scratch endpoints against the same account
+        while a production deploy points them at a scratch-only grant (invariant #1)
+        by setting SCRATCH_CH_USER / SCRATCH_CH_PASSWORD.
+        """
+        password = (
+            self.scratch_ch_password
+            if self.scratch_ch_password is not None
+            else self.clickhouse_password
+        )
+        secure = (
+            self.scratch_ch_secure
+            if self.scratch_ch_secure is not None
+            else self.clickhouse_secure
+        )
+        return {
+            "host": self.scratch_ch_host or self.clickhouse_host,
+            "port": self.scratch_ch_port or self.clickhouse_port,
+            "user": self.scratch_ch_user or self.clickhouse_user,
+            "password": password,
+            "secure": secure,
+        }
 
     def allowed_databases_list(self) -> Optional[List[str]]:
         """Return the parsed allowlist, or None if '*' (all databases allowed)."""

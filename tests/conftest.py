@@ -78,6 +78,30 @@ def _patch_jwks(request, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _reset_mcp_session_manager():
+    """Give every test a FRESH MCP streamable-HTTP session manager.
+
+    FastMCP lazily creates and caches ONE ``StreamableHTTPSessionManager`` on the
+    module-global ``mcp`` object (``streamable_http_app()`` reuses it). That
+    manager's ``.run()`` — entered by a ``TestClient`` lifespan — is
+    once-per-instance, so a second test that drives ``mcp.streamable_http_app()``
+    (e.g. the full-app auth/binding tests) would hit
+    ``RuntimeError: .run() can only be called once per instance``. Nulling the
+    cache before/after each test forces a fresh manager, restoring test
+    isolation. Import is lazy + guarded so this stays inert for tests that never
+    touch the MCP app.
+    """
+    try:
+        from app.mcp_server import mcp
+    except Exception:  # noqa: BLE001 — never let a fixture import break collection
+        yield
+        return
+    mcp._session_manager = None
+    yield
+    mcp._session_manager = None
+
+
 @pytest.fixture(autouse=False)
 def reset_settings_cache():
     """Clear the lru_cache on get_settings between tests that mutate env vars."""

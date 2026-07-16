@@ -61,19 +61,24 @@ import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.formparsers import MultiPartException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.auth_jwt import JWTAuthError, validate_token
 from app.config import get_settings
-from app.principal import current_principal
+from app.principal import current_principal, current_scope, current_session_id
 from app.errors import (
     ClickHouseQueryError,
     ClickHouseUnavailableError,
+    ColumnScopeError,
     DatabaseNotAllowedError,
+    ParseFailedError,
     QueryValidationError,
     TableNotFoundError,
 )
+from app.session_binding import sid_hash_matches
 from app.service import (
     explain_query as svc_explain_query,
     get_table_schema as svc_get_table_schema,
@@ -154,6 +159,17 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
             f"[{exc.code}] {exc.message}. "
             "The ClickHouse server is temporarily unreachable."
         )
+    if isinstance(exc, ColumnScopeError):
+        # Forward the service-layer message verbatim: it is an author-controlled
+        # string that NAMES the out-of-scope columns (catalog metadata, not PII /
+        # cell values per D25), so the model can see WHICH columns it lacks.
+        return ToolError(f"[{exc.code}] {exc.message}")
+    if isinstance(exc, ParseFailedError):
+        return ToolError(
+            f"[{exc.code}] The query could not be parsed for column-scope verification "
+            "and was rejected without execution. "
+            "Call explainQuery to diagnose SQL syntax issues, then resubmit."
+        )
     # Log full detail server-side so operators can investigate, but return a
     # generic message to the LLM to avoid leaking internal stack traces or
     # implementation details to clients.
@@ -212,18 +228,21 @@ def list_tables(
 @mcp.tool(
     name="getTableSchema",
     description=(
-        "Return the full column schema (name, ClickHouse data type, comment) for the specified table. "
+        "Return the column schema for the specified table, merged with the curated Semantic "
+        "Catalog (description, synonyms, units, known values, grain, primary key, join keys, "
+        "measures, rules, and disambiguation guidance) when the table is catalogued. "
         "ALWAYS call this before writing a SELECT query against an unfamiliar table. "
         "Knowing the schema tells you exact column names, types (e.g. UInt64, Nullable(String), "
         "DateTime64(3)), and descriptive comments — preventing type-mismatch errors and helping "
-        "you write correct WHERE clauses and aggregations."
+        "you write correct WHERE clauses and aggregations. "
+        "Columns and catalog entries outside your permitted access scope are omitted."
     ),
 )
 def get_table_schema(
     database: Annotated[str, Field(description="The database containing the table")],
     table: Annotated[str, Field(description="The table to describe")],
 ) -> dict[str, Any]:
-    """Return column names, types, and comments for the given table."""
+    """Return the merged, scope-filtered column schema for the given table (D83/D84)."""
     try:
         return svc_get_table_schema(database, table)
     except Exception as exc:
@@ -237,7 +256,10 @@ def get_table_schema(
         "actual data values, formats, and nullability before writing analytical queries. "
         "Default sample size is 5 rows; maximum is 50. "
         "Call getTableSchema first to know the column names, then use sampleRows to "
-        "understand real data distributions."
+        "understand real data distributions. "
+        "If the table has any column outside your permitted access scope, the call is rejected "
+        "outright (no partial row projection) — use runQuery with an explicit in-scope column "
+        "list instead."
     ),
 )
 def sample_rows(
@@ -314,6 +336,24 @@ def explain_query(
 # HTTP transport: Bearer auth middleware
 # ---------------------------------------------------------------------------
 
+# Header name for the session identifier, sent by the agent backend per-request.
+# The trusted agent backend is expected to always include this header so that
+# scratch-table session isolation (D64) applies.
+#
+# If the header is absent, current_session_id is set to None.  None does NOT
+# allow cross-session scratch access: for a scoped caller, the provenance
+# extractor (app/sqlparse/provenance.py::_validate_scratch_name) FAILS CLOSED on
+# any scratch.* reference when session_id is None — a scratch table whose owning
+# session is unknown can never be proven to belong to the caller (D64,
+# auth-hardening Slice 1).  This is what closes the "omit the X-Session-Id header
+# to read another session's scratch" bypass: the sid_hash binding check below
+# only fires when the header is *present*, so the extractor's None-fail-closed is
+# the defense for the header-absent case.  (The stdio/local-trust path —
+# current_scope is None — skips the extractor entirely and is a separate,
+# intentionally-trusted transport.)
+SESSION_ID_HEADER = "x-session-id"
+
+
 def _bearer_from_scope(scope: dict[str, Any]) -> Optional[str]:
     """Extract the Bearer token from an ASGI scope, or None if absent/malformed."""
     for name, value in scope.get("headers", []):
@@ -323,6 +363,16 @@ def _bearer_from_scope(scope: dict[str, Any]) -> Optional[str]:
                 token = header[len("Bearer "):].strip()
                 return token or None
             return None
+    return None
+
+
+def _session_id_from_scope(scope: dict[str, Any]) -> Optional[str]:
+    """Extract the X-Session-Id header from an ASGI scope, or None if absent/empty."""
+    target = SESSION_ID_HEADER.encode("latin-1")
+    for name, value in scope.get("headers", []):
+        if name == target:
+            decoded = value.decode("latin-1").strip()
+            return decoded or None
     return None
 
 
@@ -379,8 +429,8 @@ class JWTAuthMiddleware:
     Why pure-ASGI rather than BaseHTTPMiddleware: BaseHTTPMiddleware runs the
     downstream app in a separate task, so a ContextVar set in it does NOT reach
     the MCP tool functions.  A pure-ASGI middleware awaits the app in the SAME
-    context, so ``current_principal`` set here propagates into the tool call (and
-    into the anyio threadpool that runs the sync tools).
+    async task, so ``current_principal`` set here is directly visible to FastMCP
+    sync tools (which run inline in the event loop, not on a threadpool).
 
     Default-deny: every request is rejected unless it carries a valid token,
     except an explicit public-path allowlist (default: /health for k8s probes).
@@ -464,11 +514,56 @@ class JWTAuthMiddleware:
             )
             return
 
+        # scope ← JWT claim (principal.column_scope)
+        # session_id ← X-Session-Id request header (not a JWT claim)
+        # The trusted agent backend is expected to always send X-Session-Id;
+        # absent header → None → extractor skips scratch-table validation.
+        session_id_value = _session_id_from_scope(scope)
+
+        # --- X-Session-Id ↔ sid_hash binding (auth-hardening Slice 1) ---
+        # If the request carries a session id, it MUST hash to the token's
+        # 'sid_hash' claim; otherwise a caller holding one valid JWT could set
+        # X-Session-Id to another user's session and read their scratch/PII (the
+        # scratch gate downstream trusts this header). Reject BEFORE binding the
+        # session into the context / running any tool. Fail-closed (D63/D64):
+        # a present header with a missing/mismatched claim is rejected. A
+        # session-less request (no header) is unaffected. Gated by
+        # require_sid_binding for the mint-then-enforce transition.
+        if session_id_value is not None and self.settings.require_sid_binding:
+            claim = principal.claims.get("sid_hash")
+            if not isinstance(claim, str) or not claim or not sid_hash_matches(
+                session_id_value, claim
+            ):
+                logger.info(
+                    "MCP auth rejected: path=%s status=403 code=SESSION_BINDING_MISMATCH "
+                    "sub=%s — X-Session-Id does not match the token's sid_hash claim",
+                    path,
+                    principal.subject,
+                )
+                await _send_json_response(
+                    send,
+                    403,
+                    {
+                        "error": "Session binding mismatch.",
+                        "code": "SESSION_BINDING_MISMATCH",
+                    },
+                    www_authenticate=_www_authenticate(
+                        self.settings,
+                        error="insufficient_scope",
+                        description="X-Session-Id does not match the token's session binding.",
+                    ),
+                )
+                return
+
         ctx_token = current_principal.set(principal)
+        scope_token = current_scope.set(principal.column_scope)
+        session_token = current_session_id.set(session_id_value)
         try:
             await self.app(scope, receive, send)
         finally:
             current_principal.reset(ctx_token)
+            current_scope.reset(scope_token)
+            current_session_id.reset(session_token)
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +591,9 @@ async def health_check(request: Request) -> JSONResponse:
             "status": "ok",
             "clickhouse": "ok" if ch_ok else "error",
             "transport": "http",
+            # Advertise the scratch-write side-channel contract version so a
+            # runtime can assert the capability at startup (contract §Q6).
+            "scratch_api": "v1",
         }
     )
 
@@ -532,6 +630,316 @@ if settings.mcp_path not in ("", "/"):
         f"/.well-known/oauth-protected-resource{settings.mcp_path}",
         methods=["GET"],
     )(oauth_protected_resource)
+
+
+# ---------------------------------------------------------------------------
+# Scratch-write side-channel (table-intermediate Slice 1) — HTTP transport only
+#
+# These are PRIVILEGED, NON-TOOL routes (D19).  They are NOT registered with
+# @mcp.tool — the agent LLM never sees them and cannot call them (invariant #5).
+# They ride as custom HTTP routes on the same MCP app, so JWTAuthMiddleware
+# validates the JWT and (D92) binds `current_session_id` from X-Session-Id BEFORE
+# a handler runs.  The scratch table name derives ONLY from that bound session_id
+# (never the request body), so a caller can only write to its OWN scratch
+# namespace (isolation invariant #2).  The ClickHouse write itself runs under a
+# distinct, server-side scratch-only credential (invariant #1) via
+# app.scratch_ingest.  Row cells are native-bulk-inserted as DATA (invariant #4).
+# ---------------------------------------------------------------------------
+
+from app.scratch_ingest import (  # noqa: E402
+    ScratchWriteError,
+    drop as scratch_drop,
+    materialize as scratch_materialize,
+)
+from app.upload_ingest import (  # noqa: E402
+    UploadMappingError,
+    UploadParseError,
+    UploadTooLargeError,
+    apply_mapping,
+    parse_upload,
+)
+
+
+def _scratch_error(status_code: int, code: str, message: str) -> JSONResponse:
+    """Consistent JSON error shape for the scratch routes."""
+    return JSONResponse({"error": message, "code": code}, status_code=status_code)
+
+
+@mcp.custom_route("/scratch/v1/materialize", methods=["POST"])
+async def scratch_materialize_route(request: Request) -> JSONResponse:
+    """Create a session-scoped scratch table and native-bulk-load the rows.
+
+    Auth: JWTAuthMiddleware (JWT validated + X-Session-Id ↔ sid_hash bound, D92).
+    The table name is derived from the bound session_id ONLY — a body-supplied
+    table/session is ignored.  Returns {"table", "row_count"}.
+    """
+    session_id = current_session_id.get()
+    if not session_id:
+        return _scratch_error(
+            400,
+            "SCRATCH_SESSION_MISSING",
+            "X-Session-Id is required to materialize a scratch table.",
+        )
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return _scratch_error(
+            400, "SCRATCH_MATERIALIZE_REJECTED", "Request body must be valid JSON."
+        )
+    if not isinstance(body, dict):
+        return _scratch_error(
+            400, "SCRATCH_MATERIALIZE_REJECTED", "Request body must be a JSON object."
+        )
+    columns = body.get("columns")
+    rows = body.get("rows")
+    settings_now = get_settings()
+    try:
+        # ClickHouse I/O is blocking; run it off the event loop so the MCP app
+        # stays responsive.  session_id is passed explicitly (not re-read from the
+        # context inside the thread).
+        result = await anyio.to_thread.run_sync(
+            scratch_materialize, session_id, columns, rows, settings_now
+        )
+    except ScratchWriteError as exc:
+        return _scratch_error(exc.status_code, exc.code, exc.message)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("scratch materialize failed: %s", exc)
+        return _scratch_error(
+            500, "SCRATCH_MATERIALIZE_REJECTED", "An internal error occurred."
+        )
+    return JSONResponse(result)
+
+
+@mcp.custom_route("/scratch/v1/drop", methods=["POST"])
+async def scratch_drop_route(request: Request) -> JSONResponse:
+    """Best-effort drop of a scratch table the caller's session owns.
+
+    A cross-session drop (table prefix != s_<bound-session>_) is rejected 403
+    SCRATCH_SESSION_VIOLATION.  The TTL is the real cleanup guarantee.
+    """
+    session_id = current_session_id.get()
+    if not session_id:
+        return _scratch_error(
+            400, "SCRATCH_SESSION_MISSING", "X-Session-Id is required to drop a scratch table."
+        )
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return _scratch_error(
+            400, "SCRATCH_MATERIALIZE_REJECTED", "Request body must be valid JSON."
+        )
+    table = body.get("table") if isinstance(body, dict) else None
+    settings_now = get_settings()
+    try:
+        result = await anyio.to_thread.run_sync(
+            scratch_drop, session_id, table, settings_now
+        )
+    except ScratchWriteError as exc:
+        return _scratch_error(exc.status_code, exc.code, exc.message)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("scratch drop failed: %s", exc)
+        return _scratch_error(500, "SCRATCH_MATERIALIZE_REJECTED", "An internal error occurred.")
+    return JSONResponse(result)
+
+
+# ---------------------------------------------------------------------------
+# External-dataset upload front door (UI Slice 4) — HTTP transport only.
+#
+# The parse + column-mapping half in front of the built scratch materialize
+# back-half.  Same posture as the scratch routes above: PRIVILEGED, NON-TOOL
+# custom routes (the agent LLM never sees them), behind JWTAuthMiddleware so the
+# session is D92-bound from X-Session-Id BEFORE a handler runs.  The materialized
+# table name derives ONLY from that bound session_id (never the body), so a caller
+# can only write to its OWN scratch namespace.  Both routes are multipart:
+#   POST /scratch/v1/analyze  — parse + preview (NO materialize)
+#   POST /scratch/v1/upload   — parse + rename + materialize (authoritative)
+# A byte cap is enforced BEFORE the whole body is buffered (Content-Length
+# pre-check + per-part max_part_size + a bounded read), and again on the read
+# bytes; the row cap (scratch_max_rows) is enforced during parse and inside
+# materialize.
+# ---------------------------------------------------------------------------
+
+# Slack over the raw byte cap to allow for the multipart boundary + part headers
+# when comparing against the request's declared Content-Length.
+_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+async def _read_upload_part(request: Request, max_bytes: int) -> tuple[bytes, str, Any]:
+    """Read the multipart body under a strict byte cap: (file bytes, filename, form).
+
+    Resource-exhaustion hardening (UI Slice 4 §3/§7). The cap is enforced in five
+    layers so an authenticated caller cannot make the server buffer/spool an
+    oversized body BEFORE the 413, regardless of Content-Length honesty or how the
+    body is split into parts:
+      1. A declared ``Content-Length`` over the hard limit is rejected WITHOUT
+         reading the stream at all (honest-client fast path).
+      2. A bounded ASGI receive-wrapper caps TOTAL ingested bytes (RAM AND disk) in
+         one place, so a chunked / lying-Content-Length body trips DURING form
+         parsing — before a huge file part finishes spooling to disk, and before a
+         multiplicity of text fields fills RAM (the pre-check can't fire without a
+         Content-Length).
+      3. ``max_files=2, max_fields=4`` cap the PART COUNT — only ``file`` +
+         ``mapping`` are ever legitimate, so ~999 text fields (Starlette's default
+         ``max_fields``) can never accumulate in FormData.
+      4. ``max_part_size=64 KiB`` caps the non-file ``mapping`` field (a 512-column
+         mapping is ≤ ~30 KiB); the file part streams/spools and is NOT truncated
+         by this.
+      5. The file part is pulled into RAM with a BOUNDED read of at most
+         ``max_bytes + 1`` bytes, then length-checked.
+
+    Raises ``UploadTooLargeError`` (→ 413 UPLOAD_TOO_LARGE) when a cap is exceeded,
+    or ``UploadParseError`` (→ 400) for a non-multipart / missing-file body.
+    """
+    hard_limit = max_bytes + _MULTIPART_OVERHEAD_BYTES
+
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > hard_limit:
+        raise UploadTooLargeError("Uploaded body exceeds the maximum allowed size.")
+
+    # Layer 2: bounded receive-wrapper — the total-bytes backstop.  It counts every
+    # ASGI body chunk as `form()` pulls it and raises the moment the cumulative
+    # ingested size crosses the hard limit, so nothing (RAM or disk spool) grows
+    # past it even when Content-Length is absent/lying or the body is chunked.
+    total = 0
+    orig_receive = request.receive
+
+    async def _bounded_receive() -> Any:
+        nonlocal total
+        message = await orig_receive()
+        total += len(message.get("body", b""))
+        if total > hard_limit:
+            raise UploadTooLargeError("Uploaded body exceeds the maximum allowed size.")
+        return message
+
+    request = Request(request.scope, _bounded_receive)
+
+    try:
+        form = await request.form(max_files=2, max_fields=4, max_part_size=64 * 1024)
+    except UploadTooLargeError:
+        raise  # our backstop tripped inside form parsing — keep it a 413
+    except (MultiPartException, StarletteHTTPException) as exc:
+        # Starlette wraps a max_part_size / max_files / max_fields violation into
+        # HTTPException(400); surface a resource-cap violation as the byte-cap 413
+        # rather than a generic parse 400.  The substring checks are pinned to
+        # starlette==0.50.0.
+        detail = str(getattr(exc, "detail", "") or exc)
+        if "exceeded maximum size" in detail or "Too many" in detail:
+            raise UploadTooLargeError(
+                "Uploaded file exceeds the maximum allowed size."
+            ) from exc
+        raise UploadParseError("Request must be multipart/form-data.") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise UploadParseError("Request must be multipart/form-data.") from exc
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise UploadParseError("Missing 'file' upload part.")
+    # Bounded read: never pull more than max_bytes + 1 into RAM even though the
+    # spooled file part is not covered by max_part_size.
+    content = await upload.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise UploadTooLargeError("Uploaded file exceeds the maximum allowed size.")
+    filename = getattr(upload, "filename", "") or ""
+    return content, filename, form
+
+
+@mcp.custom_route("/scratch/v1/analyze", methods=["POST"])
+async def scratch_analyze_route(request: Request) -> JSONResponse:
+    """Parse an uploaded CSV/XLSX and return a preview — NO materialize.
+
+    Returns ``{"columns": [{name,type}], "row_count": N, "sample_rows": [...]}``
+    so the browser can render the column-mapping UI.  Fails 413 SCRATCH_TOO_LARGE
+    if the parsed row count exceeds scratch_max_rows (before any mapping UI is
+    shown), and 413 UPLOAD_TOO_LARGE if the file is over the byte cap.
+    """
+    session_id = current_session_id.get()
+    if not session_id:
+        return _scratch_error(
+            400, "SCRATCH_SESSION_MISSING", "X-Session-Id is required to analyze an upload."
+        )
+    settings_now = get_settings()
+    try:
+        content, filename, _ = await _read_upload_part(
+            request, settings_now.upload_max_bytes
+        )
+    except UploadTooLargeError as exc:
+        return _scratch_error(413, "UPLOAD_TOO_LARGE", exc.message)
+    except UploadParseError as exc:
+        return _scratch_error(400, "UPLOAD_PARSE_ERROR", exc.message)
+    try:
+        # Parsing (esp. openpyxl) is blocking CPU work; run it off the event loop.
+        columns, rows = await anyio.to_thread.run_sync(
+            parse_upload, content, filename, settings_now.scratch_max_rows
+        )
+    except ScratchWriteError as exc:  # ScratchTooLargeError → 413 SCRATCH_TOO_LARGE
+        return _scratch_error(exc.status_code, exc.code, exc.message)
+    except UploadParseError as exc:
+        return _scratch_error(400, "UPLOAD_PARSE_ERROR", exc.message)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("upload analyze failed: %s", exc)
+        return _scratch_error(500, "UPLOAD_PARSE_ERROR", "An internal error occurred.")
+    return JSONResponse(
+        {
+            "columns": columns,
+            "row_count": len(rows),
+            "sample_rows": rows[:10],
+        }
+    )
+
+
+@mcp.custom_route("/scratch/v1/upload", methods=["POST"])
+async def scratch_upload_route(request: Request) -> JSONResponse:
+    """Parse + rename + materialize an uploaded CSV/XLSX (authoritative).
+
+    Re-parses the file server-side (Option B — stateless), applies the column
+    mapping, and materializes a session-scoped scratch table.  Returns the
+    materialize shape verbatim: ``{"table": "scratch.s_<sid>_bp_<uuid>",
+    "row_count": N}``.
+    """
+    session_id = current_session_id.get()
+    if not session_id:
+        return _scratch_error(
+            400, "SCRATCH_SESSION_MISSING", "X-Session-Id is required to upload a scratch table."
+        )
+    settings_now = get_settings()
+    try:
+        content, filename, form = await _read_upload_part(
+            request, settings_now.upload_max_bytes
+        )
+    except UploadTooLargeError as exc:
+        return _scratch_error(413, "UPLOAD_TOO_LARGE", exc.message)
+    except UploadParseError as exc:
+        return _scratch_error(400, "UPLOAD_PARSE_ERROR", exc.message)
+    mapping_raw = form.get("mapping")
+    try:
+        mapping = json.loads(mapping_raw) if mapping_raw else {}
+    except (TypeError, ValueError):
+        return _scratch_error(
+            400, "UPLOAD_MAPPING_INVALID", "The 'mapping' field must be valid JSON."
+        )
+    if not isinstance(mapping, dict):
+        return _scratch_error(
+            400, "UPLOAD_MAPPING_INVALID", "The 'mapping' field must be a JSON object."
+        )
+
+    def _do_upload() -> dict[str, Any]:
+        columns, rows = parse_upload(content, filename, settings_now.scratch_max_rows)
+        columns, rows = apply_mapping(columns, rows, mapping)
+        # The table name derives ONLY from the D92-bound session_id, never the body.
+        return scratch_materialize(session_id, columns, rows, settings_now)
+
+    try:
+        # Blocking parse + ClickHouse DDL/insert — run off the event loop.
+        result = await anyio.to_thread.run_sync(_do_upload)
+    except ScratchWriteError as exc:  # incl. ScratchTooLargeError (413 SCRATCH_TOO_LARGE)
+        return _scratch_error(exc.status_code, exc.code, exc.message)
+    except UploadParseError as exc:
+        return _scratch_error(400, "UPLOAD_PARSE_ERROR", exc.message)
+    except UploadMappingError as exc:
+        return _scratch_error(400, "UPLOAD_MAPPING_INVALID", exc.message)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("upload failed: %s", exc)
+        return _scratch_error(500, "SCRATCH_MATERIALIZE_REJECTED", "An internal error occurred.")
+    return JSONResponse(result)
 
 
 # ---------------------------------------------------------------------------

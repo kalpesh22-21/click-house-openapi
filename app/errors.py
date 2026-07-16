@@ -51,3 +51,26 @@ class ClickHouseUnavailableError(ClickHouseAPIError):
 
     Maps to HTTP 502 in the REST layer.
     """
+
+
+class ColumnScopeError(ClickHouseAPIError):
+    """Raised when a query references columns outside the caller's permitted scope.
+
+    Two codes are used:
+      COLUMN_SCOPE_VIOLATION — one or more warehouse columns are not in the JWT scope.
+      SCRATCH_SESSION_VIOLATION — a scratch table does not belong to the caller's session.
+
+    Maps to HTTP 403 in the REST layer.
+    """
+
+
+class ParseFailedError(ClickHouseAPIError):
+    """Raised when column provenance cannot be extracted from the SQL (D63 fail-closed).
+
+    The query is rejected without execution.  The caller should use explainQuery
+    to diagnose whether the SQL is valid, then reformulate if needed.
+
+    Code: PARSE_FAILED_CLOSED
+
+    Maps to HTTP 400 in the REST layer.
+    """

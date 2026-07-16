@@ -173,7 +173,23 @@ class TestServiceGetTableSchema:
         assert result["database"] == "default"
         assert result["table"] == "users"
         assert len(result["columns"]) == 2
-        assert result["columns"][0] == {"name": "id", "type": "UInt64", "comment": ""}
+        # "default.users" has no Semantic Catalog entry -> catalogued:false,
+        # structural-only path (design §1.3): introspection fields only, overlay
+        # fields nulled/defaulted, still carries catalog_sha (D84).
+        assert result["catalogued"] is False
+        assert result["columns"][0] == {
+            "name": "id",
+            "type": "UInt64",
+            "comment": "",
+            "description": None,
+            "synonyms": None,
+            "unit": None,
+            "values": None,
+            "observed_values": None,
+            "client_defined": False,
+            "sensitive": False,
+        }
+        assert "catalog_sha" in result
 
     def test_raises_database_not_allowed(self, mock_execute):
         os.environ["ALLOWED_DATABASES"] = "analytics"
@@ -366,6 +382,28 @@ class TestMcpToolGuardrails:
             mcp_explain_query(sql="DROP TABLE t")
         mock_execute.assert_not_called()
 
+    def test_column_scope_tool_error_forwards_column_names(self):
+        """_domain_to_tool_error must forward the service-layer ColumnScopeError
+        message verbatim (behind the [CODE] marker) so the out-of-scope column
+        NAMES reach the runtime/model — not a generic canned string."""
+        from app.errors import ColumnScopeError
+        from app.mcp_server import _domain_to_tool_error
+
+        exc = ColumnScopeError(
+            message=(
+                "This query needs access to columns outside your permitted "
+                "scope: employee.EmployeeStatus, employee.HireDate. You do not "
+                "have access to those columns — remove them from the query, or "
+                "ask the user to grant access."
+            ),
+            code="COLUMN_SCOPE_VIOLATION",
+        )
+        tool_error = _domain_to_tool_error(exc)
+        text = str(tool_error)
+        assert "[COLUMN_SCOPE_VIOLATION]" in text
+        assert "employee.EmployeeStatus" in text
+        assert "employee.HireDate" in text
+
     def test_list_tables_forbidden_database_raises_tool_error(self, mock_execute):
         from mcp.server.fastmcp.exceptions import ToolError
 
@@ -442,7 +480,13 @@ def _inner_app(extra_routes=()):
 def _wrap(app=None, public_paths=("/health",)):
     if app is None:
         app = _inner_app()
-    return JWTAuthMiddleware(app, settings=get_settings(), public_paths=public_paths)
+    # require_sid_binding now defaults to False (the external minter does not
+    # stamp sid_hash).  These middleware tests exercise the binding *mechanism*,
+    # which is opt-in, so the harness turns it on explicitly.  Header-less auth
+    # tests are unaffected (the binding check only fires when X-Session-Id is
+    # present).
+    settings = get_settings().model_copy(update={"require_sid_binding": True})
+    return JWTAuthMiddleware(app, settings=settings, public_paths=public_paths)
 
 
 class TestJWTAuthMiddleware:
@@ -555,6 +599,271 @@ class TestJWTAuthMiddleware:
 
         anyio.run(driver)
         assert seen["type"] == "lifespan"
+
+    def test_x_session_id_header_sets_current_session_id(self):
+        """X-Session-Id header value is propagated to current_session_id ContextVar."""
+        from app.principal import get_current_session_id
+
+        captured = {}
+
+        async def inner_capturing(scope, receive, send):
+            captured["session_id"] = get_current_session_id()
+            from starlette.responses import PlainTextResponse
+            resp = PlainTextResponse("ok")
+            await resp(scope, receive, send)
+
+        mw = JWTAuthMiddleware(inner_capturing, settings=get_settings())
+        client = TestClient(mw, raise_server_exceptions=False)
+        resp = client.get(
+            "/mcp",
+            headers={
+                # Binding defaults off (require_sid_binding=False), so the header
+                # propagates to current_session_id regardless; the token is bound
+                # to the same session id anyway so this also holds if enforced.
+                "Authorization": f"Bearer {make_jwt(session_id='sess-xyz-789')}",
+                "X-Session-Id": "sess-xyz-789",
+            },
+        )
+        assert resp.status_code == 200
+        assert captured["session_id"] == "sess-xyz-789"
+
+    def test_absent_x_session_id_sets_current_session_id_to_none(self):
+        """Missing X-Session-Id header → current_session_id is None."""
+        from app.principal import get_current_session_id
+
+        captured = {}
+
+        async def inner_capturing(scope, receive, send):
+            captured["session_id"] = get_current_session_id()
+            from starlette.responses import PlainTextResponse
+            resp = PlainTextResponse("ok")
+            await resp(scope, receive, send)
+
+        mw = JWTAuthMiddleware(inner_capturing, settings=get_settings())
+        client = TestClient(mw, raise_server_exceptions=False)
+        resp = client.get(
+            "/mcp",
+            headers={"Authorization": f"Bearer {make_jwt()}"},
+        )
+        assert resp.status_code == 200
+        assert captured["session_id"] is None
+
+    def test_e2e_scratch_cross_session_via_x_session_id_header(self):
+        """End-to-end: X-Session-Id header value reaches run_query's scratch check.
+
+        Drives the full JWTAuthMiddleware-wrapped MCP streamable-HTTP app with a
+        real tools/call JSON-RPC request (stateless mode, lifespan started by
+        TestClient context manager).  The SQL references a scratch table owned by
+        a DIFFERENT session — the middleware reads X-Session-Id: sess-abc, sets
+        current_session_id, and the service enforcement raises
+        ColumnScopeError(SCRATCH_SESSION_VIOLATION).  The MCP layer converts it to
+        a ToolError and the response carries isError=true with the code in the text.
+        execute_query must NOT be called.
+        """
+        import json as _json
+
+        # Minimal catalog — only warehouse tables; scratch is not catalogued.
+        _catalog = {
+            "analytics.employees": {
+                "employee_id": "UInt64",
+                "department": "String",
+            },
+        }
+        # Grant all warehouse columns so column-scope enforcement does not interfere.
+        # Bind the token to the CALLER's own session ("sess-abc") so the sid_hash
+        # check passes; the scratch table below belongs to a DIFFERENT session, so
+        # the D64 scratch gate — not the binding — is what rejects the query.
+        _scope_jwt = make_jwt(
+            column_scope=[
+                "analytics.employees.employee_id",
+                "analytics.employees.department",
+            ],
+            session_id="sess-abc",
+        )
+        # SQL references scratch.s_othersession_foo — owned by a DIFFERENT session.
+        # The caller's session (from X-Session-Id) is "sess-abc".
+        sql = (
+            "SELECT e.employee_id FROM scratch.s_othersession_foo AS s "
+            "JOIN analytics.employees AS e ON s.employee_id = e.employee_id"
+        )
+        tools_call_payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "runQuery", "arguments": {"sql": sql}},
+        }
+
+        from app.mcp_server import mcp
+
+        authed_app = JWTAuthMiddleware(mcp.streamable_http_app(), settings=get_settings())
+
+        with patch("app.service.execute_query") as mock_execute:
+            with patch("app.service.get_catalog_schema", return_value=_catalog):
+                with TestClient(authed_app, raise_server_exceptions=False) as client:
+                    resp = client.post(
+                        "/mcp",
+                        json=tools_call_payload,
+                        headers={
+                            "Authorization": f"Bearer {_scope_jwt}",
+                            "Accept": "application/json, text/event-stream",
+                            "X-Session-Id": "sess-abc",
+                        },
+                    )
+
+        assert resp.status_code == 200
+        # Response is SSE; extract the JSON from the "data:" line.
+        data_line = next(
+            line[len("data:"):].strip()
+            for line in resp.text.splitlines()
+            if line.startswith("data:")
+        )
+        result = _json.loads(data_line)
+        tool_result = result["result"]
+        # The MCP layer must mark the result as an error (isError=true).
+        assert tool_result["isError"] is True
+        # The ToolError text must carry the SCRATCH_SESSION_VIOLATION code.
+        error_text = tool_result["content"][0]["text"]
+        assert "SCRATCH_SESSION_VIOLATION" in error_text
+        # execute_query must NOT have been called — enforcement fires before execution.
+        mock_execute.assert_not_called()
+
+
+# ===========================================================================
+# 8b. X-Session-Id ↔ sid_hash binding (auth-hardening Slice 1)
+# ===========================================================================
+
+class TestSessionBinding:
+    """Middleware-level proof of the X-Session-Id ↔ sid_hash binding.
+
+    The middleware runs the check AFTER validate_token (so principal.claims and
+    the X-Session-Id header are both in scope) and BEFORE binding the session
+    into the request context / dispatching any tool — so a hijack is rejected
+    before the scratch extractor ever runs.
+    """
+
+    def test_matching_header_and_claim_allowed(self):
+        """X-Session-Id whose hash matches the token's sid_hash → request proceeds."""
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get(
+            "/mcp",
+            headers={
+                "Authorization": f"Bearer {make_jwt(session_id='sess-A')}",
+                "X-Session-Id": "sess-A",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.text == "mcp-ok"
+
+    def test_mismatched_header_rejected_403(self):
+        """A different session id in the header (hash ≠ claim) → 403 SESSION_BINDING_MISMATCH.
+
+        This is the hijack: the token is validly bound to 'sess-A' but the caller
+        presents 'sess-B' to read another session's data.
+        """
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get(
+            "/mcp",
+            headers={
+                "Authorization": f"Bearer {make_jwt(session_id='sess-A')}",
+                "X-Session-Id": "sess-B",
+            },
+        )
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "SESSION_BINDING_MISMATCH"
+
+    def test_present_header_missing_claim_rejected_403(self):
+        """X-Session-Id present but the token carries NO sid_hash claim → 403 (fail-closed)."""
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get(
+            "/mcp",
+            headers={
+                "Authorization": f"Bearer {make_jwt()}",  # no sid_hash
+                "X-Session-Id": "sess-A",
+            },
+        )
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "SESSION_BINDING_MISMATCH"
+
+    def test_absent_header_bound_token_allowed(self):
+        """No X-Session-Id header → binding not required even if the token carries sid_hash."""
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get(
+            "/mcp",
+            headers={"Authorization": f"Bearer {make_jwt(session_id='sess-A')}"},
+        )
+        assert resp.status_code == 200
+
+    def test_absent_header_unbound_token_allowed(self):
+        """No X-Session-Id header + no sid_hash claim → allowed (session-less caller)."""
+        client = TestClient(_wrap(), raise_server_exceptions=False)
+        resp = client.get(
+            "/mcp",
+            headers={"Authorization": f"Bearer {make_jwt()}"},
+        )
+        assert resp.status_code == 200
+
+    def test_binding_disabled_present_header_missing_claim_passes(self):
+        """require_sid_binding=false → legacy path: present header + no claim still passes.
+
+        This is the mint-then-enforce transition escape hatch.
+        """
+        from app.config import Settings
+
+        legacy_settings = Settings(require_sid_binding=False)
+        mw = JWTAuthMiddleware(_inner_app(), settings=legacy_settings)
+        client = TestClient(mw, raise_server_exceptions=False)
+        resp = client.get(
+            "/mcp",
+            headers={
+                "Authorization": f"Bearer {make_jwt()}",  # no sid_hash
+                "X-Session-Id": "sess-A",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.text == "mcp-ok"
+
+    def test_binding_disabled_mismatch_passes(self):
+        """require_sid_binding=false → even a mismatched header is not enforced."""
+        from app.config import Settings
+
+        legacy_settings = Settings(require_sid_binding=False)
+        mw = JWTAuthMiddleware(_inner_app(), settings=legacy_settings)
+        client = TestClient(mw, raise_server_exceptions=False)
+        resp = client.get(
+            "/mcp",
+            headers={
+                "Authorization": f"Bearer {make_jwt(session_id='sess-A')}",
+                "X-Session-Id": "sess-B",
+            },
+        )
+        assert resp.status_code == 200
+
+    def test_binding_check_precedes_context_binding(self):
+        """A mismatch is rejected BEFORE current_session_id is set (hijack never reaches the tool)."""
+        from app.principal import get_current_session_id
+
+        captured = {"reached": False}
+
+        async def inner(scope, receive, send):
+            captured["reached"] = True
+            captured["session_id"] = get_current_session_id()
+            from starlette.responses import PlainTextResponse
+            await PlainTextResponse("ok")(scope, receive, send)
+
+        # Binding is opt-in (default False); enable it to exercise the mechanism.
+        enforcing = get_settings().model_copy(update={"require_sid_binding": True})
+        mw = JWTAuthMiddleware(inner, settings=enforcing)
+        client = TestClient(mw, raise_server_exceptions=False)
+        resp = client.get(
+            "/mcp",
+            headers={
+                "Authorization": f"Bearer {make_jwt(session_id='sess-A')}",
+                "X-Session-Id": "sess-B",
+            },
+        )
+        assert resp.status_code == 403
+        # The downstream app must never have run — the hijack is stopped in the middleware.
+        assert captured["reached"] is False
 
 
 # ===========================================================================

@@ -35,8 +35,10 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.algorithms import RSAAlgorithm
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.session_binding import sid_hash
 
 logger = logging.getLogger(__name__)
 
@@ -139,12 +141,33 @@ def _mint(
     user_name: str,
     sub: Optional[str] = None,
     ttl: Optional[int] = None,
+    column_scope: Optional[list[str]] = None,
+    session_id: Optional[str] = None,
     extra_claims: Optional[dict[str, Any]] = None,
 ) -> tuple[str, int]:
-    """Mint a signed JWT for *user_name*. Returns (token, ttl_seconds)."""
+    """Mint a signed JWT for *user_name*. Returns (token, ttl_seconds).
+
+    *column_scope* is the list of "database.table.column" triples to embed.
+    ``None`` or ``[]`` both produce an allow-all token (empty JSON list).
+    A non-empty list produces a restricted token that the MCP enforces.
+
+    *session_id*, when present, is bound into the token as a ``sid_hash`` claim
+    (``base64url(sha256(session_id))``, see app.session_binding).  The MCP
+    middleware recomputes the hash of the ``X-Session-Id`` request header and
+    rejects the request if it does not match, closing the session-hijack gap
+    (auth-hardening Slice 1).  When absent, NO ``sid_hash`` claim is stamped —
+    preserving non-session callers (tests, examples, stdio, generic tokens):
+    such tokens simply carry no binding.
+    """
     now = int(time.time())
     ttl_seconds = ttl or settings.token_ttl_seconds
-    claims: dict[str, Any] = {
+    scope_list = column_scope or []
+    # Apply caller-supplied extra_claims FIRST so the computed/reserved claims
+    # below always win (defense-in-depth: extra_claims can never shadow sub, exp,
+    # column_scope, sid_hash, … even if the request-model validator that rejects
+    # reserved names — see TokenRequest._reject_reserved_claims — is ever bypassed).
+    claims: dict[str, Any] = dict(extra_claims) if extra_claims else {}
+    claims.update({
         "sub": sub or f"user:{user_name}",
         "iss": settings.token_issuer,
         "aud": settings.token_audience,
@@ -152,11 +175,24 @@ def _mint(
         "nbf": now,
         "exp": now + ttl_seconds,
         "user_name": user_name,
-    }
-    if extra_claims:
-        claims.update(extra_claims)
+        # column_scope: empty list = allow-all (no column restrictions).
+        # A non-empty list = restricted scope; enforcement fires in the MCP layer.
+        # session_id is NOT a JWT claim — it is sent by the agent backend as X-Session-Id.
+        "column_scope": json.dumps(scope_list),
+    })
+    # Bind the session id (auth-hardening Slice 1). Only stamped when the caller
+    # supplies a session_id, so generic (session-less) tokens carry no binding.
+    # Set LAST so it is impossible to forge via extra_claims.
+    if session_id:
+        claims["sid_hash"] = sid_hash(session_id)
     token = jwt.encode(
         claims, private_key, algorithm=settings.token_algorithm, headers={"kid": kid}
+    )
+    logger.debug(
+        "Minted token: user=%s scope_size=%d kid=%s",
+        user_name,
+        len(scope_list),
+        kid,
     )
     return token, ttl_seconds
 
@@ -165,13 +201,74 @@ def _mint(
 # Request / response models
 # ---------------------------------------------------------------------------
 
+# Claim names the token service computes/controls itself. A caller MUST NOT be
+# able to inject these via the free-form ``claims`` field — otherwise a request
+# could forge ``sid_hash`` (defeat the session binding), spoof ``sub``/
+# ``user_name`` (tenant impersonation), widen ``column_scope``, or extend
+# ``exp``. Rejected fail-closed at request validation (422). Belt-and-braces with
+# ``_mint`` applying extra_claims BEFORE the computed claims.
+_RESERVED_CLAIM_NAMES = frozenset(
+    {"sub", "iss", "aud", "exp", "nbf", "iat", "user_name", "column_scope", "sid_hash"}
+)
+
+
 class TokenRequest(BaseModel):
     user_name: str = Field(..., min_length=1, description="Tenant identity to embed as 'user_name'.")
     sub: Optional[str] = Field(None, description="Override the 'sub' claim (default: user:<user_name>).")
     ttl_seconds: Optional[int] = Field(
         None, ge=1, le=86_400_000, description="Token lifetime override (1s–24h)."
     )
+    column_scope: Optional[list[str]] = Field(
+        None,
+        description=(
+            "Optional list of 'database.table.column' triples. "
+            "Omitted or empty = allow-all (no column restrictions). "
+            "Non-empty = restricted token enforced by the MCP layer."
+        ),
+    )
+    session_id: Optional[str] = Field(
+        None,
+        description=(
+            "Optional session identifier to bind into the token as a 'sid_hash' "
+            "claim (base64url(sha256(session_id))). When present, the MCP rejects "
+            "any request whose X-Session-Id header does not hash to this claim "
+            "(session-hijack protection). Omitted = generic token, no binding."
+        ),
+    )
     claims: Optional[dict[str, Any]] = Field(None, description="Extra non-reserved claims to include.")
+
+    @field_validator("claims")
+    @classmethod
+    def _reject_reserved_claims(cls, v: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        """Reject any attempt to set a service-controlled claim via ``claims``.
+
+        Security-critical: without this, ``claims={"sid_hash": <forged>}`` (or a
+        forged ``sub``/``column_scope``/``exp``) would ride into the token and
+        override the binding/scope the service computed. Fail closed (422).
+        """
+        if v is None:
+            return v
+        clashes = _RESERVED_CLAIM_NAMES & set(v)
+        if clashes:
+            raise ValueError(
+                "claims may not override service-controlled claim(s): "
+                f"{', '.join(sorted(clashes))}"
+            )
+        return v
+
+    @field_validator("column_scope")
+    @classmethod
+    def _validate_column_scope(cls, v: Optional[list[str]]) -> Optional[list[str]]:
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            raise ValueError("column_scope must be a list of strings")
+        for item in v:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(
+                    "each entry in column_scope must be a non-empty string"
+                )
+        return v
 
 
 class TokenResponse(BaseModel):
@@ -275,9 +372,16 @@ def create_app(settings: Optional[TokenSettings] = None) -> FastAPI:
             user_name=body.user_name,
             sub=body.sub,
             ttl=body.ttl_seconds,
+            column_scope=body.column_scope,
+            session_id=body.session_id,
             extra_claims=body.claims,
         )
         return TokenResponse(access_token=token, expires_in=ttl, user_name=body.user_name, kid=kid)
 
-    logger.info("Token service ready: issuer=%s audience=%s kid=%s", issuer, settings.token_audience, kid)
+    logger.info(
+        "Token service ready: issuer=%s audience=%s kid=%s",
+        issuer,
+        settings.token_audience,
+        kid,
+    )
     return app

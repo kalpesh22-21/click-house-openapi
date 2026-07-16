@@ -50,14 +50,29 @@ def make_jwt(
     algorithm: str = "RS256",
     signing_key: bytes | None = None,
     include_user_name: bool = True,
+    include_column_scope: bool = True,
+    column_scope: list | None = None,
+    session_id: str | None = None,
     extra_claims: dict | None = None,
 ) -> str:
     """Mint a signed JWT for tests.
 
-    Defaults produce a fully valid token carrying the ``user_name`` tenant claim.
+    Defaults produce a fully valid token carrying the ``user_name`` tenant claim
+    and a ``column_scope`` JSON list.
+
     Override the keyword args to exercise negative cases (expired, wrong
-    audience/issuer, missing tenant claim, bad signature, alg=none, ...).
+    audience/issuer, missing tenant claim, bad signature, alg=none, missing
+    scope, ...).
+
+    ``column_scope`` defaults to an empty list (no column restrictions) when
+    ``include_column_scope=True``.  Pass a list of strings to restrict scope.
+    ``include_column_scope=False`` omits the claim entirely (for 403 tests).
+
+    Note: session_id is NOT a JWT claim — it flows via the X-Session-Id request
+    header, set by the agent backend per-request.
     """
+    import json as _json
+
     now = int(time.time())
     claims: dict = {
         "sub": sub,
@@ -69,6 +84,16 @@ def make_jwt(
     }
     if include_user_name:
         claims["user_name"] = user_name
+    if include_column_scope:
+        scope_list = column_scope if column_scope is not None else []
+        claims["column_scope"] = _json.dumps(scope_list)
+    if session_id is not None:
+        # Bind the token to this session id exactly as app.token_service does, so
+        # a request carrying X-Session-Id=<session_id> passes the MCP's sid_hash
+        # check. Reuses the production encoding (single source of truth).
+        from app.session_binding import sid_hash
+
+        claims["sid_hash"] = sid_hash(session_id)
     if extra_claims:
         claims.update(extra_claims)
 
