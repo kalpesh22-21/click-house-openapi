@@ -497,7 +497,12 @@ from tests.jwt_helpers import make_jwt  # noqa: E402
 
 
 def _authed_app():
-    return JWTAuthMiddleware(mcp.streamable_http_app(), settings=get_settings())
+    # require_sid_binding now defaults to False (the external minter does not
+    # stamp sid_hash).  The D92 mismatch tests below assert the binding rejects a
+    # forged X-Session-Id, so the harness enables it explicitly; the header-less
+    # tests are unaffected either way.
+    settings = get_settings().model_copy(update={"require_sid_binding": True})
+    return JWTAuthMiddleware(mcp.streamable_http_app(), settings=settings)
 
 
 def _hdrs(session_id: str | None):

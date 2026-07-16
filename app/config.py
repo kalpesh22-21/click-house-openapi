@@ -58,6 +58,21 @@ class Settings(BaseSettings):
     )
     oidc_issuer: str = Field("", description="Expected JWT 'iss' claim (token issuer).")
     oidc_audience: str = Field("", description="Expected JWT 'aud' claim (this API's audience).")
+    # --- Static public key (JWKS-less verification) ---
+    # For an external token creator that mints RS*/ES*/PS* JWTs but does NOT
+    # publish a JWKS endpoint — you only hold its public key.  When set, the
+    # asymmetric path verifies against THIS key directly (no network) and takes
+    # precedence over OIDC_JWKS_URL.  Only ever used on the asymmetric path
+    # (pinned to JWT_ALGORITHMS), so it never touches HMAC verification.  A single
+    # key only: rotation needs a JWKS endpoint (multiple published keys by kid).
+    # Escaped '\n' sequences (common in env/secret stores) are normalised.
+    oidc_public_key: str = Field(
+        "",
+        description=(
+            "Optional PEM-encoded public key to verify asymmetric JWTs without a "
+            "JWKS endpoint. Takes precedence over OIDC_JWKS_URL when set."
+        ),
+    )
     jwt_algorithms: str = Field(
         "RS256",
         description=(
@@ -149,15 +164,20 @@ class Settings(BaseSettings):
     # a mismatch or a missing claim is rejected 403 SESSION_BINDING_MISMATCH,
     # before the request reaches the scratch-isolation extractor.  This closes
     # the session-hijack gap (a caller sending another user's session id).
-    # Defaults true (fail-closed / deploy posture); a short-lived false is the
-    # mint-then-enforce transition escape hatch (remove once every minting path
-    # stamps sid_hash — see the design's OQ-2).  Session-less requests (no
-    # X-Session-Id header) are unaffected regardless of this flag.
+    # Defaults FALSE: the external token minter does not stamp a 'sid_hash'
+    # claim, so enforcing the binding would 403 every session-carrying request.
+    # In this posture the session id is taken purely from the X-Session-Id header
+    # and the caller (a trusted agent backend) is relied on not to forward a
+    # hostile session id.  Set true once every minting path stamps sid_hash
+    # (base64url(sha256(session_id)); see app/session_binding.py) to re-enable the
+    # session-hijack protection.  Session-less requests (no X-Session-Id header)
+    # are unaffected regardless of this flag.
     require_sid_binding: bool = Field(
-        True,
+        False,
         description=(
             "Require a matching 'sid_hash' JWT claim whenever an X-Session-Id "
-            "header is present (session-hijack protection). Fail-closed default."
+            "header is present (session-hijack protection). Default false because "
+            "the external minter does not stamp sid_hash; set true once it does."
         ),
     )
 
@@ -289,6 +309,28 @@ class Settings(BaseSettings):
                 raise ValueError(f"Unsupported JWT algorithm '{alg}'.")
         return ",".join(algs)
 
+    @field_validator("oidc_public_key")
+    @classmethod
+    def _validate_public_key(cls, v: str) -> str:
+        """Normalise and validate a static public key at config time (fail fast).
+
+        Accepts escaped ``\\n`` (env/secret stores often flatten PEMs to one line).
+        Rejects anything that is not a loadable PEM *public* key — including a
+        pasted private key — so a misconfiguration cannot silently disable auth.
+        """
+        if not v or not v.strip():
+            return ""
+        pem = v.replace("\\n", "\n").strip()
+        try:
+            from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+            load_pem_public_key(pem.encode())
+        except Exception as exc:  # noqa: BLE001 — surface any parse failure as config error
+            raise ValueError(
+                f"oidc_public_key must be a valid PEM-encoded public key: {exc}"
+            ) from exc
+        return pem
+
     @model_validator(mode="after")
     def _validate_tenant_settings(self) -> "Settings":
         """Reject a tenant env object that could weaken safety or break ClickHouse.
@@ -360,9 +402,13 @@ class Settings(BaseSettings):
 
         Used by the REST lifespan and MCP HTTP entrypoint to fail closed: a
         network-exposed transport must not start without a way to verify tokens.
+
+        A key source is EITHER a JWKS endpoint OR a static public key; issuer and
+        audience are always required.
         """
+        has_key_source = bool(self.oidc_jwks_url.strip() or self.oidc_public_key.strip())
         return bool(
-            self.oidc_jwks_url.strip()
+            has_key_source
             and self.oidc_issuer.strip()
             and self.oidc_audience.strip()
         )

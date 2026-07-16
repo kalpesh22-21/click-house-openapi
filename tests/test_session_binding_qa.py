@@ -11,7 +11,8 @@ to prove the *negative* space QA owns:
   * the constant-time compare is structurally the compare path (not ``==``);
   * rejection ORDERING — a mismatched binding is rejected 403 BEFORE any tool
     runs and BEFORE the D64 scratch extractor touches scratch;
-  * the ``require_sid_binding`` flag semantics + its fail-closed default (True);
+  * the ``require_sid_binding`` flag semantics + its default (False, because the
+    external minter does not stamp sid_hash) — enforcement here is opt-in;
   * one genuine BYPASS QA found (omit the header) captured as a strict xfail
     regression guard (see ``TestOmitHeaderBypass``).
 
@@ -59,9 +60,16 @@ def _capturing_app(captured: dict):
     return Starlette(routes=[Route("/mcp", endpoint)])
 
 
+# require_sid_binding now defaults to False (the external minter does not stamp
+# sid_hash).  This suite proves the binding *mechanism*, which is opt-in, so the
+# harness enables it explicitly; the flag-off tests pass their own Settings.
+def _enforcing_settings():
+    return get_settings().model_copy(update={"require_sid_binding": True})
+
+
 def _wrap(captured: dict, *, settings=None):
     return JWTAuthMiddleware(
-        _capturing_app(captured), settings=settings or get_settings()
+        _capturing_app(captured), settings=settings or _enforcing_settings()
     )
 
 
@@ -279,10 +287,12 @@ class TestConstantTimeCompare:
 
 class TestFlagSemantics:
 
-    def test_default_is_true_fail_closed(self):
-        """The config default MUST be True (fail-closed deploy posture)."""
-        assert Settings().require_sid_binding is True
-        assert get_settings().require_sid_binding is True
+    def test_default_is_false_external_minter(self):
+        """The config default is False: the external token minter does not stamp
+        a sid_hash claim, so enforcing the binding would 403 every session-carrying
+        request. Locked so it cannot silently flip back and start rejecting."""
+        assert Settings().require_sid_binding is False
+        assert get_settings().require_sid_binding is False
 
     def test_flag_off_allows_mismatched_header(self):
         """With the escape hatch off, a mismatched header is allowed (transition
@@ -314,7 +324,9 @@ def _full_mcp_app(settings=None):
     """Wrap the REAL MCP streamable-HTTP app so tools actually dispatch."""
     from app.mcp_server import mcp
 
-    return JWTAuthMiddleware(mcp.streamable_http_app(), settings=settings or get_settings())
+    return JWTAuthMiddleware(
+        mcp.streamable_http_app(), settings=settings or _enforcing_settings()
+    )
 
 
 def _sse_result(resp) -> dict:

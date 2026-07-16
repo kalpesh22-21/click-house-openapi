@@ -480,7 +480,13 @@ def _inner_app(extra_routes=()):
 def _wrap(app=None, public_paths=("/health",)):
     if app is None:
         app = _inner_app()
-    return JWTAuthMiddleware(app, settings=get_settings(), public_paths=public_paths)
+    # require_sid_binding now defaults to False (the external minter does not
+    # stamp sid_hash).  These middleware tests exercise the binding *mechanism*,
+    # which is opt-in, so the harness turns it on explicitly.  Header-less auth
+    # tests are unaffected (the binding check only fires when X-Session-Id is
+    # present).
+    settings = get_settings().model_copy(update={"require_sid_binding": True})
+    return JWTAuthMiddleware(app, settings=settings, public_paths=public_paths)
 
 
 class TestJWTAuthMiddleware:
@@ -611,9 +617,9 @@ class TestJWTAuthMiddleware:
         resp = client.get(
             "/mcp",
             headers={
-                # Bind the token to the same session id so the sid_hash check
-                # (default require_sid_binding=true) passes and the header still
-                # propagates to current_session_id.
+                # Binding defaults off (require_sid_binding=False), so the header
+                # propagates to current_session_id regardless; the token is bound
+                # to the same session id anyway so this also holds if enforced.
                 "Authorization": f"Bearer {make_jwt(session_id='sess-xyz-789')}",
                 "X-Session-Id": "sess-xyz-789",
             },
@@ -844,7 +850,9 @@ class TestSessionBinding:
             from starlette.responses import PlainTextResponse
             await PlainTextResponse("ok")(scope, receive, send)
 
-        mw = JWTAuthMiddleware(inner, settings=get_settings())
+        # Binding is opt-in (default False); enable it to exercise the mechanism.
+        enforcing = get_settings().model_copy(update={"require_sid_binding": True})
+        mw = JWTAuthMiddleware(inner, settings=enforcing)
         client = TestClient(mw, raise_server_exceptions=False)
         resp = client.get(
             "/mcp",
