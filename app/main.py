@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
+from app.employee_access import EmployeeAccessError
 from app.errors import (
     ClickHouseAPIError,
     ClickHouseQueryError,
@@ -127,6 +128,10 @@ _DOMAIN_ERROR_STATUS: dict[type, int] = {
     DatabaseNotAllowedError: 403,
     TableNotFoundError: 404,
     ClickHouseUnavailableError: 502,
+    # EmployeeAccessError subclasses ClickHouseUnavailableError, but the handler
+    # looks up the EXACT type — register it so a fail-closed access-provisioning
+    # error returns 502 (matching the run_query route) instead of 500.
+    EmployeeAccessError: 502,
 }
 
 

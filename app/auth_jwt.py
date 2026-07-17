@@ -265,4 +265,7 @@ def validate_token(token: str, settings: Optional[Settings] = None) -> Principal
         subject=subject,
         claims=claims,
         column_scope=column_scope,
+        # Retain the raw token so the employee-access fetch can forward the very
+        # same JWT as a Bearer credential to /cl/eeaccess. Sensitive — never logged.
+        token=token,
     )

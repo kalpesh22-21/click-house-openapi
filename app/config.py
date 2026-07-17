@@ -255,6 +255,108 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Employee row-level-security (RLS) access provisioning ---
+    # Populates security.user_employee_access, the table the dbpcm_warehouse.employee
+    # row policy reads to scope each tenant (identified by its stable composite JTI)
+    # to only the employees it may see.  See app/employee_access.py for the full
+    # design (ReplacingMergeTree pull_id gate, staleness-gated refresh, sentinel
+    # row, fail-closed-loud).  Disabled by default so existing deploys are unaffected.
+    employee_access_enabled: bool = Field(
+        False,
+        description=(
+            "Enable per-request employee-access provisioning for the employee row "
+            "policy. When true, EEACCESS_BASE_URL must be set and the tenant-settings "
+            "map should expose SQL_TENANT/SQL_CLIENTCODE/SQL_PROCCENTER."
+        ),
+    )
+    employee_access_refresh_seconds: int = Field(
+        600,
+        ge=1,
+        description=(
+            "Staleness threshold N (seconds): a JTI's access set is re-pulled from "
+            "/cl/eeaccess only when older than this. Also the revocation latency and "
+            "the Redis freshness-marker TTL. Default 600s (10 min)."
+        ),
+    )
+    # NOTE: the row-level TTL on security.user_employee_access is defined in the
+    # DBA-owned CREATE TABLE (see app/employee_access.py), NOT here — the app never
+    # creates that table. Recommended `TTL UpdatedAt + INTERVAL 1 DAY` (must exceed N).
+    security_database: str = Field(
+        "security",
+        description="ClickHouse database holding user_employee_access (never the warehouse).",
+    )
+    # Claim names the JTI / clientcode / proc_center are read from (the JTI keys the
+    # access table and identifies the user to /cl/eeaccess).
+    employee_access_jti_claim: str = Field(
+        "jti", description="JWT claim carrying the stable composite JTI (row-policy key)."
+    )
+    # External access API (/cl/eeaccess).  The caller's own JWT is forwarded as a
+    # Bearer credential (see _fetch_employee_codes), so no service key is needed.
+    eeaccess_base_url: str = Field(
+        "", description="Base URL of the employee-access API (path {system}/eeaccess is appended)."
+    )
+    eeaccess_timeout_seconds: float = Field(
+        10.0, gt=0, description="Per-request timeout (seconds) for the /cl/eeaccess call."
+    )
+    # Redis freshness cache in front of the ClickHouse staleness read.  Empty →
+    # cache disabled (always use the ClickHouse read).  A down/unreachable Redis
+    # degrades to the ClickHouse read — correctness never depends on Redis.
+    redis_url: str = Field(
+        "",
+        description=(
+            "Redis URL for the employee-access freshness cache (e.g. "
+            "redis://host:6379/0). Empty disables the cache (ClickHouse read only)."
+        ),
+    )
+    redis_socket_timeout_seconds: float = Field(
+        0.3,
+        gt=0,
+        description=(
+            "Redis socket/connect timeout (seconds). Kept small so a down Redis "
+            "fails fast to the ClickHouse fallback."
+        ),
+    )
+    employee_access_cache_prefix: str = Field(
+        "eeaccess:fresh:",
+        description="Redis key prefix for the per-JTI freshness markers.",
+    )
+    employee_access_refresh_backoff_seconds: int = Field(
+        30,
+        ge=1,
+        description=(
+            "After a STALE (non-cold) refresh failure, suppress re-pull attempts "
+            "for this many seconds (Redis-backed) so a down /cl/eeaccess is not "
+            "hammered every request while the existing set is served."
+        ),
+    )
+    # Security-writer ClickHouse credential (mirrors SCRATCH_CH_*): a distinct,
+    # server-side-only account GRANTed only INSERT + SELECT on
+    # `security.user_employee_access` (the table + row policy are DBA-owned; the
+    # app never issues DDL, and refresh is append-only with TTL eviction — so no
+    # CREATE/DELETE/ALTER is needed).  Unset fields fall back to the main
+    # CLICKHOUSE_* connection for dev/single-user convenience; a production deploy
+    # MUST set SECURITY_CH_USER / SECURITY_CH_PASSWORD to the security-only account
+    # to confine blast radius.
+    security_ch_host: str = Field(
+        "", description="Security-credential ClickHouse host (falls back to CLICKHOUSE_HOST)."
+    )
+    security_ch_port: int = Field(
+        0, description="Security-credential ClickHouse port (0 → falls back to CLICKHOUSE_PORT)."
+    )
+    security_ch_user: str = Field(
+        "", description="Security-only ClickHouse username (falls back to CLICKHOUSE_USER)."
+    )
+    security_ch_password: Optional[str] = Field(
+        None,
+        description=(
+            "Security-only ClickHouse password (secret). None → falls back to "
+            "CLICKHOUSE_PASSWORD. Set explicitly (even to empty) to override."
+        ),
+    )
+    security_ch_secure: Optional[bool] = Field(
+        None, description="TLS for the security credential (None → falls back to CLICKHOUSE_SECURE)."
+    )
+
     # --- OpenAPI / GPT Action ---
     public_base_url: str = Field(
         "https://your-public-host.example.com",
@@ -447,6 +549,42 @@ class Settings(BaseSettings):
             "password": password,
             "secure": secure,
         }
+
+    def security_client_params(self) -> Dict[str, object]:
+        """Resolve the security-writer connection params (with CLICKHOUSE_* fallback).
+
+        Mirrors ``scratch_client_params``: each SECURITY_CH_* field independently
+        overrides the corresponding main CLICKHOUSE_* field; unset fields inherit
+        the main connection.  A production deploy points these at a security-only
+        grant by setting SECURITY_CH_USER / SECURITY_CH_PASSWORD.
+        """
+        password = (
+            self.security_ch_password
+            if self.security_ch_password is not None
+            else self.clickhouse_password
+        )
+        secure = (
+            self.security_ch_secure
+            if self.security_ch_secure is not None
+            else self.clickhouse_secure
+        )
+        return {
+            "host": self.security_ch_host or self.clickhouse_host,
+            "port": self.security_ch_port or self.clickhouse_port,
+            "user": self.security_ch_user or self.clickhouse_user,
+            "password": password,
+            "secure": secure,
+        }
+
+    @model_validator(mode="after")
+    def _validate_employee_access(self) -> "Settings":
+        """Fail fast if employee-access is enabled without its external API URL."""
+        if self.employee_access_enabled and not self.eeaccess_base_url.strip():
+            raise ValueError(
+                "EMPLOYEE_ACCESS_ENABLED is true but EEACCESS_BASE_URL is empty — "
+                "set the employee-access API base URL."
+            )
+        return self
 
     def allowed_databases_list(self) -> Optional[List[str]]:
         """Return the parsed allowlist, or None if '*' (all databases allowed)."""
