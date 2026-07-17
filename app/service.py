@@ -28,6 +28,7 @@ from fastapi import HTTPException
 from app.catalog import get_catalog_schema
 from app.clickhouse_client import execute_query
 from app.config import Settings, get_settings
+from app.employee_access import ensure_employee_access_fresh
 from app.errors import (
     ClickHouseQueryError,
     ClickHouseUnavailableError,
@@ -400,6 +401,10 @@ def sample_rows(
                 )
     # ---------------------------------------------------------------------------
 
+    # Refresh the caller's employee row-policy set if stale/cold (no-op when the
+    # feature is disabled or there is no principal). Fail-closed-loud on a cold JTI.
+    ensure_employee_access_fresh(settings)
+
     columns, rows = _execute(sql, settings)
 
     return _compact_result(columns, rows, settings.max_response_rows, truncated_override=False)
@@ -510,6 +515,10 @@ def run_query(
             lambda m: f"LIMIT {effective_limit}{m.group(1) or ''}",
             clean_sql,
         )
+
+    # Refresh the caller's employee row-policy set if stale/cold (no-op when the
+    # feature is disabled or there is no principal). Fail-closed-loud on a cold JTI.
+    ensure_employee_access_fresh(settings)
 
     columns, rows = _execute(clean_sql, settings)
 

@@ -46,11 +46,17 @@ class Principal:
                       the caller may read any warehouse column.  The only signal that
                       enforcement is disabled entirely is ``current_scope is None``
                       (stdio/local-trust path).
+        token:        The raw bearer JWT this principal was validated from.  Carried
+                      ONLY so a first-party downstream call that must act AS the user
+                      (the employee-access ``/cl/eeaccess`` fetch) can forward the very
+                      same token.  SENSITIVE: never log it, never return it to a client,
+                      never persist it.  Empty on the stdio/local-trust path.
     """
 
     subject: str
     claims: Dict[str, Any] = field(default_factory=dict)
     column_scope: frozenset = field(default_factory=frozenset)
+    token: str = ""
 
 
 # None means "no authenticated principal" — e.g. internal schema/health queries

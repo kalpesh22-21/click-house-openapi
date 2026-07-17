@@ -23,3 +23,7 @@ starlette==0.50.0
 # JWT/OIDC validation. [crypto] pulls in `cryptography` for RS*/ES*/PS* signature
 # verification; PyJWKClient fetches the IdP JWKS over stdlib urllib (no extra dep).
 PyJWT[crypto]==2.13.0
+# Employee-access freshness cache (app/employee_access.py). Only imported when
+# REDIS_URL is configured; a down/absent Redis degrades to the ClickHouse
+# freshness read (correctness never depends on Redis).
+redis==5.2.1
