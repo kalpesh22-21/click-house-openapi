@@ -2,11 +2,46 @@
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import Annotated, Dict, List, Optional
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# paycompy is an internal package, only needed when VAULT_ENABLED=true.  Guard the
+# import so the app boots without it (local/dev, or any environment using plain env
+# vars instead of Vault).  load_settings_from_vault() raises clearly if Vault is
+# enabled but paycompy is missing.
+try:
+    from paycompy import vault  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - exercised only where paycompy is absent
+    vault = None
+
+logger = logging.getLogger(__name__)
+
+
+def _normalise_public_key(v: str) -> str:
+    """Normalise and validate a static OIDC public key (shared by the field
+    validator and the Vault loader).
+
+    Accepts escaped ``\\n`` (env/secret stores often flatten PEMs to one line).
+    Rejects anything that is not a loadable PEM *public* key — including a pasted
+    private key — so a misconfiguration cannot silently disable auth.  Empty input
+    normalises to ``""`` (no static key configured).
+    """
+    if not v or not v.strip():
+        return ""
+    pem = v.replace("\\n", "\n").strip()
+    try:
+        from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+        load_pem_public_key(pem.encode())
+    except Exception as exc:  # noqa: BLE001 — surface any parse failure as config error
+        raise ValueError(
+            f"oidc_public_key must be a valid PEM-encoded public key: {exc}"
+        ) from exc
+    return pem
 
 # ClickHouse session-setting keys that the server controls for safety.  A
 # per-tenant custom setting (see clickhouse_tenant_settings) must never shadow
@@ -37,10 +72,22 @@ class Settings(BaseSettings):
     )
 
     # --- ClickHouse connection ---
-    clickhouse_host: str = Field(..., description="ClickHouse server hostname or IP")
+    # host/user/password default empty so a Vault-backed deploy can construct
+    # Settings() without them in the environment and have load_settings_from_vault()
+    # populate them afterwards.  When Vault is OFF, _validate_clickhouse_connection
+    # re-imposes the old "host and user are mandatory" guarantee (fail fast, loud).
+    # A password may legitimately be empty (passwordless server), so it is never
+    # required.  All three are secret and belong in Vault (CLICKHOUSE_CREDS_PATH).
+    clickhouse_host: str = Field(
+        "", description="ClickHouse server hostname or IP (secret; from Vault when enabled)."
+    )
     clickhouse_port: int = Field(8443, description="ClickHouse HTTP(S) port")
-    clickhouse_user: str = Field(..., description="ClickHouse username")
-    clickhouse_password: str = Field(..., description="ClickHouse password (secret)")
+    clickhouse_user: str = Field(
+        "", description="ClickHouse username (secret; from Vault when enabled)."
+    )
+    clickhouse_password: str = Field(
+        "", description="ClickHouse password (secret; from Vault when enabled)."
+    )
     clickhouse_database: str = Field("default", description="Default database")
     clickhouse_secure: bool = Field(True, description="Use TLS for ClickHouse connection")
 
@@ -93,15 +140,6 @@ class Settings(BaseSettings):
             "Pinned to asymmetric algs (RS*/ES*/PS*); 'none' and HMAC (HS*) are rejected."
         ),
     )
-    # --- Admin authentication (static API key) ---
-    # The /admin CSV-ingest write routes are an internal operational path, not a
-    # per-tenant LLM surface, so they authenticate with a single shared API key
-    # (Bearer) rather than a per-user JWT.  Required only when the /admin routes
-    # are used; require_admin_api_key fails closed when it is empty.
-    api_key: str = Field(
-        "", description="Static Bearer API key for the /admin write routes (secret)."
-    )
-
     # --- Query safety limits ---
     max_execution_time: int = Field(30, description="Max query wall-clock time in seconds")
     max_result_rows: int = Field(10_000, description="ClickHouse-side hard cap on result rows")
@@ -116,6 +154,17 @@ class Settings(BaseSettings):
     # we always send them ourselves.  Only 1 or 2 are accepted.
     clickhouse_readonly: int = Field(
         1, ge=1, le=2, description="ClickHouse readonly level applied to every query (1 or 2)."
+    )
+    # When true, sets the ClickHouse `final=1` session setting on every query so
+    # ReplacingMergeTree/CollapsingMergeTree tables return their collapsed (latest)
+    # rows instead of un-merged duplicates.  GOTCHA: this is query-GLOBAL — it
+    # applies FINAL to every MergeTree-family table in a query, not just Replacing
+    # ones, so plain MergeTree tables pay the merge-at-read overhead too and large
+    # full scans may newly hit max_execution_time.  No-ops on system tables.
+    # Default OFF; opt in per deployment.
+    clickhouse_select_final: bool = Field(
+        False,
+        description="Apply ClickHouse final=1 to every query (dedup ReplacingMergeTree reads).",
     )
 
     # --- Per-tenant row isolation (the "env object") ---
@@ -392,6 +441,56 @@ class Settings(BaseSettings):
         description="Optional comma-separated scopes advertised in PRM 'scopes_supported'.",
     )
 
+    # --- HashiCorp Vault (sensitive-value sourcing) ---
+    # When VAULT_ENABLED=true, sensitive values (the ClickHouse connection, the
+    # scratch/security writer credentials, the Redis URL) are
+    # read from Vault at startup and OVERRIDE anything from the environment.  Each
+    # *_PATH points at a KV secret; a path left empty skips that group (its env or
+    # default value is kept).  See load_settings_from_vault() for the read logic and
+    # fail-closed behaviour.  Defaults keep Vault OFF so existing env-based deploys
+    # are entirely unaffected.
+    vault_enabled: bool = Field(
+        False,
+        description="Read sensitive values from HashiCorp Vault at startup (overrides env).",
+    )
+    clickhouse_creds_path: str = Field(
+        "",
+        description=(
+            "Vault KV path holding the ClickHouse connection secret (keys: "
+            "CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD). "
+            "Empty → use env/defaults."
+        ),
+    )
+    oidc_public_key_vault_path: str = Field(
+        "",
+        description=(
+            "Vault KV path holding the static OIDC public key (key: OIDC_PUBLIC_KEY). "
+            "Not confidential (it is a public key) — sourced from Vault only for "
+            "central management / tamper-resistance. Empty → use env/default."
+        ),
+    )
+    scratch_ch_creds_path: str = Field(
+        "",
+        description=(
+            "Vault KV path holding the scratch-writer ClickHouse credential (keys: "
+            "SCRATCH_CH_USER, SCRATCH_CH_PASSWORD). Empty → use env/fallback."
+        ),
+    )
+    security_ch_creds_path: str = Field(
+        "",
+        description=(
+            "Vault KV path holding the security-writer ClickHouse credential (keys: "
+            "SECURITY_CH_USER, SECURITY_CH_PASSWORD). Empty → use env/fallback."
+        ),
+    )
+    redis_vault_path: str = Field(
+        "",
+        description=(
+            "Vault KV path holding the employee-access Redis URL (key: REDIS_URL). "
+            "Empty → use env/default."
+        ),
+    )
+
     @field_validator("log_level")
     @classmethod
     def _normalise_log_level(cls, v: str) -> str:
@@ -427,24 +526,37 @@ class Settings(BaseSettings):
     @field_validator("oidc_public_key")
     @classmethod
     def _validate_public_key(cls, v: str) -> str:
-        """Normalise and validate a static public key at config time (fail fast).
+        """Normalise and validate a static public key at config time (fail fast)."""
+        return _normalise_public_key(v)
 
-        Accepts escaped ``\\n`` (env/secret stores often flatten PEMs to one line).
-        Rejects anything that is not a loadable PEM *public* key — including a
-        pasted private key — so a misconfiguration cannot silently disable auth.
+    @model_validator(mode="after")
+    def _validate_clickhouse_connection(self) -> "Settings":
+        """Require the core ClickHouse identity unless Vault will supply it.
+
+        CLICKHOUSE_HOST / CLICKHOUSE_USER used to be mandatory fields.  They are now
+        optional so a Vault-backed deploy can build Settings() with empty
+        placeholders and let load_settings_from_vault() fill them post-construction
+        (Vault reads run after pydantic has already sourced env/defaults).  In that
+        posture the fail-closed check lives in load_settings_from_vault().  When
+        Vault is OFF, enforce the old guarantee here so a misconfigured environment
+        still fails fast and loud.  CLICKHOUSE_PASSWORD may legitimately be empty
+        (passwordless server), so it is never part of this gate.
         """
-        if not v or not v.strip():
-            return ""
-        pem = v.replace("\\n", "\n").strip()
-        try:
-            from cryptography.hazmat.primitives.serialization import load_pem_public_key
-
-            load_pem_public_key(pem.encode())
-        except Exception as exc:  # noqa: BLE001 — surface any parse failure as config error
+        if self.vault_enabled:
+            return self
+        missing = [
+            name.upper()
+            for name in ("clickhouse_host", "clickhouse_user")
+            if not str(getattr(self, name)).strip()
+        ]
+        if missing:
             raise ValueError(
-                f"oidc_public_key must be a valid PEM-encoded public key: {exc}"
-            ) from exc
-        return pem
+                "Missing required ClickHouse connection settings: "
+                + ", ".join(missing)
+                + ". Set them in the environment, or enable Vault "
+                "(VAULT_ENABLED=true with CLICKHOUSE_CREDS_PATH)."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_tenant_settings(self) -> "Settings":
@@ -593,7 +705,131 @@ class Settings(BaseSettings):
         return [db.strip() for db in self.allowed_databases.split(",") if db.strip()]
 
 
+def _read_vault_secret(vc, key: str, path: str, current):
+    """Read one KV field from Vault, returning ``current`` (env/default) on failure.
+
+    A per-key failure is logged and swallowed so one missing/renamed key does not
+    take down the whole config load; the caller's fail-closed check still catches a
+    genuinely-absent critical secret (see load_settings_from_vault()).
+    """
+    try:
+        return vc.read_kv_secret(key, path).get_secret_value()
+    except Exception as exc:  # noqa: BLE001 - surface as a warning, keep booting
+        logger.warning("Vault: could not read '%s' from '%s': %s", key, path, exc)
+        return current
+
+
+def load_settings_from_vault() -> Settings:
+    """Construct Settings, then override sensitive values from Vault when enabled.
+
+    Priority for each sensitive value:
+
+      1. Vault  — when VAULT_ENABLED and the relevant ``*_PATH`` is set
+      2. Environment variable / ``.env``
+      3. Field default
+
+    Vault runs AFTER construction (it mutates the already-built Settings) because
+    pydantic-settings sources env/defaults at construction time; this mirrors the
+    llm-router pattern.  When Vault is disabled the env-built Settings is returned
+    unchanged, so nothing about the existing env-based deployment path changes.
+    """
+    settings = Settings()
+
+    if not settings.vault_enabled:
+        return settings
+
+    if vault is None:
+        raise RuntimeError(
+            "VAULT_ENABLED=true but the internal 'paycompy' package is not "
+            "installed. Install paycompy or set VAULT_ENABLED=false."
+        )
+
+    vc = vault.get_client_using_os_environ()
+
+    # --- ClickHouse main connection ---
+    if settings.clickhouse_creds_path:
+        p = settings.clickhouse_creds_path
+        settings.clickhouse_host = _read_vault_secret(
+            vc, "CLICKHOUSE_HOST", p, settings.clickhouse_host
+        )
+        settings.clickhouse_user = _read_vault_secret(
+            vc, "CLICKHOUSE_USER", p, settings.clickhouse_user
+        )
+        settings.clickhouse_password = _read_vault_secret(
+            vc, "CLICKHOUSE_PASSWORD", p, settings.clickhouse_password
+        )
+        port = _read_vault_secret(vc, "CLICKHOUSE_PORT", p, None)
+        if port not in (None, ""):
+            try:
+                settings.clickhouse_port = int(port)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Vault: CLICKHOUSE_PORT '%s' is not an int; keeping %s",
+                    port,
+                    settings.clickhouse_port,
+                )
+
+    # --- Static OIDC public key (not secret, but validated like the field would
+    # be at construction — the field_validator does NOT run on this post-hoc
+    # assignment, so re-apply _normalise_public_key or a bad key silently breaks
+    # asymmetric verification).
+    if settings.oidc_public_key_vault_path:
+        raw = _read_vault_secret(
+            vc, "OIDC_PUBLIC_KEY", settings.oidc_public_key_vault_path, settings.oidc_public_key
+        )
+        settings.oidc_public_key = _normalise_public_key(raw)
+
+    # --- Scratch-writer ClickHouse credential ---
+    if settings.scratch_ch_creds_path:
+        p = settings.scratch_ch_creds_path
+        settings.scratch_ch_user = _read_vault_secret(
+            vc, "SCRATCH_CH_USER", p, settings.scratch_ch_user
+        )
+        settings.scratch_ch_password = _read_vault_secret(
+            vc, "SCRATCH_CH_PASSWORD", p, settings.scratch_ch_password
+        )
+
+    # --- Security-writer ClickHouse credential ---
+    if settings.security_ch_creds_path:
+        p = settings.security_ch_creds_path
+        settings.security_ch_user = _read_vault_secret(
+            vc, "SECURITY_CH_USER", p, settings.security_ch_user
+        )
+        settings.security_ch_password = _read_vault_secret(
+            vc, "SECURITY_CH_PASSWORD", p, settings.security_ch_password
+        )
+
+    # --- Employee-access Redis URL ---
+    if settings.redis_vault_path:
+        settings.redis_url = _read_vault_secret(
+            vc, "REDIS_URL", settings.redis_vault_path, settings.redis_url
+        )
+
+    # Fail closed: Vault is enabled, so the core ClickHouse identity MUST be present.
+    # If a transient Vault failure left host/user empty, refuse to boot rather than
+    # silently start with no connection identity — crashing lets the orchestrator
+    # restart the pod once Vault is healthy again.  (Password may be empty for a
+    # passwordless server, so it is not part of this gate.)
+    missing = [
+        name.upper()
+        for name in ("clickhouse_host", "clickhouse_user")
+        if not str(getattr(settings, name)).strip()
+    ]
+    if missing:
+        raise RuntimeError(
+            "Vault is enabled but these ClickHouse connection settings are still "
+            "empty after loading: " + ", ".join(missing) + ". Check Vault "
+            "connectivity and CLICKHOUSE_CREDS_PATH."
+        )
+
+    return settings
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return a cached Settings singleton.  Call this everywhere you need config."""
-    return Settings()
+    """Return a cached Settings singleton (Vault-resolved when VAULT_ENABLED).
+
+    Call this everywhere you need config.  The first call resolves Vault (if
+    enabled) and caches the result for the process lifetime.
+    """
+    return load_settings_from_vault()

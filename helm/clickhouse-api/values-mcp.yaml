@@ -1,11 +1,11 @@
-# Example values for the MCP release: helm install clickhouse-mcp ./helm/clickhouse-api -f values-mcp.yaml --set secrets.apiKey=... (plus ClickHouse connection)
+# Example values for the MCP release: helm install clickhouse-mcp ./helm/clickhouse-api -f values-mcp.yaml (plus ClickHouse connection)
 mode: mcp
 config:
   MCP_PORT: "8000"
   MCP_PATH: "/mcp"
 
   # --- OIDC token VALIDATION (Entra-direct) ---
-  # REQUIRED override: values.yaml defaults these to the old token-service, whose
+  # REQUIRED override: values.yaml defaults these to a placeholder IdP, whose
   # JWKS has none of Entra's signing keys — so an Entra token fails signing-key
   # resolution ("JWKS signing-key resolution failed" -> JWKS_UNAVAILABLE). Point
   # them at Entra. Per the IdP admin, the API app is configured for **v2 tokens**

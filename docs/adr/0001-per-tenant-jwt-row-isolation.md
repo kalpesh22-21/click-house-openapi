@@ -60,13 +60,15 @@ introducing per-tenant database users.
    GPT-Action clients must migrate. MCP stdio keeps its no-auth local-trust
    model unchanged.
 
-9. **`/admin` keeps a static API key:** The `/admin` CSV-ingest **write**
-   routes are an internal operational path, not a per-tenant LLM surface, so
-   they authenticate with a single shared Bearer API key (`API_KEY`, via
-   `require_admin_api_key`) rather than a JWT. No tenant principal is bound for
-   admin requests (these writes are not row-policy scoped). The key is compared
-   in constant time and fails closed (503) when unset. This is why the `api_key`
-   field is retained in `Settings` — it is the admin credential, not dead config.
+9. **`/admin` static API key — SUPERSEDED (2026-07-30):** The original decision
+   kept the `/admin` CSV-ingest **write** routes on a single shared Bearer API
+   key (`API_KEY`) separate from the per-tenant JWTs. That entire write surface
+   (the `/admin` routes, the `/ui` static panel, `require_admin_api_key`, and the
+   `api_key` setting) has since been **removed from the codebase**. All caller
+   auth is now per-tenant OIDC/JWT only; there is no static-key path. The
+   hardened ingest primitives (`validate_identifier`, `validate_ch_type`,
+   `coerce`, DDL builders) live on in `app/ingest_primitives.py`, reused by the
+   MCP scratch/upload write plane.
 
 ---
 

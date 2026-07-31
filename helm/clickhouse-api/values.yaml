@@ -97,9 +97,7 @@ ingress:
   path: /
   pathType: Prefix
   # paths:                # optional: route multiple prefixes in one ingress (overrides `path`)
-  #   - path: /ui
-  #     pathType: Prefix
-  #   - path: /admin
+  #   - path: /query
   #     pathType: Prefix
   tls:
     enabled: true
@@ -157,11 +155,11 @@ config:
   ALLOWED_DATABASES: "*"
 
   # --- Per-tenant JWT auth (OIDC) ---
-  # Point these at the token-service release (see helm/token-service). The JWKS
-  # URL is the in-cluster Service DNS; ISSUER/AUDIENCE MUST match the token
-  # service's TOKEN_ISSUER / TOKEN_AUDIENCE.
-  OIDC_JWKS_URL: "http://token-service.default.svc.cluster.local/.well-known/jwks.json"
-  OIDC_ISSUER: "https://token.example.com/"
+  # Point these at your EXTERNAL OIDC issuer. The JWKS URL publishes the signing
+  # keys; ISSUER/AUDIENCE MUST match the 'iss'/'aud' the IdP stamps on its tokens.
+  # (For an issuer that publishes no JWKS, set OIDC_PUBLIC_KEY to a static PEM.)
+  OIDC_JWKS_URL: "https://idp.example.com/.well-known/jwks.json"
+  OIDC_ISSUER: "https://idp.example.com/"
   OIDC_AUDIENCE: "clickhouse-api"
   JWT_ALGORITHMS: "RS256"
 
@@ -188,13 +186,13 @@ config:
 # Secrets — rendered into a Kubernetes Secret
 #
 # Option A (default): supply plain-text values here; the chart creates a Secret.
-#   Set connection.*, clickhousePassword, and apiKey.
+#   Set connection.* and clickhousePassword.
 #
 # Option B: point to a pre-existing Secret (e.g. managed by Vault / ESO).
-#   Set existingSecret.name. The referenced Secret MUST contain ALL seven keys
+#   Set existingSecret.name. The referenced Secret MUST contain ALL six keys
 #   with their canonical env-var names:
 #     CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_DATABASE,
-#     CLICKHOUSE_SECURE, CLICKHOUSE_PASSWORD, API_KEY
+#     CLICKHOUSE_SECURE, CLICKHOUSE_PASSWORD
 #
 # Option B takes precedence when existingSecret.name is non-empty.
 # -----------------------------------------------------------------------------
@@ -209,18 +207,16 @@ secrets:
 
   # Option A: inline credential values (base64-encoded automatically by Helm).
   # REQUIRED: leave empty here and supply via --set or a separate values file.
-  # Installation will fail if both clickhousePassword/apiKey are empty AND
+  # Installation will fail if clickhousePassword is empty AND
   # existingSecret.name is not provided.
   #
-  # apiKey is now the ADMIN API key for the /admin write routes only — the
-  # per-tenant query/MCP routes authenticate with OIDC JWTs (config.OIDC_*).
+  # The per-tenant query/MCP routes authenticate with OIDC JWTs (config.OIDC_*).
   clickhousePassword: ""
-  apiKey: ""
 
   # Option B: reference a pre-existing Secret
-  # The Secret must contain all seven keys with their canonical env-var names:
+  # The Secret must contain all six keys with their canonical env-var names:
   #   CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_DATABASE,
-  #   CLICKHOUSE_SECURE, CLICKHOUSE_PASSWORD, API_KEY
+  #   CLICKHOUSE_SECURE, CLICKHOUSE_PASSWORD
   existingSecret:
     name: ""
 

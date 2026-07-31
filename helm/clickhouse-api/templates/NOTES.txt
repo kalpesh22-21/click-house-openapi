@@ -42,25 +42,25 @@ Image:     {{ .Values.image.repository }}:{{ .Values.image.tag }}
        {{ .Values.config.PUBLIC_BASE_URL }}/openapi.json
   2. Set Authentication to "API Key" with header name "Authorization" and
      prefix "Bearer".
-  3. Set the API key value to the API_KEY secret value.
+  3. Set the value to a per-tenant OIDC JWT minted by your IdP (config.OIDC_*).
   4. Save and test with: "List the available databases."
 
 == SECURITY REQUIREMENTS ==
 
   1. Secrets: ClickHouse connection details and credentials are ALL Secret-managed.
-     clickhousePassword and apiKey MUST be supplied at install time via
-     --set secrets.clickhousePassword=<val> --set secrets.apiKey=<val>
+     clickhousePassword MUST be supplied at install time via
+     --set secrets.clickhousePassword=<val>
      or by referencing a pre-existing Secret via secrets.existingSecret.
-     Installation will fail if these are left empty.
+     Installation will fail if it is left empty.
 
      Connection variables (CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER,
      CLICKHOUSE_DATABASE, CLICKHOUSE_SECURE) are set under secrets.connection.*
      and rendered into the same Secret.
 
      When using secrets.existingSecret, the referenced Secret MUST contain all
-     seven keys with their canonical env-var names:
+     six keys with their canonical env-var names:
        CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_DATABASE,
-       CLICKHOUSE_SECURE, CLICKHOUSE_PASSWORD, API_KEY
+       CLICKHOUSE_SECURE, CLICKHOUSE_PASSWORD
 
   2. TLS: ingress.tls.enabled is required when ingress.enabled is true.
      Installation will fail if ingress is enabled without TLS to prevent

@@ -1,23 +1,16 @@
-# Local end-to-end stack: ClickHouse + token issuer + the read-only API + MCP.
+# Local end-to-end stack: ClickHouse + the read-only API + MCP.
 #
 # Usage:
 #   docker compose up -d --build
 #
-#   # 1) Mint a per-user token from the token service:
-#   TOKEN=$(curl -s -X POST -H "Authorization: Bearer issuer-key-abc123" \
-#       -H 'Content-Type: application/json' -d '{"user_name":"alice"}' \
-#       http://localhost:19000/token | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
-#
-#   # 2) Call the API as that tenant (the JWT carries user_name -> SQL_tenant):
+#   # Tokens are minted by an EXTERNAL OIDC issuer (this stack no longer bundles
+#   # one). Point OIDC_JWKS_URL/OIDC_ISSUER/OIDC_AUDIENCE at your IdP below, or
+#   # set OIDC_PUBLIC_KEY to a static verification key, then present the JWT:
 #   curl -H "Authorization: Bearer $TOKEN" http://localhost:18080/databases
 #   curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
 #       -d '{"sql":"SELECT count() FROM analytics.events"}' http://localhost:18080/query
 #
-#   # 3) /admin still uses the static admin API key (API_KEY), not a JWT:
-#   #   curl -H "Authorization: Bearer test-key-abc123" http://localhost:18080/admin/...
-#
-# This is a DEV/TEST setup: ClickHouse runs over plain HTTP (8123) and the token
-# service runs in TOKEN_DEV_MODE (ephemeral signing key, single replica).
+# This is a DEV/TEST setup: ClickHouse runs over plain HTTP (8123).
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
@@ -44,35 +37,6 @@ services:
       retries: 20
       start_period: 5s
 
-  # Token-issuing service (OIDC-style IdP). Mints per-user JWTs and publishes
-  # JWKS that the api/mcp services validate against. Same image, MODE=token.
-  token:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: ch-token
-    environment:
-      MODE: "token"
-      # iss/aud MUST match the api/mcp OIDC_ISSUER / OIDC_AUDIENCE below.
-      TOKEN_ISSUER: "http://token:8000/"
-      TOKEN_AUDIENCE: "clickhouse-api"
-      TOKEN_TTL_SECONDS: "3600"
-      # Bearer key required to call POST /token.
-      TOKEN_ISSUER_API_KEY: "issuer-key-abc123"
-      # Dev only: generate an ephemeral signing key (no key file needed).
-      # NEVER set true with >1 replica or in production.
-      TOKEN_DEV_MODE: "true"
-      APP_PORT: "8000"
-      LOG_LEVEL: "INFO"
-    ports:
-      - "19000:8000"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-      start_period: 3s
-
   api:
     build:
       context: .
@@ -80,8 +44,6 @@ services:
     container_name: ch-api
     depends_on:
       clickhouse:
-        condition: service_healthy
-      token:
         condition: service_healthy
     environment:
       MODE: "api"
@@ -91,12 +53,11 @@ services:
       CLICKHOUSE_USER: "default"
       CLICKHOUSE_PASSWORD: ""
       CLICKHOUSE_DATABASE: "analytics"
-      # Per-tenant JWT auth — validated against the token service's JWKS.
-      OIDC_JWKS_URL: "http://token:8000/.well-known/jwks.json"
-      OIDC_ISSUER: "http://token:8000/"
-      OIDC_AUDIENCE: "clickhouse-api"
-      # Static admin key for the /admin write routes only (NOT the query routes).
-      API_KEY: "test-key-abc123"
+      # Per-tenant JWT auth — validated against an EXTERNAL OIDC issuer.
+      # Set these to your IdP (or use OIDC_PUBLIC_KEY for a static verify key).
+      OIDC_JWKS_URL: "${OIDC_JWKS_URL:-}"
+      OIDC_ISSUER: "${OIDC_ISSUER:-}"
+      OIDC_AUDIENCE: "${OIDC_AUDIENCE:-}"
       ALLOWED_DATABASES: "*"
       APP_PORT: "8000"
       LOG_LEVEL: "INFO"
@@ -114,8 +75,6 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
-      token:
-        condition: service_healthy
     environment:
       MODE: "mcp"
       MCP_TRANSPORT: "http"
@@ -127,11 +86,10 @@ services:
       CLICKHOUSE_USER: "default"
       CLICKHOUSE_PASSWORD: ""
       CLICKHOUSE_DATABASE: "analytics"
-      # Per-tenant JWT auth — validated against the token service's JWKS.
-      OIDC_JWKS_URL: "http://token:8000/.well-known/jwks.json"
-      OIDC_ISSUER: "http://token:8000/"
-      OIDC_AUDIENCE: "clickhouse-api"
-      API_KEY: "test-key-abc123"
+      # Per-tenant JWT auth — validated against an EXTERNAL OIDC issuer.
+      OIDC_JWKS_URL: "${OIDC_JWKS_URL:-}"
+      OIDC_ISSUER: "${OIDC_ISSUER:-}"
+      OIDC_AUDIENCE: "${OIDC_AUDIENCE:-}"
       ALLOWED_DATABASES: "*"
       LOG_LEVEL: "INFO"
     ports:

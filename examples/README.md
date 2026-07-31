@@ -79,7 +79,7 @@ Environment variables (all optional except `OPENAI_API_KEY`):
 |---|---|---|
 | `OPENAI_API_KEY` | — (required) | Your OpenAI API key |
 | `MCP_URL` | `http://localhost:18090/mcp` | MCP server URL (localhost works here) |
-| `MCP_API_KEY` | `test-key-abc123` | Bearer token for the MCP server |
+| `MCP_API_KEY` | `test-key-abc123` | Bearer token (a valid OIDC JWT) presented to the MCP server |
 | `OPENAI_MODEL` | `gpt-4.1` | OpenAI model to use |
 
 ---

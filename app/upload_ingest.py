@@ -6,22 +6,21 @@ exact ``{columns:[{name,type}], rows:[[...]]}`` shape that
 write plane.  This is the *parse + column-mapping* half in front of the built,
 D92-bound scratch materialize back-half (UI Slice 4, §2).
 
-Design (why this is a NEW module, not an extension of ``admin_ingest``):
-  ``admin_ingest`` is the warehouse bulk-load path (request-supplied CH creds,
-  200 MB cap, schema-diff against a target table).  The upload front door is a
-  session-scratch path (server creds, few-MB cap, no target table) — a different
-  lifecycle and trust model.  But it IMPORTS and REUSES ``admin_ingest``'s
-  proven, side-effect-free parser primitives (the same way ``scratch_ingest``
-  reuses ``coerce``/``validate_identifier``):
+Design (why this is a NEW module, not part of ``ingest_primitives``):
+  ``ingest_primitives`` holds the pure, side-effect-free parser/DDL building
+  blocks.  The upload front door is a session-scratch path (server creds,
+  few-MB cap, no target table) with its own lifecycle and trust model, so it
+  lives here but IMPORTS and REUSES those primitives (the same way
+  ``scratch_ingest`` reuses ``coerce``/``validate_identifier``):
 
     - ``infer_schema_streaming`` — (header, per-column inferred types, total)
     - ``_sanitize_columns``      — CSV header cells → unique CH identifiers
     - ``infer_column_type``      — per-column type inference for the XLSX path
 
   Cells stay STRINGS on both paths; the declared CH type is applied at insert by
-  ``scratch_ingest._coerce_row`` → ``admin_ingest.coerce``.  So CSV and XLSX
-  converge onto ONE coercion path, and no XLSX-native type reaches the write
-  plane.
+  ``scratch_ingest._coerce_row`` → ``ingest_primitives.coerce``.  So CSV and
+  XLSX converge onto ONE coercion path, and no XLSX-native type reaches the
+  write plane.
 
 XLSX safety (UI Slice 4 §7 — the slice's main risk).  XLSX is a zip, so it
 carries a decompression-bomb / zip-bomb risk plus openpyxl's XML entity history.
@@ -42,7 +41,7 @@ import csv
 import io
 from typing import Any
 
-from app.admin_ingest import (
+from app.ingest_primitives import (
     _sanitize_columns,
     infer_column_type,
     infer_schema_streaming,

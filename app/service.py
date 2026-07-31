@@ -30,6 +30,7 @@ from app.clickhouse_client import execute_query
 from app.config import Settings, get_settings
 from app.employee_access import ensure_employee_access_fresh
 from app.errors import (
+    CartesianJoinError,
     ClickHouseQueryError,
     ClickHouseUnavailableError,
     ColumnScopeError,
@@ -46,9 +47,11 @@ from app.semantic_catalog import (
     get_semantic_catalog,
 )
 from app.sqlparse import (
+    CartesianJoinForbiddenError,
     ProvenanceExtractionError,
     ScratchSessionError,
     extract_column_provenance,
+    reject_cartesian_joins,
     scratch_table_belongs_to_session,
 )
 
@@ -424,6 +427,8 @@ def run_query(
 
     Raises:
         QueryValidationError:    if SQL fails the security guardrails.
+        CartesianJoinError:      if the query cross-joins two physical base tables
+                                  without a join condition (CARTESIAN_JOIN_FORBIDDEN).
         ClickHouseQueryError:    if ClickHouse returns a query-level error.
         ClickHouseUnavailableError: if ClickHouse is unreachable.
     """
@@ -436,6 +441,29 @@ def run_query(
         raise QueryValidationError(
             message=exc.detail.get("error", "Query validation failed"),
             code=exc.detail.get("code", "QUERY_VALIDATION_ERROR"),
+        ) from exc
+
+    # ---------------------------------------------------------------------------
+    # Cartesian-join guardrail (applies to EVERY caller — scoped HTTP/JWT AND the
+    # no-scope/stdio path — so the block cannot be bypassed by dropping the scope).
+    # NOTE: this parses clean_sql once here even though the scoped column-provenance
+    # path below re-parses inside extract_column_provenance. This minor double-parse
+    # is intentional for this slice (the guard must run unconditionally, before the
+    # `scope is not None` branch); the two parse passes can be folded together later.
+    # reject_cartesian_joins is a no-op on unparseable SQL — that case is already
+    # fail-closed by the provenance parse (PARSE_FAILED_CLOSED).
+    # ---------------------------------------------------------------------------
+    try:
+        reject_cartesian_joins(clean_sql)
+    except CartesianJoinForbiddenError as exc:
+        logger.warning(
+            "run_query: cartesian join forbidden tables=(%s, %s) code=CARTESIAN_JOIN_FORBIDDEN",
+            exc.table_a,
+            exc.table_b,
+        )
+        raise CartesianJoinError(
+            message=exc.message,
+            code="CARTESIAN_JOIN_FORBIDDEN",
         ) from exc
 
     # ---------------------------------------------------------------------------

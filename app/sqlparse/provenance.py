@@ -91,6 +91,45 @@ class ScratchSessionError(ProvenanceExtractionError):
     """Raised when a scratch table reference does not match the injected session_id (D64)."""
 
 
+class CartesianJoinForbiddenError(Exception):
+    """Raised by :func:`reject_cartesian_joins` when a query cross-joins two physical
+    base tables without a join condition (a cartesian product).
+
+    This is a transport-agnostic parser-layer signal — DELIBERATELY not a subclass
+    of ``ProvenanceExtractionError`` (a cartesian join is a valid-but-forbidden query,
+    not an extraction failure, and must not be swallowed by the PARSE_FAILED_CLOSED
+    fail-closed path).  The service layer translates it into the app-level
+    ``CartesianJoinError`` (code ``CARTESIAN_JOIN_FORBIDDEN``), mirroring how
+    ``ProvenanceExtractionError`` is translated into ``ParseFailedError``.
+
+    Carries the two offending base-table BARE names (``.table_a`` / ``.table_b`` —
+    without a database prefix, the contract the tests rely on).  The human-facing
+    ``.message`` uses DB-QUALIFIED display names when a database is present (e.g.
+    ``system.one``) so the model can disambiguate same-named tables across databases.
+    The message deliberately does NOT advertise the ``CROSS JOIN (SELECT …)`` escape
+    hatch as a cartesian workaround — that exemption exists for genuine
+    constants/parameters, not as a way to defeat the guard.
+    """
+
+    def __init__(
+        self,
+        table_a: str,
+        table_b: str,
+        display_a: str | None = None,
+        display_b: str | None = None,
+    ) -> None:
+        self.table_a = table_a
+        self.table_b = table_b
+        da = display_a or table_a
+        db = display_b or table_b
+        self.message = (
+            f"This query forms a cartesian product between base tables '{da}' and "
+            f"'{db}' (they are combined without a join condition relating them). Add a "
+            "real ON/USING condition that relates the two tables (e.g. ON a.key = b.key)."
+        )
+        super().__init__(self.message)
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -884,3 +923,289 @@ def _infer_default_db(catalog_schema: dict[str, dict[str, str]]) -> str:
     if len(databases) == 1:
         return next(iter(databases))
     return _DEFAULT_DB
+
+
+# ---------------------------------------------------------------------------
+# Cartesian-join guardrail (runQuery only)
+# ---------------------------------------------------------------------------
+#
+# Reject a query that combines two PHYSICAL BASE TABLES without a join condition
+# relating them — a cartesian product (CROSS JOIN, comma join `FROM a, b`, a bare
+# `JOIN b` with no ON/USING, OR a JOIN whose ON is a constant-true literal such as
+# `ON 1=1` / `ON true`).  Cross joins where one side is a subquery / CTE / table
+# function / VALUES (the common `CROSS JOIN (SELECT …)` parameter pattern) are
+# EXEMPT — that side is structurally not an `exp.Table`.
+#
+# Detection (verified against sqlglot's ClickHouse dialect, 30.12.x):
+#   - sqlglot normalizes CROSS JOIN, comma joins, AND bare `JOIN b` all to a
+#     `Join` node with NEITHER an `on` NOR a `using` arg.
+#   - Each `exp.Select` scope in the tree is checked independently (nested
+#     subqueries carry their own cartesian risk).  PARENTHESIZED join groups
+#     (`FROM (a CROSS JOIN b)`) do NOT create a new Select — sqlglot attaches the
+#     inner joins to the grouped `Table` node (wrapped in a `Subquery`), so we
+#     recurse into those sub-groups explicitly.
+#   - A relation is a physical base table iff it is an `exp.Table` (after unwrapping
+#     `exp.Alias` / `exp.Final` wrappers) with a truthy `.name` that is NOT the name
+#     of a CTE IN SCOPE for the current select (a CTE defined on this select or an
+#     ancestor — NOT one defined in an unrelated sibling subquery, which would let a
+#     decoy alias mask a real base table).  Table functions (`numbers(10)`) parse as
+#     `exp.Table` with an EMPTY `.name`; a `Subquery` side is not an `exp.Table`.
+#
+# RESIDUAL GAP (documented, not fixed here): only CONSTANT-literal true conditions
+# are recognised as non-relating.  General tautologies over columns (`ON a.x=a.x`,
+# `ON x=x`) still count as a "real" condition and are ALLOWED — solving arbitrary
+# tautologies is out of scope.  See `test_self_equality_on_is_allowed_residual_gap`.
+
+
+def _unwrap_table_source(relation: exp.Expression) -> exp.Expression:
+    """Unwrap `exp.Alias` / `exp.Final` wrappers to reach the underlying table source.
+
+    FROM/JOIN sources can be wrapped by an alias (defensive — sources usually carry
+    their alias inside the `Table` node's own ``alias`` arg) and/or by an `exp.Final`
+    node when the ClickHouse `FINAL` modifier is present (e.g. `a FINAL`).  We peel
+    both, in any order, so a base table is never hidden behind a wrapper.
+    """
+    while isinstance(relation, (exp.Alias, exp.Final)):
+        relation = relation.this
+    return relation
+
+
+def _in_scope_cte_names(select: exp.Select) -> set[str]:
+    """Return the CTE names visible to *select*: those defined on it or any ancestor.
+
+    A CTE is only virtual within the scope where it (or an enclosing scope) declares
+    it.  A CTE named ``employees`` declared inside an unrelated sibling subquery must
+    NOT exempt a real ``employees`` base table in a different scope — resolving names
+    globally is exactly the decoy-alias bypass this guards against.  The WITH clause
+    is stored under ``with`` in most sqlglot builds and ``with_`` in others (30.12.x).
+    """
+    names: set[str] = set()
+    node: exp.Expression | None = select
+    while node is not None:
+        with_node = node.args.get("with") or node.args.get("with_")
+        if with_node is not None:
+            for cte in with_node.expressions:
+                alias = cte.alias
+                if alias:
+                    names.add(alias)
+        node = node.parent
+    return names
+
+
+def _is_physical_base_table(relation: exp.Expression, cte_names: set[str]) -> bool:
+    """Return True if *relation* is a real, catalog-style base table.
+
+    A physical base table is an `exp.Table` (after unwrapping Alias/Final) whose
+    `.name` is truthy and is not the name of an in-scope CTE.  Table functions
+    (`numbers(10)`, `generateRandom(...)`) parse as an `exp.Table` with an EMPTY
+    `.name` — the truthy-name check excludes them.  A `Subquery` side is not an
+    `exp.Table` and is therefore never a physical base table.
+    """
+    relation = _unwrap_table_source(relation)
+    if not isinstance(relation, exp.Table):
+        return False
+    name = relation.name
+    if not name:
+        # Table-valued function or anonymous source (empty name) — not a base table.
+        return False
+    if name in cte_names:
+        # An in-scope CTE reference — virtual, not a physical base table.
+        return False
+    return True
+
+
+def _table_bare_name(relation: exp.Expression) -> str:
+    """Return the unwrapped table's bare name (no database prefix)."""
+    return _unwrap_table_source(relation).name
+
+
+def _table_display_name(relation: exp.Expression) -> str:
+    """Return the DB-qualified table name when a database is present, else the bare name."""
+    tbl = _unwrap_table_source(relation)
+    db = tbl.args.get("db")
+    db_name = db.name if db is not None else ""
+    return f"{db_name}.{tbl.name}" if db_name else tbl.name
+
+
+def _is_constant_true_condition(on_expr: exp.Expression | None) -> bool:
+    """Return True if *on_expr* is a CONSTANT-TRUE join condition (not a real relation).
+
+    Recognised: `exp.Boolean(this=True)` (`ON true`), a non-zero numeric literal
+    (`ON 1`), and an equality/comparison between two constant literals that evaluates
+    true (`ON 1=1`).  Parentheses are peeled first.  Deliberately does NOT attempt
+    general tautologies over columns (`ON a.x=a.x`) — those remain "real" conditions.
+    """
+    node = on_expr
+    while isinstance(node, exp.Paren):
+        node = node.this
+    if node is None:
+        return False
+    if isinstance(node, exp.Boolean):
+        return node.this is True
+    if isinstance(node, exp.Literal):
+        return _literal_is_truthy(node)
+    if isinstance(node, (exp.EQ, exp.NEQ)):
+        left = _const_scalar(node.this)
+        right = _const_scalar(node.expression)
+        if left is None or right is None:
+            return False
+        return (left == right) if isinstance(node, exp.EQ) else (left != right)
+    return False
+
+
+def _literal_is_truthy(literal: exp.Literal) -> bool:
+    """Return True for a non-string numeric literal that is non-zero (`1`, `2`, ...)."""
+    if literal.is_string:
+        return False
+    try:
+        return float(literal.this) != 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _const_scalar(node: exp.Expression | None) -> object | None:
+    """Return a comparable scalar for a constant literal/boolean node, else None.
+
+    Only numeric literals and booleans are treated as constants — a column reference
+    (or any non-constant expression) returns None, so `ON a.x=a.x` is NOT collapsed.
+    """
+    while isinstance(node, exp.Paren):
+        node = node.this
+    if isinstance(node, exp.Boolean):
+        return bool(node.this)
+    if isinstance(node, exp.Literal) and not node.is_string:
+        try:
+            return float(node.this)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _is_cartesian_join(join: exp.Join) -> bool:
+    """Return True if *join* carries no RELATING condition (a cartesian product join).
+
+    A join is cartesian when it has no `using` and either no `on` at all, or an `on`
+    that is a constant-true literal (`ON 1=1` / `ON true`) — a condition that does not
+    relate the two tables.
+    """
+    if join.args.get("using"):
+        return False
+    on = join.args.get("on")
+    if not on:
+        return True
+    return _is_constant_true_condition(on)
+
+
+def _decompose_relation(
+    relation: exp.Expression,
+) -> tuple[exp.Expression, list[exp.Join]]:
+    """Return the (head, joins) of a relation, unwrapping a parenthesized join group.
+
+    `FROM (a CROSS JOIN b)` parses as a `Subquery` wrapping the grouped `Table` node,
+    which carries the inner joins on its own ``joins`` arg (there is no inner Select).
+    We peel that so the inner join sequence is walked in the current scope.  A real
+    derived table (`Subquery` wrapping a `Select`/`Union`) is returned as-is with no
+    joins — it is a separate scope handled by the top-level Select walk (and is exempt
+    as a relation because it is not an `exp.Table`).
+    """
+    rel = _unwrap_table_source(relation)
+    if isinstance(rel, exp.Subquery):
+        inner = _unwrap_table_source(rel.this) if rel.this is not None else None
+        if isinstance(inner, exp.Table):
+            return inner, list(inner.args.get("joins") or [])
+        return rel, []
+    if isinstance(rel, exp.Table):
+        return rel, list(rel.args.get("joins") or [])
+    return rel, []
+
+
+def _scan_join_sequence(
+    head_relation: exp.Expression,
+    extra_joins: list[exp.Join],
+    cte_names: set[str],
+) -> tuple[exp.Expression, exp.Expression] | None:
+    """Scan one join sequence (a head relation + trailing joins) for a cartesian
+    violation, recursing into any parenthesized sub-group on each source.
+
+    Returns the (earlier_relation, cartesian_source) Table nodes of the first
+    violation, or None.  A violation is a cartesian join whose source is a physical
+    base table where at least one earlier relation in the sequence is ALSO a physical
+    base table.
+    """
+    head, head_joins = _decompose_relation(head_relation)
+    sequence = head_joins + list(extra_joins)
+
+    prior_relations: list[exp.Expression] = [head]
+    for join in sequence:
+        source = join.this
+        if _is_cartesian_join(join) and _is_physical_base_table(source, cte_names):
+            for earlier in prior_relations:
+                if _is_physical_base_table(earlier, cte_names):
+                    return (earlier, source)
+        # Recurse into a parenthesized join group carried by this source (e.g.
+        # `x JOIN (b CROSS JOIN c) ON …` — the inner b×c is its own cartesian).
+        nested = _scan_join_sequence(source, [], cte_names)
+        if nested is not None:
+            return nested
+        prior_relations.append(source)
+
+    return None
+
+
+def _first_cartesian_violation(
+    select: exp.Select,
+) -> tuple[exp.Expression, exp.Expression] | None:
+    """Return the (earlier, source) Table nodes of the first cartesian violation in
+    *select*, else None.  CTE names are resolved per-scope (this select + ancestors).
+    """
+    # The FROM node is stored under "from" in most sqlglot builds and "from_" in
+    # others (30.12.x). Handle both so the guard is version-robust.
+    from_node = select.args.get("from") or select.args.get("from_")
+    if from_node is None:
+        return None
+
+    cte_names = _in_scope_cte_names(select)
+    return _scan_join_sequence(
+        from_node.this,
+        list(select.args.get("joins", [])),
+        cte_names,
+    )
+
+
+def reject_cartesian_joins(sql: str) -> None:
+    """Raise :class:`CartesianJoinForbiddenError` if *sql* forms a cartesian product.
+
+    Parses *sql* with sqlglot's ClickHouse dialect (the same dialect the provenance
+    extractor uses) and inspects every `exp.Select` scope independently, plus any
+    parenthesized join sub-groups within them.  Raises on the first cartesian product
+    between two physical base tables.
+
+    On a PARSE FAILURE this returns silently (no-op): the caller's own provenance
+    parse already fail-closes on unparseable SQL (PARSE_FAILED_CLOSED), so re-raising
+    a different error here would only mask that path.  (`NATURAL JOIN` raises a
+    ParseError in this dialect and is therefore handled by the caller's fail-closed
+    path, not here.)
+    """
+    try:
+        ast = sqlglot.parse_one(
+            sql,
+            dialect="clickhouse",
+            error_level=sqlglot.ErrorLevel.RAISE,
+        )
+    except Exception:
+        # Unparseable SQL — leave it to the caller's fail-closed provenance parse.
+        return
+
+    if ast is None:
+        return
+
+    for select in ast.find_all(exp.Select):
+        violation = _first_cartesian_violation(select)
+        if violation is not None:
+            earlier, source = violation
+            raise CartesianJoinForbiddenError(
+                _table_bare_name(earlier),
+                _table_bare_name(source),
+                _table_display_name(earlier),
+                _table_display_name(source),
+            )

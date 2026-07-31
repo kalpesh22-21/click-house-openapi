@@ -21,11 +21,8 @@ Each ingress entry supports:
                 serviceName defaults to this chart's own service;
                 servicePortName defaults to "http".
 
-SECURITY: TLS is mandatory on every ingress. Plain HTTP would leak the API key,
-query results, and — for the UI/admin path — write access to ClickHouse. The
-"ui" ingress should ALSO carry restrictive annotations (source-IP allow-list,
-auth, or an internal-only ingress class) so the admin UI is never publicly
-reachable.
+SECURITY: TLS is mandatory on every ingress. Plain HTTP would leak the bearer
+token (per-tenant OIDC JWT) and query results.
 */ -}}
 
 {{- define "clickhouse-api.renderIngress" -}}
@@ -33,7 +30,7 @@ reachable.
 {{- $name := .name -}}
 {{- $cfg := .cfg -}}
 {{- if not $cfg.tls.enabled -}}
-{{- fail (printf "ingress %q: tls.enabled must be true. Exposing over plain HTTP leaks the API key and the admin UI." $name) -}}
+{{- fail (printf "ingress %q: tls.enabled must be true. Exposing over plain HTTP leaks the bearer token." $name) -}}
 {{- end -}}
 {{- if not $cfg.host -}}
 {{- fail (printf "ingress %q: host is required." $name) -}}

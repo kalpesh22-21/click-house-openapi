@@ -43,7 +43,7 @@ Environment Variables
 ---------------------
 OPENAI_API_KEY   Required.  Your OpenAI API key (sk-...).
 MCP_URL          MCP server URL.  Default: http://localhost:18090/mcp
-MCP_API_KEY      Bearer token for the MCP server.  Default: test-key-abc123
+MCP_API_KEY      Bearer token (a valid OIDC JWT) for the MCP server.  Default: test-key-abc123
 OPENAI_MODEL     Model name.  Default: gpt-4.1
 """
 

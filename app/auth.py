@@ -16,7 +16,6 @@ Why an async-generator dependency (not a plain function):
 
 from __future__ import annotations
 
-import hmac
 from typing import AsyncGenerator
 
 from fastapi import Depends, HTTPException, Security
@@ -75,44 +74,3 @@ async def require_principal(
         yield principal
     finally:
         current_principal.reset(token)
-
-
-def require_admin_api_key(
-    credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
-    settings: Settings = Depends(get_settings),
-) -> None:
-    """Authenticate an /admin request against the static admin API key.
-
-    The /admin CSV-ingest write routes are an internal operational path (not a
-    per-tenant LLM surface), so they use a shared Bearer API key instead of a
-    JWT.  No principal is bound — admin queries are not tenant-scoped.
-
-    Uses hmac.compare_digest for a timing-safe comparison and fails closed when
-    no admin key is configured.  Raises HTTP 401 (missing/invalid) or 503
-    (unconfigured).
-    """
-    # Fail closed: refuse every admin request when no key is configured rather
-    # than leaving the write routes open.
-    if not settings.api_key or not settings.api_key.strip():
-        raise HTTPException(
-            status_code=503,
-            detail={"error": "Admin API is not configured.", "code": "ADMIN_AUTH_NOT_CONFIGURED"},
-        )
-
-    if credentials is None or not credentials.credentials:
-        raise HTTPException(
-            status_code=401,
-            detail={"error": "Missing Authorization header.", "code": "MISSING_AUTH"},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    # Constant-time comparison; the empty-credential case is already handled above.
-    if not hmac.compare_digest(
-        credentials.credentials.encode("utf-8"),
-        settings.api_key.encode("utf-8"),
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail={"error": "Invalid API key.", "code": "INVALID_AUTH"},
-            headers={"WWW-Authenticate": "Bearer"},
-        )

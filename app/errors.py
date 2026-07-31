@@ -74,3 +74,22 @@ class ParseFailedError(ClickHouseAPIError):
 
     Maps to HTTP 400 in the REST layer.
     """
+
+
+class CartesianJoinError(ClickHouseAPIError):
+    """Raised when a query cross-joins two physical base tables without a join condition.
+
+    A cartesian product between two base tables (CROSS JOIN, comma join, or a bare
+    JOIN with no ON/USING) is rejected before execution — it is almost always a
+    mistake and can multiply row counts catastrophically.  Cross joins where one
+    side is a subquery / CTE / table function / VALUES (the common
+    ``CROSS JOIN (SELECT …)`` parameter pattern) are exempt.
+
+    The error message names the two offending base tables so the model can
+    self-correct by adding an ON/USING condition or wrapping a constant side in a
+    subquery.
+
+    Code: CARTESIAN_JOIN_FORBIDDEN
+
+    Maps to HTTP 400 in the REST layer.
+    """

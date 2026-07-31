@@ -133,13 +133,19 @@ def readonly_settings(settings: Settings) -> dict[str, Any]:
     config knob is retained for unusual ClickHouse setups; these caps are
     authoritative regardless because we always send them ourselves.
     """
-    return {
+    ch_settings: dict[str, Any] = {
         "readonly": settings.clickhouse_readonly,
         "max_execution_time": settings.max_execution_time,
         "max_result_rows": settings.max_result_rows,
         "result_overflow_mode": "throw",
         "max_rows_to_read": settings.max_rows_to_read,
     }
+    # Optional dedup-at-read for ReplacingMergeTree/CollapsingMergeTree tables.
+    # Query-global: ClickHouse applies FINAL to every MergeTree-family table in
+    # the query (no-op on system tables). Off by default; see config for caveats.
+    if settings.clickhouse_select_final:
+        ch_settings["final"] = 1
+    return ch_settings
 
 
 def tenant_settings(settings: Settings) -> dict[str, Any]:

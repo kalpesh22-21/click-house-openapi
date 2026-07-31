@@ -10,11 +10,11 @@ from typing import Any, AsyncGenerator
 from fastapi import FastAPI, Request
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.employee_access import EmployeeAccessError
 from app.errors import (
+    CartesianJoinError,
     ClickHouseAPIError,
     ClickHouseQueryError,
     ClickHouseUnavailableError,
@@ -22,13 +22,13 @@ from app.errors import (
     QueryValidationError,
     TableNotFoundError,
 )
-from app.routers import admin, health, query, schema
+from app.routers import health, query, schema
 
 # ---------------------------------------------------------------------------
 # Logging — use a default level at import time; the lifespan reconfigures
 # once settings are loaded.  This avoids a hard import-time get_settings()
-# call that would crash if API_KEY is absent (stdio MCP uses a different
-# entrypoint, but we still want main.py to be importable by tooling).
+# call that would crash if required config (e.g. OIDC) is absent (stdio MCP uses
+# a different entrypoint, but we still want main.py to be importable by tooling).
 # ---------------------------------------------------------------------------
 
 logging.basicConfig(
@@ -124,6 +124,7 @@ app = FastAPI(
 # these explicitly; this is the backstop for the rest.)
 _DOMAIN_ERROR_STATUS: dict[type, int] = {
     QueryValidationError: 400,
+    CartesianJoinError: 400,
     ClickHouseQueryError: 400,
     DatabaseNotAllowedError: 403,
     TableNotFoundError: 404,
@@ -164,13 +165,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 app.include_router(health.router)
 app.include_router(schema.router)
 app.include_router(query.router)
-app.include_router(admin.router)
-
-# ---------------------------------------------------------------------------
-# Static files — admin UI (frontend developer will populate app/static/)
-# ---------------------------------------------------------------------------
-
-app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")
 
 
 # ---------------------------------------------------------------------------

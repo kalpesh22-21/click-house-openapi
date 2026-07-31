@@ -73,10 +73,10 @@ MCP guardrail rejections are returned as tool errors with descriptive messages s
 
 ### Local stdio usage (Claude Desktop / MCP Inspector)
 
-`API_KEY` is **not required** for the stdio transport. The local subprocess trust model means no network authentication is needed. You may omit `API_KEY` entirely.
+No network authentication is required for the stdio transport. The local subprocess trust model means no OIDC/JWT is checked.
 
 ```bash
-# 1. Set required env vars (API_KEY is NOT needed for stdio)
+# 1. Set required env vars (no auth needed for stdio)
 export CLICKHOUSE_HOST=clickhouse.example.com
 export CLICKHOUSE_USER=default
 export CLICKHOUSE_PASSWORD=your-password
@@ -111,7 +111,7 @@ python -m app.mcp_server --transport stdio
 }
 ```
 
-`API_KEY` is never checked for the stdio transport and can be omitted from the config entirely.
+No bearer token is ever checked for the stdio transport.
 
 ### Remote HTTP usage (k8s / server)
 
@@ -151,7 +151,6 @@ helm install clickhouse-mcp ./helm/clickhouse-api \
   --set mode=mcp \
   --set secrets.connection.CLICKHOUSE_HOST=clickhouse.prod.svc.cluster.local \
   --set secrets.clickhousePassword=<your-ch-password> \
-  --set secrets.apiKey=<your-api-key> \
   --set config.ALLOWED_DATABASES=analytics,reporting \
   --set config.MCP_PORT=8000 \
   --set config.MCP_PATH=/mcp
@@ -166,8 +165,7 @@ To use the REST API mode (the default):
 ```bash
 helm install clickhouse-api ./helm/clickhouse-api \
   --set mode=api \
-  --set secrets.clickhousePassword=<password> \
-  --set secrets.apiKey=<key>
+  --set secrets.clickhousePassword=<password>
 ```
 
 ## Environment Variables
@@ -183,7 +181,8 @@ Variables marked **ConfigMap** are managed in the Kubernetes ConfigMap (via `con
 | `CLICKHOUSE_PASSWORD` | Yes | — | Secret | ClickHouse password |
 | `CLICKHOUSE_DATABASE` | No | `default` | Secret | Default database |
 | `CLICKHOUSE_SECURE` | No | `true` | Secret | Use TLS for ClickHouse connection |
-| `API_KEY` | REST/HTTP: Yes | `""` | Secret | Bearer token for REST API and MCP HTTP transport. Not required for MCP stdio. |
+| `OIDC_JWKS_URL` | REST/HTTP: Yes* | `""` | ConfigMap | JWKS endpoint of the external OIDC issuer used to verify per-request JWTs. |
+| `OIDC_PUBLIC_KEY` | REST/HTTP: Yes* | `""` | Secret | Static PEM public key for an issuer that publishes no JWKS. *Either `OIDC_JWKS_URL` or `OIDC_PUBLIC_KEY` is required for REST and MCP HTTP; neither is needed for MCP stdio. |
 | `MAX_EXECUTION_TIME` | No | `30` | ConfigMap | Max query wall-clock seconds |
 | `MAX_RESULT_ROWS` | No | `10000` | ConfigMap | ClickHouse-side hard row cap |
 | `MAX_ROWS_TO_READ` | No | `100000000` | ConfigMap | ClickHouse-side max rows scanned |
@@ -220,7 +219,7 @@ pip install -r requirements.txt
 
 # 4. Configure environment
 cp .env.example .env
-# Edit .env with your ClickHouse credentials and API_KEY
+# Edit .env with your ClickHouse credentials and OIDC settings
 
 # 5a. Start the REST API server
 uvicorn app.main:app --reload --port 8000
@@ -293,8 +292,7 @@ helm install clickhouse-api ./helm/clickhouse-api \
   --create-namespace \
   --set secrets.connection.CLICKHOUSE_HOST=clickhouse.prod.svc.cluster.local \
   --set config.PUBLIC_BASE_URL=https://clickhouse-api.example.com \
-  --set secrets.clickhousePassword=<your-ch-password> \
-  --set secrets.apiKey=<your-api-key>
+  --set secrets.clickhousePassword=<your-ch-password>
 ```
 
 ### Install (MCP HTTP mode)
@@ -305,8 +303,7 @@ helm install clickhouse-mcp ./helm/clickhouse-api \
   --create-namespace \
   --set mode=mcp \
   --set secrets.connection.CLICKHOUSE_HOST=clickhouse.prod.svc.cluster.local \
-  --set secrets.clickhousePassword=<your-ch-password> \
-  --set secrets.apiKey=<your-api-key>
+  --set secrets.clickhousePassword=<your-ch-password>
 ```
 
 ### Upgrade
@@ -355,7 +352,7 @@ ingress:
    https://your-public-host.example.com/openapi.json
    ```
 
-4. **Set authentication**: API Key → Bearer → your `API_KEY` value.
+4. **Set authentication**: API Key → Bearer → a per-tenant OIDC JWT minted by your IdP.
 
 5. **Test**: *"What databases are available?"* or *"Describe the schema of table X in database Y."*
 

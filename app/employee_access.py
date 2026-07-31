@@ -120,7 +120,7 @@ import clickhouse_connect
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import ClickHouseError
 
-from app.admin_ingest import validate_identifier
+from app.ingest_primitives import validate_identifier
 from app.clickhouse_client import readonly_settings
 from app.config import Settings, get_settings
 from app.errors import ClickHouseUnavailableError

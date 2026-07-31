@@ -16,7 +16,7 @@ It is a PRIVILEGED SIDE-CHANNEL, not an MCP tool (D19):
     namespace (isolation invariant #2).
   - The rows are DATA: they are loaded via the native driver
     (``client.insert(data=...)``), never string-interpolated into SQL
-    (injection invariant #4) — the same hardened primitive ``admin_ingest`` uses.
+    (injection invariant #4) — the same hardened primitives ``ingest_primitives`` provides.
   - It executes via a distinct, server-side-only ClickHouse credential GRANTed on
     the ``scratch`` database only, so a total logic bug still cannot touch the
     warehouse (blast-radius invariant #1).
@@ -33,12 +33,11 @@ Session-id contract for the runtime caller (Slice 2 — MUST hold):
   runtime sanitizer must strip a raw uuid4's hyphens to **hex** (NOT convert them
   to underscores) so the sanitized id stays underscore-free.
 
-Reuse of ``admin_ingest`` (the proven write primitives, G1):
+Reuse of ``ingest_primitives`` (the proven write primitives, G1):
   - ``validate_identifier`` / ``validate_ch_type`` — the safe-identifier regex
     and the ClickHouse-type whitelist.
-  - ``build_admin_client`` shape (a one-off, non-singleton client with NO
-    readonly_settings) — here ``build_scratch_client`` builds it from *server*
-    config instead of request-supplied credentials.
+  - ``build_scratch_client`` — a one-off, non-singleton client with NO
+    readonly_settings, built from *server* config (never request-supplied creds).
   - ``coerce`` — hardened per-type value coercion for string cells.
   - ``client.insert(data=..., column_names=...)`` — native bulk insert.
 """
@@ -53,7 +52,7 @@ from typing import Any
 import clickhouse_connect
 from clickhouse_connect.driver.client import Client
 
-from app.admin_ingest import coerce, validate_ch_type, validate_identifier
+from app.ingest_primitives import coerce, validate_ch_type, validate_identifier
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -108,10 +107,10 @@ class ScratchTooLargeError(ScratchWriteError):
 def build_scratch_client(settings: Settings) -> Client:
     """Build a one-off ClickHouse client from the SERVER-side scratch credential.
 
-    Mirrors ``admin_ingest.build_admin_client`` (a non-cached client with NO
-    readonly_settings — it is intentionally used for DDL/INSERT) but sources its
-    credentials from server config (``scratch_client_params``), NOT from the
-    request.  The runtime never holds these credentials (invariant #8): the
+    A non-cached client with NO readonly_settings — it is intentionally used for
+    DDL/INSERT — sourcing its credentials from server config
+    (``scratch_client_params``), NOT from the request.  The runtime never holds
+    these credentials (invariant #8): the
     privilege is the server-side, scratch-only grant.
 
     The caller MUST close the returned client.
@@ -325,7 +324,7 @@ def _coerce_row(row: list[Any], columns: list[dict[str, str]]) -> list[Any]:
 
     Non-string cells (int/float/bool/None) are passed through as-is — they are
     already native and go to ``client.insert`` as data.  A STRING cell is run
-    through the hardened ``admin_ingest.coerce`` for its declared type (so an ISO
+    through the hardened ``ingest_primitives.coerce`` for its declared type (so an ISO
     string lands as a real Date/DateTime, a numeric string as an int/float).  A
     String-typed cell round-trips unchanged — so a cell like ``'; DROP TABLE …``
     is stored as the literal string and, when later JOINed, compared as data,

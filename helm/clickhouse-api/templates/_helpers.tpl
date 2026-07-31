@@ -63,9 +63,9 @@ Service account name.
 {{/*
 Name of the Secret used by the Deployment.
 Returns the existingSecret name when configured, otherwise the chart-managed secret name.
-An existing Secret must contain all seven keys with their canonical env-var names:
+An existing Secret must contain all six keys with their canonical env-var names:
   CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER, CLICKHOUSE_DATABASE,
-  CLICKHOUSE_SECURE, CLICKHOUSE_PASSWORD, API_KEY
+  CLICKHOUSE_SECURE, CLICKHOUSE_PASSWORD
 */}}
 {{- define "clickhouse-api.secretName" -}}
 {{- if .Values.secrets.existingSecret.name }}
