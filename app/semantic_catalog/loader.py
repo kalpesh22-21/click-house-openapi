@@ -11,12 +11,15 @@ the column-provenance extractor (`app/sqlparse/provenance.py`). The YAML data
 files themselves live in `app/semantic_catalog/data/*.yaml`, copied from
 `data-analysis-agent/databaseSchemaDocs/*.yaml`.
 
-The **spec repo (`data-analysis-agent`) is authoritative** for both the loader
-contract and the YAML content; any change there is mirrored into this copy in
-the same sprint (D79a discipline). `tools/check_catalog_parity.py` provides a
-local tamper/drift check (always) plus a best-effort cross-repo staleness check
-when a local clone of the source repo is available (see that script's docstring
-for the known CI cross-repo-access limitation).
+Source-of-truth (post-Wave-1a): the **MCP (`clickhouse-api`) is authoritative**
+for the YAML content — it is authored/edited HERE, and the data-analysis-agent
+DERIVES its `tests/fixtures/catalog_export.json` from this MCP via
+`build_catalog_export()` (`app/semantic_catalog/export.py`). The parsing-function
+lineage above is historical: those functions were originally copied in from the
+agent, but the data direction has since inverted. `tools/check_catalog_parity.py`
+provides a local tamper/drift check (always) plus a best-effort agent-fixture
+staleness check when the agent's fixture path is available (see that script's
+docstring).
 
 This is a SEPARATE catalog from `app/catalog.py`'s interim `system.columns`
 catalog, which continues to feed `extract_column_provenance()` for
@@ -53,10 +56,10 @@ DEFAULT_DATABASE = "dbpcm_warehouse"
 # app/semantic_catalog/loader.py, so the data dir is a sibling).
 _DEFAULT_SCHEMA_DIR = Path(__file__).parent / "data"
 
-# Sidecar file written at copy-in time: the source repo's last commit SHA that
-# touched `databaseSchemaDocs/**` (D84). Read verbatim, never recomputed here —
-# recomputing it would require the source repo's git history, which a copy-in
-# does not have.
+# Sidecar file: the catalog CONTENT fingerprint — `sha1(MANIFEST.sha256)`, a pure
+# function of the per-file sha256 map (D84, Wave 0). It is NOT a git commit SHA.
+# Read verbatim here; `tools/check_catalog_parity.py --write` regenerates it in
+# lockstep with MANIFEST.sha256 whenever the catalog YAML changes.
 _CATALOG_SHA_PATH = _DEFAULT_SCHEMA_DIR / "CATALOG_SHA"
 
 
@@ -125,10 +128,14 @@ def load_semantic_catalog(schema_dir: Path | str | None = None) -> dict[str, dic
 
 
 def get_catalog_sha() -> str:
-    """Return the CATALOG_SHA sidecar value (the source repo's commit SHA at copy-in time).
+    """Return the CATALOG_SHA sidecar value (the catalog content fingerprint).
+
+    This is a deterministic CONTENT fingerprint — ``sha1(MANIFEST.sha256)``, the
+    same value ``build_catalog_export()`` emits as ``catalog_sha`` — NOT a git
+    commit SHA.
 
     Raises FileNotFoundError if the sidecar is missing — a missing sidecar means
-    the copy-in was done incorrectly and should be treated as a deploy-time
+    the catalog data dir is misassembled and should be treated as a deploy-time
     misconfiguration, not silently defaulted.
     """
     return _CATALOG_SHA_PATH.read_text(encoding="utf-8").strip()

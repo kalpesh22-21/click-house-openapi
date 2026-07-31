@@ -1,52 +1,56 @@
 #!/usr/bin/env python3
-"""Parity check for the copy-in'd Semantic Catalog YAML (D79a-style, D83/D84).
+"""Integrity + staleness checks for the Semantic Catalog YAML (D83/D84, Wave 1a).
 
-`app/semantic_catalog/data/*.yaml` is a **copy-in** of
-`data-analysis-agent/databaseSchemaDocs/*.yaml` (see D79(a) for the precedent this
-mirrors, and mcp-overlay-design.md OQ-1/OQ-2 for the rationale). The spec repo
-(`data-analysis-agent`) is authoritative; this script gives two independent lines
-of defence against the copy silently going stale:
+Direction (post-Wave-1a): the **MCP (`clickhouse-api`) is the source of truth** for
+the Semantic Catalog. `app/semantic_catalog/data/*.yaml` is authored/edited HERE,
+and the data-analysis-agent's `tests/fixtures/catalog_export.json` is DERIVED from
+this MCP via `build_catalog_export()`. (This inverts the earlier copy-in model in
+which `data-analysis-agent/databaseSchemaDocs/*.yaml` was authoritative and the
+MCP mirrored FROM it — that source directory has since been deleted.)
+
+Two independent checks:
 
 1. **Local tamper/drift check (always runs, no cross-repo access needed):**
-   recomputes the sha256 of every copied `*.yaml` file and compares it against
-   the recorded `MANIFEST.sha256` sidecar. A mismatch means someone edited the
-   copied YAML directly in `clickhouse-api` instead of mirroring a change from
-   the source repo (or a stray write happened) — this is *always* wrong under
-   the copy-in model and should fail CI.
+   recomputes the sha256 of every `*.yaml` file and compares it against the
+   recorded `MANIFEST.sha256` sidecar. A mismatch means the YAML changed but the
+   sidecar was not regenerated — either a stray/accidental write, or an
+   intentional edit that forgot `--write`. Editing the YAML directly on the MCP is
+   now the CORRECT workflow (the MCP owns the catalog); the fix for an intentional
+   edit is simply to run `--write` so `MANIFEST.sha256` + `CATALOG_SHA` are
+   regenerated in lockstep.
 
-2. **Cross-repo staleness check (best-effort, skipped if the source repo isn't
-   checked out alongside this one):** if `--source-dir` (or the
-   `DATA_ANALYSIS_AGENT_REPO` env var) points at a local clone of
-   `data-analysis-agent`, this script (a) byte-diffs every copied YAML against
-   the source repo's `databaseSchemaDocs/<file>` and (b) recomputes the source
-   repo's current `git log -1 --format=%H -- databaseSchemaDocs` and compares it
-   to the `CATALOG_SHA` sidecar recorded at copy-in time. Either check failing
-   means the copy is stale and needs re-mirroring (same-sprint discipline, D79a).
+2. **Agent-fixture staleness check (best-effort, skipped if the fixture path is
+   not provided):** compares the `catalog_sha` recorded in the agent's committed
+   `tests/fixtures/catalog_export.json` against the CONTENT fingerprint this MCP
+   currently emits. A mismatch means the agent's derived fixture is stale relative
+   to this MCP and must be regenerated from `build_catalog_export()`.
+
+`CATALOG_SHA` is a deterministic CONTENT fingerprint — `sha1(MANIFEST.sha256)`, a
+pure function of the per-file sha256 map, with no dependency on git history. The
+`catalog_sha` field that `build_catalog_export()` emits is exactly this value, so
+the fixture-staleness check compares fingerprint against fingerprint.
 
 Known limitation (documented, not fixed here): `clickhouse-api`'s own CI runner
-has no access to the `data-analysis-agent` repo by default (they are separate
-repos with no submodule/checkout relationship configured), so check #2 is
-**best-effort local-dev-only** unless a future CI job explicitly checks out both
-repos. Check #1 (tamper/drift) always runs in CI and catches the most common
-failure mode (someone editing the copy in place). The cross-repo staleness gap
-is accepted as a residual risk per mcp-overlay-design.md OQ-1, mitigated by:
-  - same-sprint mirroring discipline (a human convention, not automated), and
-  - `catalog_sha` being exposed in the `getTableSchema` response (D84), which
-    makes any runtime/MCP skew observable at query time even if CI can't catch
-    it at merge time.
+has no access to the `data-analysis-agent` repo by default, so check #2 is
+best-effort local-dev-only unless a CI job explicitly provides the fixture path.
+Check #1 always runs in CI and catches the most common failure mode (a YAML edit
+that did not regenerate the sidecar). `catalog_sha` is also exposed in the
+`getTableSchema` response (D84) and the `/catalog/export` payload, so any
+runtime/MCP skew is observable at request time even if CI can't catch it at merge.
 
 Usage:
-    python tools/check_catalog_parity.py                  # check only (CI mode)
-    python tools/check_catalog_parity.py --write           # regenerate MANIFEST.sha256
-    python tools/check_catalog_parity.py --source-dir /path/to/data-analysis-agent
+    python tools/check_catalog_parity.py                       # check only (CI mode)
+    python tools/check_catalog_parity.py --write                # regenerate MANIFEST.sha256 + CATALOG_SHA
+    python tools/check_catalog_parity.py --fixture /path/to/data-analysis-agent/tests/fixtures/catalog_export.json
+    python tools/check_catalog_parity.py --agent-repo /path/to/data-analysis-agent
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -54,13 +58,17 @@ _CATALOG_DIR = Path(__file__).resolve().parent.parent / "app" / "semantic_catalo
 _MANIFEST_PATH = _CATALOG_DIR / "MANIFEST.sha256"
 _CATALOG_SHA_PATH = _CATALOG_DIR / "CATALOG_SHA"
 
+# Location of the agent's derived catalog-export fixture, relative to the
+# data-analysis-agent repo root — used to resolve --agent-repo / the env fallback.
+_AGENT_FIXTURE_RELPATH = Path("tests") / "fixtures" / "catalog_export.json"
+
 
 def _sha256_of(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _compute_manifest() -> dict[str, str]:
-    """Return {filename: sha256} for every copied *.yaml file, sorted by name."""
+    """Return {filename: sha256} for every catalog *.yaml file, sorted by name."""
     return {p.name: _sha256_of(p) for p in sorted(_CATALOG_DIR.glob("*.yaml"))}
 
 
@@ -77,13 +85,44 @@ def _read_manifest() -> dict[str, str]:
     return manifest
 
 
-def _write_manifest(manifest: dict[str, str]) -> None:
+def _render_manifest(manifest: dict[str, str]) -> str:
+    """Render a {filename: sha256} map to the exact MANIFEST.sha256 text format.
+
+    Sorted by name, ``"{sha}  {name}"`` per line, newline-joined with a trailing
+    newline — the single source of truth for how a manifest is serialized, shared
+    by ``_write_manifest`` and the content-fingerprint computation so the
+    fingerprint is derived consistently.
+    """
     lines = [f"{sha}  {name}" for name, sha in sorted(manifest.items())]
-    _MANIFEST_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return "\n".join(lines) + "\n"
+
+
+def _content_fingerprint(manifest: dict[str, str]) -> str:
+    """Return the deterministic CATALOG_SHA content fingerprint for a manifest.
+
+    ``CATALOG_SHA = sha1(MANIFEST.sha256)`` — a pure function of the per-file
+    sha256 map, with no dependency on git history or a source-repo checkout. This
+    is exactly the ``catalog_sha`` that ``build_catalog_export()`` emits.
+    """
+    return hashlib.sha1(_render_manifest(manifest).encode("utf-8")).hexdigest()
+
+
+def _live_fingerprint() -> str:
+    """The content fingerprint this MCP currently emits (== build_catalog_export()'s catalog_sha)."""
+    return _content_fingerprint(_compute_manifest())
+
+
+def _write_manifest(manifest: dict[str, str]) -> None:
+    _MANIFEST_PATH.write_text(_render_manifest(manifest), encoding="utf-8")
+
+
+def _write_catalog_sha(fingerprint: str) -> None:
+    """Write the CATALOG_SHA sidecar so it stays in lockstep with MANIFEST.sha256."""
+    _CATALOG_SHA_PATH.write_text(fingerprint + "\n", encoding="utf-8")
 
 
 def check_local_drift() -> list[str]:
-    """Return a list of error strings; empty means the copy matches MANIFEST.sha256."""
+    """Return a list of error strings; empty means the YAML matches MANIFEST.sha256."""
     errors: list[str] = []
     recorded = _read_manifest()
     current = _compute_manifest()
@@ -105,54 +144,62 @@ def check_local_drift() -> list[str]:
         if recorded[name] != current[name]:
             errors.append(
                 f"Content hash mismatch for {name}: recorded={recorded[name]} "
-                f"actual={current[name]} — copied YAML was edited directly; "
-                "re-mirror from data-analysis-agent instead."
+                f"actual={current[name]} — the YAML changed but MANIFEST.sha256 was "
+                "not regenerated. If the edit was intentional (the MCP owns the "
+                "catalog), run --write to regenerate MANIFEST.sha256 + CATALOG_SHA; "
+                "otherwise revert the stray change."
             )
     return errors
 
 
-def check_cross_repo(source_dir: Path) -> list[str]:
-    """Return a list of error strings comparing against a local data-analysis-agent clone."""
+def check_fixture_staleness(fixture_path: Path) -> list[str]:
+    """Compare the agent's derived catalog-export fixture against the live MCP fingerprint.
+
+    ``fixture_path`` points at the data-analysis-agent's committed
+    ``tests/fixtures/catalog_export.json`` (derived from this MCP's
+    ``build_catalog_export()``). Its ``catalog_sha`` must equal the fingerprint
+    this MCP currently emits; a mismatch means the fixture is stale and must be
+    regenerated from this MCP.
+    """
     errors: list[str] = []
-    source_schema_dir = source_dir / "databaseSchemaDocs"
-    if not source_schema_dir.is_dir():
-        errors.append(f"--source-dir does not contain databaseSchemaDocs/: {source_dir}")
+    if not fixture_path.is_file():
+        errors.append(f"Agent catalog-export fixture not found: {fixture_path}")
         return errors
-
-    current_files = {p.name for p in _CATALOG_DIR.glob("*.yaml")}
-    source_files = {p.name for p in source_schema_dir.glob("*.yaml")}
-
-    for name in sorted(source_files - current_files):
-        errors.append(f"New table YAML in source repo not yet copied in: {name}")
-    for name in sorted(current_files - source_files):
-        errors.append(f"Copied YAML no longer exists in source repo: {name}")
-
-    for name in sorted(current_files & source_files):
-        copied_bytes = (_CATALOG_DIR / name).read_bytes()
-        source_bytes = (source_schema_dir / name).read_bytes()
-        if copied_bytes != source_bytes:
-            errors.append(f"Copied YAML differs from source repo content: {name}")
 
     try:
-        result = subprocess.run(
-            ["git", "-C", str(source_dir), "log", "-1", "--format=%H", "--", "databaseSchemaDocs"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        source_sha = result.stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-        errors.append(f"Could not read source repo's git history: {exc}")
+        data = json.loads(fixture_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        errors.append(f"Could not read agent catalog-export fixture {fixture_path}: {exc}")
         return errors
 
-    recorded_sha = _CATALOG_SHA_PATH.read_text(encoding="utf-8").strip()
-    if source_sha and recorded_sha != source_sha:
+    fixture_sha = data.get("catalog_sha") if isinstance(data, dict) else None
+    if not fixture_sha:
         errors.append(
-            f"CATALOG_SHA sidecar is stale: recorded={recorded_sha} "
-            f"source-repo-HEAD={source_sha}. Re-copy databaseSchemaDocs/ and "
-            "update CATALOG_SHA."
+            f"Agent catalog-export fixture {fixture_path} has no 'catalog_sha' field."
+        )
+        return errors
+
+    live_sha = _live_fingerprint()
+    if fixture_sha != live_sha:
+        errors.append(
+            f"Agent catalog-export fixture is stale: fixture catalog_sha={fixture_sha} "
+            f"live-mcp-fingerprint={live_sha}. Regenerate the agent's "
+            "tests/fixtures/catalog_export.json from this MCP (build_catalog_export())."
         )
     return errors
+
+
+def _resolve_fixture_path(args: argparse.Namespace) -> Path | None:
+    """Resolve the agent-fixture path from --fixture / --agent-repo / env, or None."""
+    if args.fixture is not None:
+        return args.fixture
+    env_fixture = os.environ.get("AGENT_CATALOG_FIXTURE")
+    if env_fixture:
+        return Path(env_fixture)
+    agent_repo = args.agent_repo or os.environ.get("DATA_ANALYSIS_AGENT_REPO")
+    if agent_repo:
+        return Path(agent_repo) / _AGENT_FIXTURE_RELPATH
+    return None
 
 
 def main() -> int:
@@ -160,16 +207,26 @@ def main() -> int:
     parser.add_argument(
         "--write",
         action="store_true",
-        help="Regenerate MANIFEST.sha256 from the current copied YAML files.",
+        help="Regenerate MANIFEST.sha256 + CATALOG_SHA from the current catalog YAML files.",
     )
     parser.add_argument(
-        "--source-dir",
+        "--fixture",
         type=Path,
         default=None,
         help=(
-            "Path to a local data-analysis-agent clone for the cross-repo staleness "
-            "check. Falls back to the DATA_ANALYSIS_AGENT_REPO env var. Skipped "
-            "entirely if neither is set (see module docstring: known CI limitation)."
+            "Path to the agent's derived tests/fixtures/catalog_export.json for the "
+            "staleness check. Falls back to the AGENT_CATALOG_FIXTURE env var, or "
+            "<agent-repo>/tests/fixtures/catalog_export.json when --agent-repo is set."
+        ),
+    )
+    parser.add_argument(
+        "--agent-repo",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a local data-analysis-agent clone; the fixture is resolved at "
+            "<agent-repo>/tests/fixtures/catalog_export.json. Falls back to the "
+            "DATA_ANALYSIS_AGENT_REPO env var. Skipped if no fixture path resolves."
         ),
     )
     args = parser.parse_args()
@@ -177,20 +234,22 @@ def main() -> int:
     if args.write:
         manifest = _compute_manifest()
         _write_manifest(manifest)
+        fingerprint = _content_fingerprint(manifest)
+        _write_catalog_sha(fingerprint)
         print(f"Wrote {_MANIFEST_PATH} with {len(manifest)} entries.")
+        print(f"Wrote {_CATALOG_SHA_PATH} = {fingerprint}")
         return 0
 
     errors = check_local_drift()
 
-    source_dir = args.source_dir or os.environ.get("DATA_ANALYSIS_AGENT_REPO")
-    if source_dir:
-        errors.extend(check_cross_repo(Path(source_dir)))
+    fixture_path = _resolve_fixture_path(args)
+    if fixture_path is not None:
+        errors.extend(check_fixture_staleness(fixture_path))
     else:
         print(
-            "NOTE: cross-repo staleness check skipped (no --source-dir / "
-            "DATA_ANALYSIS_AGENT_REPO). Local tamper/drift check only. "
-            "See module docstring for the same-sprint mirroring discipline this "
-            "relies on instead."
+            "NOTE: agent-fixture staleness check skipped (no --fixture / --agent-repo / "
+            "AGENT_CATALOG_FIXTURE / DATA_ANALYSIS_AGENT_REPO). Local tamper/drift "
+            "check only. See module docstring for the MCP-as-source-of-truth model."
         )
 
     if errors:

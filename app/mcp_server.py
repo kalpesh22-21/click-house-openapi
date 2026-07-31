@@ -31,7 +31,7 @@ Configuration (env vars)
   MCP_TRANSPORT   stdio | http          default: stdio
   MCP_PORT        integer               default: 8000
   MCP_PATH        string                default: /mcp
-  API_KEY         string (required)     Bearer token for HTTP transport
+  OIDC_JWKS_URL / OIDC_PUBLIC_KEY       required for HTTP transport (JWT verify)
   CLICKHOUSE_*    (see config.py)
 
 Tool catalogue
@@ -70,6 +70,7 @@ from app.auth_jwt import JWTAuthError, validate_token
 from app.config import get_settings
 from app.principal import current_principal, current_scope, current_session_id
 from app.errors import (
+    CartesianJoinError,
     ClickHouseQueryError,
     ClickHouseUnavailableError,
     ColumnScopeError,
@@ -78,6 +79,7 @@ from app.errors import (
     QueryValidationError,
     TableNotFoundError,
 )
+from app.semantic_catalog.export import build_catalog_export
 from app.session_binding import sid_hash_matches
 from app.service import (
     explain_query as svc_explain_query,
@@ -163,6 +165,12 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
         # Forward the service-layer message verbatim: it is an author-controlled
         # string that NAMES the out-of-scope columns (catalog metadata, not PII /
         # cell values per D25), so the model can see WHICH columns it lacks.
+        return ToolError(f"[{exc.code}] {exc.message}")
+    if isinstance(exc, CartesianJoinError):
+        # Forward the service-layer message verbatim: it is an author-controlled
+        # string that NAMES the two offending base tables (catalog metadata, not
+        # PII / cell values per D25) and tells the model how to fix it (add ON /
+        # USING, or wrap a constant side in a subquery), so it can self-correct.
         return ToolError(f"[{exc.code}] {exc.message}")
     if isinstance(exc, ParseFailedError):
         return ToolError(
@@ -596,6 +604,37 @@ async def health_check(request: Request) -> JSONResponse:
             "scratch_api": "v1",
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Catalog-export side-channel (Wave 1a: trusted-runtime bootstrap) — HTTP only
+#
+# This is a PRIVILEGED, NON-TOOL route (like the scratch routes below): it is NOT
+# registered with @mcp.tool, so the agent LLM never sees it and cannot call it
+# (invariant #5). The AGENT reaches this MCP HTTP app via its mcp_url, so the
+# bootstrap endpoint MUST live here (not on the separate REST app) or the fetch
+# 404s in every real split-deployment topology.
+#
+# It rides on the same MCP app behind JWTAuthMiddleware, so a valid Bearer JWT is
+# required (default-deny: not in the middleware's public_paths). It is
+# scope-INDEPENDENT and session-INDEPENDENT by design: it returns the FULL catalog
+# (every table, every column) for any authenticated principal, and never consults
+# the caller's column scope or X-Session-Id. That is safe because this is
+# trusted-runtime bootstrap data consumed by the agent process, NOT model-facing
+# data (contrast getTableSchema, which scope-filters columns).
+# ---------------------------------------------------------------------------
+
+@mcp.custom_route("/catalog/export", methods=["GET"])
+async def catalog_export_route(request: Request) -> JSONResponse:
+    """Return the full, scope-independent semantic catalog export (D-Wave1a).
+
+    Auth is enforced by JWTAuthMiddleware (a valid Bearer token is required; the
+    path is default-deny). The body is ``build_catalog_export()`` verbatim: the
+    ``catalog_sha`` content fingerprint plus every catalogued table's full overlay.
+    No column-scope filtering is applied — every valid principal gets the identical
+    payload.
+    """
+    return JSONResponse(build_catalog_export())
 
 
 # ---------------------------------------------------------------------------
