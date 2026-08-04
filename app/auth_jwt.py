@@ -1,7 +1,8 @@
 """External JWT / OIDC validation — the isolation boundary for this service.
 
 Because every query runs as one privileged ClickHouse account and ClickHouse
-row policies trust ``getSetting('SQL_tenant')`` blindly, a forged or
+row policies trust ``getSetting('paycom_client_code')`` (and the other injected
+``paycom_*`` tenant settings) blindly, a forged or
 over-permissive token equals full cross-tenant read.  This module is therefore
 the entire authorization boundary and is deliberately strict:
 

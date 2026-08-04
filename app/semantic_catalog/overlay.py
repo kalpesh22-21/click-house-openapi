@@ -262,6 +262,120 @@ def _merge_columns(
 
 
 # ---------------------------------------------------------------------------
+# mcp_projection.hidden_columns — catalog-authored, UNCONDITIONAL projection
+# ---------------------------------------------------------------------------
+
+
+def _hidden_columns(entry: dict[str, Any] | None) -> set[str]:
+    """Return the catalog entry's ``mcp_projection.hidden_columns`` as a set.
+
+    These are columns the catalog author has decided the model must NEVER see —
+    RLS-enforced physical columns (e.g. ``client_code`` / ``proc_center``) and
+    internal engine columns (e.g. a ReplacingMergeTree ``version``). Unlike
+    column_scope, this is not a per-caller decision: it is stripped from the
+    schema response UNCONDITIONALLY (every caller, every transport, including the
+    scope-disabled stdio/local-trust path). Returns an empty set when the entry
+    has no ``mcp_projection`` block or an empty/absent ``hidden_columns`` list.
+    """
+    if not entry:
+        return set()
+    projection = entry.get("mcp_projection")
+    if not isinstance(projection, dict):
+        return set()
+    hidden = projection.get("hidden_columns")
+    if not isinstance(hidden, list):
+        return set()
+    return {str(name) for name in hidden}
+
+
+def _sanitize_join_key(
+    jk: dict[str, Any], hidden: set[str]
+) -> dict[str, Any]:
+    """Return a copy of a join_keys entry safe to emit to the model (A-H2).
+
+    Strips ``implicit_join_scope`` entirely — it holds the RLS tenant columns
+    ([client_code, proc_center]) that the row policy applies server-side and the
+    model must never see. Also defensively drops any hidden-column NAME that
+    might appear inside the ``join_on`` clause fragments, so a stray reference
+    can't leak a hidden name. ``column`` / ``joins`` are left intact (an entry
+    whose own-side ``column`` is hidden is filtered out earlier).
+    """
+    sanitized = {k: v for k, v in jk.items() if k != "implicit_join_scope"}
+    join_on = sanitized.get("join_on")
+    if hidden and isinstance(join_on, list):
+        sanitized["join_on"] = [
+            clause
+            for clause in join_on
+            if not _clause_names_hidden(clause, hidden)
+        ]
+    return sanitized
+
+
+def _clause_names_hidden(clause: Any, hidden: set[str]) -> bool:
+    """True if *clause* (a join_on string fragment) references a hidden column name."""
+    if not isinstance(clause, str):
+        return False
+    tokens = set(_IDENTIFIER_RE.findall(clause))
+    return bool(tokens & hidden)
+
+
+def _strip_hidden_from_temporal(
+    temporal: dict[str, Any] | None, hidden: set[str]
+) -> dict[str, Any] | None:
+    """Drop any temporal dimension whose date/range columns name a hidden column.
+
+    Defensive (A-H2): temporal dimensions reference visible date columns today,
+    but if one ever named a hidden column, drop that dimension (and reset
+    ``default_pin`` if it pointed at it) rather than ship the hidden NAME. Runs
+    UNCONDITIONALLY, independent of scope enforcement.
+    """
+    if not hidden or not isinstance(temporal, dict):
+        return temporal
+
+    dimensions = temporal.get("dimensions") or []
+    surviving_names: set[str] = set()
+    surviving_dims = []
+    for dim in dimensions:
+        cols: list[str] = []
+        if dim.get("date_col"):
+            cols.append(dim["date_col"])
+        rng = dim.get("range")
+        if isinstance(rng, dict):
+            if rng.get("start_col"):
+                cols.append(rng["start_col"])
+            if rng.get("end_col"):
+                cols.append(rng["end_col"])
+        if any(c in hidden for c in cols):
+            continue
+        surviving_dims.append(dim)
+        if dim.get("name"):
+            surviving_names.add(dim["name"])
+
+    default_pin = temporal.get("default_pin")
+    if default_pin is not None and default_pin not in surviving_names:
+        default_pin = None
+
+    new_temporal = dict(temporal)
+    new_temporal["dimensions"] = surviving_dims
+    new_temporal["default_pin"] = default_pin
+    return new_temporal
+
+
+def hidden_columns_for(
+    catalog: dict[str, dict[str, Any]], qualified_key: str
+) -> set[str]:
+    """Return ``mcp_projection.hidden_columns`` for ``qualified_key`` ("db.table").
+
+    Public accessor over :func:`_hidden_columns` so callers outside this module
+    (e.g. app/service.py's ``sampleRows`` visible-column projection and the
+    ``SELECT *`` scope-violation guard, A-H1) resolve the SAME hidden-column set
+    the overlay strips from ``getTableSchema`` — one source of truth. Returns an
+    empty set for an uncatalogued table or one without a hidden-columns block.
+    """
+    return _hidden_columns(catalog.get(qualified_key))
+
+
+# ---------------------------------------------------------------------------
 # Table-level block filtering
 # ---------------------------------------------------------------------------
 
@@ -283,15 +397,83 @@ def _filter_column_vector(
     return names if _in_scope(referenced, scope) else None
 
 
+# ---------------------------------------------------------------------------
+# join_keys[] — singular `column` entries AND templated `column_pattern` entries
+# ---------------------------------------------------------------------------
+#
+# A join_keys entry comes in one of two authoring forms:
+#
+#   (1) SINGULAR — one physical own-side column:
+#         - column: employee_code
+#           joins: payroll.employee_code
+#           join_on: [employee_code]            # list of clause fragments
+#           cardinality: 1:N
+#
+#   (2) PATTERN (templated) — ONE entry standing in for a contiguous family of
+#       near-identical own-side columns that all join the SAME target identically
+#       (e.g. employee/payroll's labor_allocation_key_1..labor_allocation_key_20,
+#       which are DISTINCT dimension slots but all join labor_allocation.join_key
+#       the same way). Authored as:
+#         - column_pattern: labor_allocation_key_{n}   # "{n}" is the slot index
+#           index_range: [1, 20]                       # inclusive [lo, hi]
+#           joins: labor_allocation.join_key
+#           join_on: labor_allocation_key_{n} = join_key   # scalar template string
+#           cardinality: N:1
+#           description: ...
+#
+# The pattern entry is emitted to the model COMPACTLY — as ONE join_key carrying
+# the pattern + range + join_on template + description — and is deliberately NOT
+# expanded to its 20 underlying columns (fewer tokens; the model already handles
+# "which of 1..20"). Its underlying physical columns (used only for scope
+# filtering / hidden sweeps here) are `column_pattern` with "{n}" substituted by
+# each index in `index_range`.
+
+
+def _join_key_columns(jk: dict[str, Any]) -> list[str]:
+    """Return the own-side physical column name(s) a join_keys entry references.
+
+    Singular entry -> ``[column]`` (or ``[]`` if malformed / column missing).
+    Pattern entry  -> the expanded ``column_pattern`` over the inclusive
+    ``index_range`` (e.g. ``labor_allocation_key_1 .. labor_allocation_key_20``).
+    Never raises: a pattern entry with a missing/garbage ``index_range`` yields
+    an empty list rather than throwing.
+    """
+    pattern = jk.get("column_pattern")
+    if pattern is not None:
+        rng = jk.get("index_range")
+        if not isinstance(rng, (list, tuple)) or len(rng) != 2:
+            return []
+        try:
+            lo, hi = int(rng[0]), int(rng[1])
+        except (TypeError, ValueError):
+            return []
+        return [str(pattern).replace("{n}", str(i)) for i in range(lo, hi + 1)]
+    col = jk.get("column")
+    return [col] if col is not None else []
+
+
 def _filter_join_keys(
     join_keys: list[dict[str, Any]] | None,
     qualified_key: str,
     scope: frozenset[str],
 ) -> list[dict[str, Any]] | None:
-    """join_keys[]: drop any entry whose own-side `column` is out of scope."""
+    """join_keys[]: drop any entry whose own-side column(s) are out of scope.
+
+    Singular entry: kept iff its `column` is in scope (unchanged behaviour).
+    Pattern entry: kept iff AT LEAST ONE of its underlying columns
+    (`column_pattern` expanded over `index_range`) is in scope — dropped only
+    when EVERY slot is out of scope. Never throws on a pattern entry that lacks
+    a singular `column` (design note above: `_join_key_columns` tolerates both
+    forms and any malformed range).
+    """
     if join_keys is None:
         return None
-    return [jk for jk in join_keys if f"{qualified_key}.{jk.get('column')}" in scope]
+    kept: list[dict[str, Any]] = []
+    for jk in join_keys:
+        cols = _join_key_columns(jk)
+        if any(f"{qualified_key}.{c}" in scope for c in cols):
+            kept.append(jk)
+    return kept
 
 
 def _filter_measures(
@@ -498,6 +680,51 @@ def build_table_schema_response(
         measures = [{"name": name, **defn} for name, defn in measures_raw.items()]
     else:
         measures = None
+
+    # mcp_projection.hidden_columns (catalog-authored): drop these columns
+    # UNCONDITIONALLY — independent of column_scope, on every transport — so the
+    # model never sees the RLS-enforced physical columns (client_code /
+    # proc_center) or internal engine columns (version). Applied AFTER the
+    # introspection merge so a physically-present, catalog-stripped column is
+    # removed even though introspection surfaced it. Also swept out of the
+    # grain / primary_key / join_keys own-side vectors defensively — they should
+    # never name a hidden column, but a stray reference must not leak the name.
+    hidden = _hidden_columns(entry)
+    if hidden:
+        merged_columns = [c for c in merged_columns if c["name"] not in hidden]
+        if isinstance(grain, list):
+            grain = [g for g in grain if g not in hidden]
+        if isinstance(primary_key, list):
+            primary_key = [p for p in primary_key if p not in hidden]
+        if isinstance(join_keys, list):
+            # Drop an entry only if EVERY own-side column it references is hidden.
+            # Singular entry -> "column in hidden" (unchanged). Pattern entry ->
+            # dropped only when all its expanded slots are hidden (never true for
+            # labor_allocation_key_1..20, which are not RLS columns) — so the
+            # compact pattern entry is not accidentally swept out. A malformed
+            # entry with no resolvable columns is kept (matches prior behaviour).
+            join_keys = [
+                jk
+                for jk in join_keys
+                if not (
+                    (cols := _join_key_columns(jk)) and all(c in hidden for c in cols)
+                )
+            ]
+        # Defensive: a measure / temporal dimension must never reference a hidden
+        # column (none do today), but if one ever did, drop it rather than ship
+        # the hidden NAME (A-H2). Applied UNCONDITIONALLY (not only under scope
+        # enforcement) so the hidden name never leaks on the stdio/allow-all path.
+        if isinstance(measures, list):
+            measures = [m for m in measures if m.get("column") not in hidden]
+        temporal = _strip_hidden_from_temporal(temporal, hidden)
+
+    # A-H2: strip `implicit_join_scope` (the RLS tenant columns [client_code,
+    # proc_center]) from EVERY emitted join_keys entry — on every path, whether
+    # or not this table declares hidden_columns — so the hidden RLS column NAMES
+    # never ship inside join metadata. The row policy applies the tenant
+    # predicate server-side; the model neither needs nor may see these columns.
+    if isinstance(join_keys, list):
+        join_keys = [_sanitize_join_key(jk, hidden) for jk in join_keys]
 
     enforce = scope is not None and len(scope) > 0
 

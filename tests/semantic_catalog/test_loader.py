@@ -26,8 +26,8 @@ class TestLoadSemanticCatalog:
         assert "grain" in employee
         assert "rules" in employee
         assert "ambiguities" in employee
-        assert isinstance(employee["columns"]["EmployeeCode"], dict)
-        assert "description" in employee["columns"]["EmployeeCode"]
+        assert isinstance(employee["columns"]["employee_code"], dict)
+        assert "description" in employee["columns"]["employee_code"]
 
     def test_custom_schema_dir(self, tmp_path):
         (tmp_path / "t.yaml").write_text(

@@ -26,8 +26,13 @@ from app.principal import Principal, current_principal
 from tests.jwt_helpers import make_jwt
 
 
-def _principal(user_name: str = "alice") -> Principal:
-    return Principal(subject="sub-1", claims={"user_name": user_name})
+def _principal(
+    client_code: str = "CLIENT_A", proc_center: str = "PC01", jti: str = "TESTJTI001"
+) -> Principal:
+    return Principal(
+        subject="sub-1",
+        claims={"clientcode": client_code, "proc_center": proc_center, "jti": jti},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -40,16 +45,22 @@ class TestTenantSettingsBuilder:
         assert current_principal.get() is None
         assert tenant_settings(get_settings()) == {}
 
-    def test_principal_maps_claim_to_setting(self):
-        token = current_principal.set(_principal("alice"))
+    def test_principal_maps_claims_to_paycom_settings(self):
+        # The default map fills the three paycom_* settings the warehouse row
+        # policies read from the caller's clientcode / proc_center / jti claims.
+        token = current_principal.set(_principal())
         try:
-            assert tenant_settings(get_settings()) == {"SQL_tenant": "alice"}
+            assert tenant_settings(get_settings()) == {
+                "paycom_client_code": "CLIENT_A",
+                "paycom_proc_center": "PC01",
+                "paycom_authenticated_user": "TESTJTI001",
+            }
         finally:
             current_principal.reset(token)
 
     def test_missing_mapped_claim_raises_403(self):
-        # Defensive guard: a principal with no user_name claim must not silently
-        # produce an untenanted query.
+        # Defensive guard: a principal missing a mapped tenant claim must not
+        # silently produce an untenanted query.
         token = current_principal.set(Principal(subject="s", claims={}))
         try:
             with pytest.raises(HTTPException) as exc:
@@ -69,12 +80,12 @@ class TestSafetyCapsWinMerge:
         # Even if a tenant dict somehow carried a reserved key, the safety caps
         # merged last must overwrite it.  (The config validator also forbids
         # configuring such a key — this asserts the merge order independently.)
-        tenant = {"SQL_tenant": "alice", "readonly": 0, "max_result_rows": 999_999_999}
+        tenant = {"paycom_client_code": "CLIENT_A", "readonly": 0, "max_result_rows": 999_999_999}
         s = get_settings()
         merged = {**tenant, **readonly_settings(s)}
         assert merged["readonly"] == s.clickhouse_readonly
         assert merged["max_result_rows"] == s.max_result_rows
-        assert merged["SQL_tenant"] == "alice"
+        assert merged["paycom_client_code"] == "CLIENT_A"
 
     def test_configurable_readonly_level(self):
         with patch.dict(os.environ, {"CLICKHOUSE_READONLY": "2"}):
@@ -105,13 +116,16 @@ class TestEndToEndInjection:
             client = TestClient(app, raise_server_exceptions=False)
             resp = client.post(
                 "/query",
-                headers={"Authorization": f"Bearer {make_jwt(user_name='bob')}"},
+                headers={
+                    "Authorization": f"Bearer {make_jwt(client_code='CLIENT_B', jti='JTI-BOB')}"
+                },
                 json={"sql": "SELECT 1"},
             )
 
         assert resp.status_code == 200, resp.text
         settings_arg = mock_client.query.call_args.kwargs["settings"]
-        assert settings_arg["SQL_tenant"] == "bob"
+        assert settings_arg["paycom_client_code"] == "CLIENT_B"
+        assert settings_arg["paycom_authenticated_user"] == "JTI-BOB"
         assert settings_arg["readonly"] == 1  # safety cap intact alongside tenant
 
 

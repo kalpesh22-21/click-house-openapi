@@ -45,6 +45,14 @@ _TEST_ENV = {
 for _key, _value in _TEST_ENV.items():
     os.environ.setdefault(_key, _value)
 
+# Force the JWKS (non-static-key) auth path for the whole suite, regardless of a
+# developer's local `.env`. pydantic-settings loads `.env` (config.py:
+# env_file=".env"), and a real OIDC_PUBLIC_KEY there would take the static-key
+# verification branch instead of the JWKS path the _patch_jwks fixture stubs,
+# breaking the auth/tenant/mcp tests. os.environ wins over `.env`, so a hard
+# assignment (NOT setdefault) pins this closed for hermetic runs.
+os.environ["OIDC_PUBLIC_KEY"] = ""
+
 # ---------------------------------------------------------------------------
 # Now we can safely import app modules.
 # ---------------------------------------------------------------------------

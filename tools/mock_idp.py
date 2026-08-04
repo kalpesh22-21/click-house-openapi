@@ -63,6 +63,9 @@ def mint_token(
     private_key: rsa.RSAPrivateKey,
     *,
     user_name: str = "alice",
+    client_code: str = "CLIENT_A",
+    proc_center: str = "PC01",
+    jti: str = "TESTJTI001",
     sub: Optional[str] = None,
     issuer: str = DEFAULT_ISSUER,
     audience: str = DEFAULT_AUDIENCE,
@@ -70,14 +73,17 @@ def mint_token(
     ttl: int = 3600,
     extra_claims: Optional[dict[str, Any]] = None,
 ) -> str:
-    """Mint an RS256-signed JWT with the standard claims + the tenant claim.
+    """Mint an RS256-signed JWT with the standard claims + the tenant claims.
 
     *ttl* is seconds until expiry; pass a negative value to mint an expired
     token for negative tests.  The `kid` header must match the JWKS `kid`.
 
-    Includes ``column_scope`` (empty JSON list — no column restrictions) so tokens
-    pass validate_token's required-claim checks out of the box.
-    session_id is NOT a JWT claim — it flows via the X-Session-Id request header.
+    Includes the three warehouse tenant claims — ``clientcode`` / ``proc_center``
+    / ``jti`` (which the default CLICKHOUSE_TENANT_SETTINGS map fills
+    paycom_client_code / paycom_proc_center / paycom_authenticated_user from) — a
+    legacy ``user_name`` claim, and ``column_scope`` (empty JSON list — no column
+    restrictions) so tokens pass validate_token's required-claim checks out of the
+    box.  session_id is NOT a JWT claim — it flows via the X-Session-Id header.
     """
     now = int(time.time())
     claims: dict[str, Any] = {
@@ -88,6 +94,10 @@ def mint_token(
         "nbf": now,
         "exp": now + ttl,
         "user_name": user_name,
+        # Warehouse tenant claims the row policies read (via paycom_* settings).
+        "clientcode": client_code,
+        "proc_center": proc_center,
+        "jti": jti,
         # column_scope: empty list means no column restrictions (all columns permitted).
         # Enforcement only fires when scope is non-empty and query uses disallowed columns.
         # session_id is NOT a JWT claim — it is sent by the agent backend as X-Session-Id.

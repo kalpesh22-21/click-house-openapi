@@ -524,7 +524,7 @@ class TestJWTAuthMiddleware:
         assert resp.json()["code"] == "TOKEN_EXPIRED"
 
     def test_missing_tenant_claim_returns_403(self):
-        token = make_jwt(include_user_name=False)
+        token = make_jwt(include_tenant_claims=False)
         client = TestClient(_wrap(), raise_server_exceptions=False)
         resp = client.get("/mcp", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 403
@@ -1059,7 +1059,7 @@ class TestProtectedResourceMetadata:
     def test_missing_tenant_claim_challenge_has_insufficient_scope(self):
         from starlette.testclient import TestClient as StarletteTestClient
 
-        token = make_jwt(include_user_name=False)
+        token = make_jwt(include_tenant_claims=False)
         client = StarletteTestClient(self._authed_app(), raise_server_exceptions=False)
         resp = client.get("/mcp", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 403

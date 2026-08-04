@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # setting name against the server's known settings (system.settings) and, by
 # default, REFUSES to transmit any it doesn't recognize — raising "Setting X is
 # unknown or readonly" client-side, before the request is even sent.  Our
-# per-tenant CUSTOM setting (e.g. SQL_tenant) is NOT in system.settings, so the
+# per-tenant CUSTOM setting (e.g. paycom_client_code) is NOT in system.settings, so the
 # default behaviour silently breaks row isolation.  'send' delegates validation
 # to the server, so custom settings under the configured
 # <custom_settings_prefixes> are passed through and applied.  This is a
@@ -154,7 +154,8 @@ def tenant_settings(settings: Settings) -> dict[str, Any]:
     Reads the authenticated principal bound to the request context and maps each
     configured ``ch_setting -> jwt_claim`` (the CLICKHOUSE_TENANT_SETTINGS env
     object) into ``{ch_setting: claim_value}``.  ClickHouse row policies read
-    these via ``getSetting('SQL_tenant')`` to filter rows per tenant.
+    these via ``getSetting('paycom_client_code')`` (and the proc-center /
+    authenticated-user settings) to filter rows per tenant.
 
     Returns an empty dict when there is no principal (internal schema-discovery
     or health queries, or the local MCP stdio transport) — those run with the
@@ -217,10 +218,10 @@ def execute_query(
     # build a fresh client on every query and (historically) crash because
     # lru_cache cannot hash a Settings object.
     client = get_client()
-    # Per-tenant custom settings (e.g. SQL_tenant) FIRST, safety caps LAST, so a
-    # misconfigured tenant mapping can never overwrite readonly / the row caps.
+    # Per-tenant custom settings (e.g. paycom_client_code) FIRST, safety caps LAST,
+    # so a misconfigured tenant mapping can never overwrite readonly / the row caps.
     # The user-supplied-SETTINGS denylist in security.py keeps a caller from
-    # injecting their own SQL_tenant; the only path that sets it is this dict.
+    # injecting their own paycom_* settings; the only path that sets them is this dict.
     ch_settings = {**tenant_settings(settings), **readonly_settings(settings)}
 
     try:

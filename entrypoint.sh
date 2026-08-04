@@ -6,6 +6,8 @@
 # MODE=mcp            : start the MCP server.
 #   MCP_TRANSPORT=stdio   — stdio transport (local subprocess; no HTTP port).
 #   MCP_TRANSPORT=http    — streamable-HTTP transport (Bearer auth enforced).
+# MODE=token          : start the token-issuing service (OIDC-style IdP) that
+#                       mints per-user JWTs and publishes JWKS for the API.
 #
 # All env vars are read at runtime; the image is the same for all modes.
 # ---------------------------------------------------------------------------
@@ -31,8 +33,15 @@ case "$MODE" in
     echo "Starting MCP server (transport=${MCP_TRANSPORT})"
     exec python -m app.mcp_server --transport "${MCP_TRANSPORT}"
     ;;
+  token)
+    echo "Starting Token service (uvicorn) on port ${APP_PORT:-8000}"
+    exec uvicorn app.token_service:create_app --factory \
+      --host 0.0.0.0 \
+      --port "${APP_PORT:-8000}" \
+      --log-level "${UVICORN_LOG_LEVEL}"
+    ;;
   *)
-    echo "ERROR: Unknown MODE='${MODE}'. Valid values: api, mcp" >&2
+    echo "ERROR: Unknown MODE='${MODE}'. Valid values: api, mcp, token" >&2
     exit 1
     ;;
 esac

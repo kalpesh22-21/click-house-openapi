@@ -8,18 +8,18 @@ following once before enabling `EMPLOYEE_ACCESS_ENABLED`.
 ## 1. Table (DBA-owned)
 
 ```sql
-CREATE DATABASE IF NOT EXISTS security;
+CREATE DATABASE IF NOT EXISTS dbpcm_warehouse_security;
 
-CREATE TABLE security.user_employee_access
+CREATE TABLE dbpcm_warehouse_security.user_employee_access
 (
-    JTI          String,
-    EmployeeCode String,
-    pull_id      UInt64,
-    UpdatedAt    DateTime DEFAULT now()
+    jti           String,
+    employee_code String,
+    pull_id       UInt64,
+    updated_at    DateTime DEFAULT now()
 )
 ENGINE = ReplacingMergeTree(pull_id)
-ORDER BY (JTI, EmployeeCode)
-TTL UpdatedAt + INTERVAL 1 DAY;   -- housekeeping only; MUST exceed N (EMPLOYEE_ACCESS_REFRESH_SECONDS)
+ORDER BY (jti, employee_code)
+TTL updated_at + INTERVAL 1 DAY;   -- housekeeping only; MUST exceed N (EMPLOYEE_ACCESS_REFRESH_SECONDS)
 ```
 
 Correctness comes from the `pull_id = max(pull_id)` gate below, not the TTL —
@@ -31,35 +31,36 @@ exceed `N` so an active user's rows are never evicted between refreshes.
 ```sql
 CREATE ROW POLICY employee_rls ON dbpcm_warehouse.employee
 USING
-        ClientCode  = getSetting('SQL_CLIENTCODE')
-    AND ProcCenter  = getSetting('SQL_PROCCENTER')
-    AND EmployeeCode IN (
-        SELECT EmployeeCode FROM security.user_employee_access
-        WHERE JTI = getSetting('SQL_TENANT')
-          AND pull_id = (SELECT max(pull_id) FROM security.user_employee_access
-                         WHERE JTI = getSetting('SQL_TENANT'))
+        client_code = getSetting('paycom_client_code')
+    AND proc_center = getSetting('paycom_proc_center')
+    AND employee_code IN (
+        SELECT employee_code FROM dbpcm_warehouse_security.user_employee_access
+        WHERE jti = getSetting('paycom_authenticated_user')
+          AND pull_id = (SELECT max(pull_id) FROM dbpcm_warehouse_security.user_employee_access
+                         WHERE jti = getSetting('paycom_authenticated_user'))
     )
 TO mcp_user;
 ```
 
-`SQL_TENANT` / `SQL_CLIENTCODE` / `SQL_PROCCENTER` are injected per request from
-the verified JWT via `CLICKHOUSE_TENANT_SETTINGS` (see below); the LLM cannot
-override them (`app/security.py` blocks any user `SETTINGS` clause).
+`paycom_client_code` / `paycom_proc_center` / `paycom_authenticated_user` are
+injected per request from the verified JWT via `CLICKHOUSE_TENANT_SETTINGS` (see
+below); the LLM cannot override them (`app/security.py` blocks any user
+`SETTINGS` clause).
 
 ## 3. Grants
 
 ```sql
 -- Security-writer account (SECURITY_CH_USER): the ONLY account the app uses to
--- touch security.* — for both the freshness read and the pull insert. No DDL
--- (table is DBA-owned), no DELETE/ALTER (append-only + TTL eviction).
-GRANT INSERT, SELECT ON security.user_employee_access TO security_writer;
+-- touch dbpcm_warehouse_security.* — for both the freshness read and the pull
+-- insert. No DDL (table is DBA-owned), no DELETE/ALTER (append-only + TTL eviction).
+GRANT INSERT, SELECT ON dbpcm_warehouse_security.user_employee_access TO security_writer;
 
 -- Query account (mcp_user): needs SELECT on the lookup table because ClickHouse
 -- evaluates the row-policy subquery in the QUERYING user's context. This grant
 -- is for the DB engine's policy evaluation only — the app never issues an
--- mcp_user query against security.* (keep `security` OUT of ALLOWED_DATABASES so
--- the LLM can never read it directly).
-GRANT SELECT ON security.user_employee_access TO mcp_user;
+-- mcp_user query against dbpcm_warehouse_security.* (keep it OUT of
+-- ALLOWED_DATABASES so the LLM can never read it directly).
+GRANT SELECT ON dbpcm_warehouse_security.user_employee_access TO mcp_user;
 ```
 
 ## 4. App configuration
@@ -78,10 +79,10 @@ SECURITY_CH_PASSWORD=<secret>
 REDIS_URL=redis://<host>:6379/0
 
 # Tenant settings the row policy reads (must expose all three)
-CLICKHOUSE_TENANT_SETTINGS={"SQL_tenant":"jti","SQL_CLIENTCODE":"clientcode","SQL_PROCCENTER":"proc_center"}
+CLICKHOUSE_TENANT_SETTINGS={"paycom_client_code":"clientcode","paycom_proc_center":"proc_center","paycom_authenticated_user":"jti"}
 
-# security must NOT be selectable by the LLM directly
-ALLOWED_DATABASES=dbpcm_warehouse,scratch     # (whatever the real allowlist is — just exclude `security`)
+# dbpcm_warehouse_security must NOT be selectable by the LLM directly
+ALLOWED_DATABASES=dbpcm_warehouse,scratch     # (whatever the real allowlist is — just exclude `dbpcm_warehouse_security`)
 ```
 
 ## Notes

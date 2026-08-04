@@ -77,6 +77,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: RUF029
         )
         sys.exit(1)
 
+    # Fail closed (A-M1): validate the Semantic Catalog's RLS projection at
+    # startup so a missing/malformed RLS table (which would leak client_code /
+    # proc_center / version) refuses to boot rather than surfacing at first
+    # request. get_semantic_catalog() runs _validate_rls_projection() and caches.
+    from app.semantic_catalog.loader import (
+        CatalogValidationError,
+        get_semantic_catalog,
+    )
+
+    try:
+        get_semantic_catalog()
+    except CatalogValidationError as exc:
+        logger.critical("Semantic Catalog RLS validation failed: %s", exc)
+        sys.exit(1)
+
     logger.info("Initialising ClickHouse client...")
     try:
         get_client()

@@ -52,6 +52,82 @@ logger = logging.getLogger(__name__)
 # fallback so the loader remains usable without requiring every file to repeat it.
 DEFAULT_DATABASE = "dbpcm_warehouse"
 
+# ---------------------------------------------------------------------------
+# Fail-closed RLS invariant (A-M1)
+# ---------------------------------------------------------------------------
+# The tenant-scoped warehouse tables carry physical columns (client_code /
+# proc_center, plus the ReplacingMergeTree `version` on labor_allocation) that
+# are enforced server-side by a ClickHouse row policy and must NEVER be surfaced
+# to the model. That guarantee is carried by each table's
+# `mcp_projection.hidden_columns` (see overlay.py::_hidden_columns). If one of
+# these tables were to load WITHOUT that projection — because the file is
+# missing, its `table:`/`columns:` block has a typo (silently degrading it to
+# uncatalogued/exposed), or `hidden_columns` was emptied — the RLS columns would
+# leak. We therefore assert the invariant at load time and refuse to start,
+# rather than fail open. This is deliberately scoped to these RLS tables only:
+# unrelated catalog files keep their existing "silently skip a non-table file"
+# behaviour.
+_REQUIRED_RLS_HIDDEN_COLUMNS: dict[str, frozenset[str]] = {
+    f"{DEFAULT_DATABASE}.employee": frozenset({"client_code", "proc_center"}),
+    f"{DEFAULT_DATABASE}.payroll": frozenset({"client_code", "proc_center"}),
+    f"{DEFAULT_DATABASE}.department": frozenset({"client_code", "proc_center"}),
+    f"{DEFAULT_DATABASE}.labor_allocation": frozenset(
+        {"client_code", "proc_center", "version"}
+    ),
+}
+
+
+class CatalogValidationError(RuntimeError):
+    """Raised at load time when a required RLS table is missing/uncatalogued or its
+    ``mcp_projection.hidden_columns`` does not cover the RLS-enforced columns.
+
+    This is a fail-CLOSED startup error: the process must not serve schema/query
+    traffic while an RLS table could leak ``client_code`` / ``proc_center`` /
+    ``version`` to the model.
+    """
+
+
+def _validate_rls_projection(catalog: dict[str, dict[str, Any]]) -> None:
+    """Assert every required RLS table is catalogued and hides its RLS columns.
+
+    Runs against the process-level catalog (the real ``data/`` dir). Raises
+    :class:`CatalogValidationError` — never silently degrades — if:
+
+      * a required RLS table is absent (uncatalogued, or its YAML failed to load
+        because of a ``table:`` / ``columns:`` typo — such a file is skipped by
+        ``_load_raw_table_entries`` and would otherwise vanish unnoticed), or
+      * its ``mcp_projection.hidden_columns`` is empty / missing, or
+      * it does not hide the required RLS columns for that table.
+    """
+    for qualified_key, required in _REQUIRED_RLS_HIDDEN_COLUMNS.items():
+        entry = catalog.get(qualified_key)
+        if entry is None:
+            raise CatalogValidationError(
+                f"Required RLS table {qualified_key!r} is missing from the semantic "
+                "catalog. It is either uncatalogued or its YAML failed to load (check "
+                "for a `table:`/`columns:` typo that would silently degrade it to an "
+                "uncatalogued/exposed table). RLS tables must fail CLOSED — refusing "
+                "to start."
+            )
+        projection = entry.get("mcp_projection")
+        hidden = projection.get("hidden_columns") if isinstance(projection, dict) else None
+        hidden_set = {str(c) for c in hidden} if isinstance(hidden, list) else set()
+        if not hidden_set:
+            raise CatalogValidationError(
+                f"Required RLS table {qualified_key!r} has an empty/missing "
+                "mcp_projection.hidden_columns. The row-policy-enforced physical "
+                "columns must be hidden from the model — refusing to start."
+            )
+        missing = required - hidden_set
+        if missing:
+            raise CatalogValidationError(
+                f"Required RLS table {qualified_key!r} does not hide the RLS "
+                f"column(s) {sorted(missing)} "
+                f"(mcp_projection.hidden_columns={sorted(hidden_set)}). These columns "
+                "are enforced by row-level policy and must never be surfaced — "
+                "refusing to start."
+            )
+
 # Directory holding the copied-in YAML files (this file lives at
 # app/semantic_catalog/loader.py, so the data dir is a sibling).
 _DEFAULT_SCHEMA_DIR = Path(__file__).parent / "data"
@@ -154,7 +230,12 @@ def get_semantic_catalog() -> dict[str, dict[str, Any]]:
     global _cached_semantic_catalog
     if _cached_semantic_catalog is None:
         logger.debug("semantic_catalog: loading from %s", _DEFAULT_SCHEMA_DIR)
-        _cached_semantic_catalog = load_semantic_catalog()
+        catalog = load_semantic_catalog()
+        # Fail closed (A-M1): assert the RLS tables are catalogued and hide their
+        # row-policy columns BEFORE the catalog is cached/served. Raising here
+        # (not caching a partial/leaky catalog) keeps the invariant airtight.
+        _validate_rls_projection(catalog)
+        _cached_semantic_catalog = catalog
         logger.debug(
             "semantic_catalog: loaded %d table entries", len(_cached_semantic_catalog)
         )

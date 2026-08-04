@@ -9,7 +9,7 @@ hits — mirroring how the scratch side-channel routes are tested
 (tests/test_scratch_write_qa.py).
 
 Coverage (security assertions preserved from the original REST test):
-  1. 200 + full payload shape via the MCP app: catalog_sha + all 9 tables +
+  1. 200 + full payload shape via the MCP app: catalog_sha + all 11 tables +
      columns carry YAML-declared types.
   2. SECURITY — scope-independence: two DIFFERENTLY column-scoped JWTs get
      byte-for-byte identical bodies. This is stronger on the MCP app than on REST
@@ -61,18 +61,19 @@ class TestExportPayloadOverMcp:
         assert isinstance(body["catalog_sha"], str) and body["catalog_sha"]
         assert isinstance(body["catalog"], dict)
 
-    def test_all_nine_catalogued_tables_present(self):
+    def test_all_catalogued_tables_present(self):
         catalog = _client().get("/catalog/export", headers=AUTH).json()["catalog"]
-        assert len(catalog) == 9
+        # 9 original tables + department + labor_allocation (snake_case migration).
+        assert len(catalog) == 11
         assert "dbpcm_warehouse.employee" in catalog
         assert "dbpcm_warehouse.payroll" in catalog
 
     def test_columns_carry_declared_types(self):
         catalog = _client().get("/catalog/export", headers=AUTH).json()["catalog"]
         employee_cols = catalog["dbpcm_warehouse.employee"]["columns"]
-        # YAML-declared catalog types, not live system.columns types.
-        assert employee_cols["EmployeeCode"]["type"] == "String"
-        assert employee_cols["ClientCode"]["type"] == "Nullable(String)"
+        # YAML-declared catalog types, not live system.columns types (snake_case, D70).
+        assert employee_cols["employee_code"]["type"] == "String"
+        assert employee_cols["first_name"]["type"] == "Nullable(String)"
 
     def test_sha_matches_loader_sidecar(self):
         from app.semantic_catalog.loader import get_catalog_sha
@@ -93,11 +94,11 @@ class TestScopeIndependenceOverMcp:
         JWTAuthMiddleware binds current_scope from each JWT (mcp_server.py L567),
         so this proves the route ignores that bound scope entirely.
         """
-        narrow = make_jwt(column_scope=["dbpcm_warehouse.employee.EmployeeCode"])
+        narrow = make_jwt(column_scope=["dbpcm_warehouse.employee.employee_code"])
         other = make_jwt(
             column_scope=[
-                "dbpcm_warehouse.payroll.GrossPay",
-                "dbpcm_warehouse.candidate_education.SchoolName",
+                "dbpcm_warehouse.payroll.gross_pay",
+                "dbpcm_warehouse.candidate_education.institute_name",
             ]
         )
 
@@ -116,7 +117,7 @@ class TestScopeIndependenceOverMcp:
     def test_empty_scope_and_scoped_caller_agree(self):
         """An unrestricted (empty-scope) token and a restricted token get the same body."""
         unrestricted = make_jwt()  # empty column_scope = allow-all
-        restricted = make_jwt(column_scope=["dbpcm_warehouse.employee.EmployeeCode"])
+        restricted = make_jwt(column_scope=["dbpcm_warehouse.employee.employee_code"])
 
         a = _client().get("/catalog/export", headers={"Authorization": f"Bearer {unrestricted}"})
         b = _client().get("/catalog/export", headers={"Authorization": f"Bearer {restricted}"})
@@ -128,12 +129,13 @@ class TestScopeIndependenceOverMcp:
         The export is trusted-runtime bootstrap data, not the model-facing,
         scope-filtered getTableSchema overlay.
         """
-        narrow = make_jwt(column_scope=["dbpcm_warehouse.employee.EmployeeCode"])
+        narrow = make_jwt(column_scope=["dbpcm_warehouse.employee.employee_code"])
         catalog = _client().get(
             "/catalog/export", headers={"Authorization": f"Bearer {narrow}"}
         ).json()["catalog"]
         employee_cols = catalog["dbpcm_warehouse.employee"]["columns"]
-        assert "ClientCode" in employee_cols
+        # A column the caller has no scope on is still fully present.
+        assert "annual_salary" in employee_cols
         assert len(employee_cols) > 1
         # A table the caller has no scope on at all is still fully present.
         assert "dbpcm_warehouse.payroll" in catalog

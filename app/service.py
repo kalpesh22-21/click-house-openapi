@@ -45,6 +45,7 @@ from app.semantic_catalog import (
     build_table_schema_response,
     get_catalog_sha,
     get_semantic_catalog,
+    hidden_columns_for,
 )
 from app.sqlparse import (
     CartesianJoinForbiddenError,
@@ -106,6 +107,36 @@ def _execute(
             message=exc.detail.get("error", "ClickHouse query error"),
             code=exc.detail.get("code", "CLICKHOUSE_QUERY_ERROR"),
         ) from exc
+
+
+def _forbidden_out_of_scope_columns(
+    uses: frozenset[tuple[str, str]],
+    scope: frozenset[str],
+) -> set[str]:
+    """Return the qualified columns in *uses* that are outside *scope*.
+
+    Shared by run_query and sample_rows so both apply the SAME rule (D57/D83):
+
+      - scratch columns (db prefix ``scratch.``) are session-gated, not
+        scope-gated (D69/OQ-4) — excluded here.
+      - ``mcp_projection.hidden_columns`` (RLS physical columns like client_code /
+        proc_center, and the labor_allocation ``version``) are NEVER required in
+        scope (A-H1): they are stripped from every model-facing surface, so a
+        ``SELECT *`` that expands to include them must not raise a spurious
+        COLUMN_SCOPE_VIOLATION. The hidden set is resolved from the SAME semantic
+        catalog the getTableSchema overlay uses (`hidden_columns_for`).
+      - everything else must be present in *scope* or it is forbidden.
+    """
+    catalog = get_semantic_catalog()
+    forbidden: set[str] = set()
+    for db_tbl, col in uses:
+        if db_tbl.startswith("scratch."):
+            continue
+        if col in hidden_columns_for(catalog, db_tbl):
+            continue
+        if f"{db_tbl}.{col}" not in scope:
+            forbidden.add(f"{db_tbl}.{col}")
+    return forbidden
 
 
 def _compact_result(
@@ -312,21 +343,30 @@ def sample_rows(
 
     Returns the compact {columns, rows, row_count, truncated=False} shape.
 
+    Hidden-column projection (A-H1): sampleRows never emits a column the
+    getTableSchema overlay hides. Instead of `SELECT *`, it introspects the
+    table's columns and projects the VISIBLE set (introspected columns MINUS
+    `mcp_projection.hidden_columns` — the RLS physical columns client_code /
+    proc_center, and labor_allocation's `version`). This holds on EVERY path
+    (scope=None stdio/local-trust, empty/allow-all, and enforced), so the sample
+    is consistent with getTableSchema, and a `SELECT *` can never leak an
+    RLS-hidden column's name or values.
+
     Column-scope enforcement (D83, matching runQuery's SELECT * treatment,
-    D69/OQ-2): sampleRows is effectively `SELECT * LIMIT n`, so the exact same
-    provenance-extraction + scope-allowlist check `run_query` applies is reused
-    here, unmodified — the query is REJECTED (never partially projected) if any
-    column it would return is outside `column_scope`. If the table can't be
-    enumerated (not in the provenance catalog), extraction fails closed and the
-    sample is rejected (same fail-closed rule SELECT * gets in runQuery).
-    Skipped entirely when scope is None (stdio/local-trust) or empty
-    (allow-all, D80b) — identical three-state model as run_query.
+    D69/OQ-2): the same provenance-extraction + scope-allowlist check `run_query`
+    applies is reused here — the query is REJECTED (never partially projected) if
+    any VISIBLE column it would return is outside `column_scope`. Hidden columns
+    are never in the projection and never force a violation (A-H1). If the table
+    can't be enumerated (not in the provenance catalog), extraction fails closed
+    and the sample is rejected. Skipped entirely when scope is None or empty —
+    identical three-state model as run_query.
 
     Raises:
         DatabaseNotAllowedError: if *database* is not in the allowlist.
-        ColumnScopeError:        if any column of the table is outside scope
-                                  (COLUMN_SCOPE_VIOLATION) or the table can't be
-                                  enumerated under scope enforcement.
+        TableNotFoundError:      if the table has no columns (does not exist).
+        ColumnScopeError:        if any visible column of the table is outside
+                                  scope (COLUMN_SCOPE_VIOLATION) or the table
+                                  can't be enumerated under scope enforcement.
         ParseFailedError:        if column provenance can't be extracted
                                   (PARSE_FAILED_CLOSED) — the sample is rejected,
                                   never executed.
@@ -339,11 +379,54 @@ def sample_rows(
     # Cap at 50 regardless of caller input.
     effective_limit = max(1, min(limit, 50))
 
-    # Database and table names are allowlist-checked above; use backtick quoting
-    # to handle names with special characters.
     safe_db = database.replace("`", "``")
     safe_table = table.replace("`", "``")
-    sql = f"SELECT * FROM `{safe_db}`.`{safe_table}` LIMIT {effective_limit}"
+
+    # Catalog-hidden columns (RLS physical columns client_code / proc_center, and
+    # labor_allocation's internal `version`) must NEVER be surfaced by sampleRows
+    # (A-H1) — on any transport, independent of column_scope, exactly as
+    # getTableSchema strips them. Resolved from the SAME hidden-column source the
+    # overlay uses.
+    hidden = hidden_columns_for(get_semantic_catalog(), f"{database}.{table}")
+
+    if hidden:
+        # This table hides columns: introspect its real columns and project ONLY
+        # the visible set (introspected MINUS hidden), so a `SELECT *` can never
+        # leak a hidden column's name or values. Only catalogued RLS tables reach
+        # this branch — every other table keeps the plain `SELECT *` below (its
+        # visible set == all columns, so the two are equivalent), avoiding an
+        # introspection round-trip for the common case. The metadata query is the
+        # same one get_table_schema uses; it does not scan table data.
+        intro_sql = (
+            "SELECT name "
+            "FROM system.columns "
+            "WHERE database = {db:String} AND table = {tbl:String} "
+            "ORDER BY position"
+        )
+        _, col_rows = _execute(
+            intro_sql, settings, parameters={"db": database, "tbl": table}
+        )
+        if not col_rows:
+            raise TableNotFoundError(
+                message=(
+                    f"Table '{database}.{table}' not found or has no columns. "
+                    "Check the database and table names with listTables."
+                ),
+                code="TABLE_NOT_FOUND",
+            )
+        visible_columns = [row[0] for row in col_rows if row[0] not in hidden]
+        if not visible_columns:
+            raise TableNotFoundError(
+                message=(
+                    f"Table '{database}.{table}' has no columns available to sample "
+                    "after applying the hidden-column projection."
+                ),
+                code="TABLE_NOT_FOUND",
+            )
+        projection = ", ".join(f"`{c.replace('`', '``')}`" for c in visible_columns)
+        sql = f"SELECT {projection} FROM `{safe_db}`.`{safe_table}` LIMIT {effective_limit}"
+    else:
+        sql = f"SELECT * FROM `{safe_db}`.`{safe_table}` LIMIT {effective_limit}"
 
     # ---------------------------------------------------------------------------
     # Column-scope enforcement (D83) — reuses run_query's exact enforcement path.
@@ -377,12 +460,10 @@ def sample_rows(
             ) from exc
 
         if scope:
-            forbidden = {
-                f"{db_tbl}.{col}"
-                for db_tbl, col in uses
-                if not db_tbl.startswith("scratch.")
-                and f"{db_tbl}.{col}" not in scope
-            }
+            # Hidden columns are already excluded from the projection above, so
+            # they cannot appear in `uses`; the shared helper also excludes them
+            # defensively (A-H1) and scratch columns (session-gated).
+            forbidden = _forbidden_out_of_scope_columns(uses, scope)
 
             if forbidden:
                 logger.warning(
@@ -504,13 +585,13 @@ def run_query(
         # Only a non-empty scope enforces the column allowlist (D57).
         # Scratch columns (database prefix == "scratch") are session-gated, not
         # scope-gated (D69/OQ-4) — they are intentionally excluded regardless.
+        # Catalog-hidden RLS columns (client_code / proc_center / version) are
+        # NEVER required in scope (A-H1): a `SELECT *` that qualify_columns expands
+        # to include a hidden physical column must not raise a spurious
+        # COLUMN_SCOPE_VIOLATION, since that column is stripped from every
+        # model-facing surface and is enforced server-side by the row policy.
         if scope:
-            forbidden = {
-                f"{db_tbl}.{col}"
-                for db_tbl, col in uses
-                if not db_tbl.startswith("scratch.")
-                and f"{db_tbl}.{col}" not in scope
-            }
+            forbidden = _forbidden_out_of_scope_columns(uses, scope)
 
             if forbidden:
                 # Log only the count to keep server logs terse; the column

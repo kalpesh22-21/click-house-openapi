@@ -122,14 +122,16 @@ class TestInvalidToken:
 
 class TestMissingTenantClaim:
 
-    def test_missing_user_name_claim_returns_403(self, client):
-        token = make_jwt(include_user_name=False)
+    def test_missing_tenant_claim_returns_403(self, client):
+        # No clientcode/proc_center/jti claims -> the first mapped tenant claim is
+        # absent -> fail closed rather than run an untenanted query.
+        token = make_jwt(include_tenant_claims=False)
         resp = client.post("/query", headers=_bearer(token), json={"sql": "SELECT 1"})
         assert resp.status_code == 403
         assert resp.json()["detail"]["code"] == "MISSING_TENANT_CLAIM"
 
-    def test_blank_user_name_claim_returns_403(self, client):
-        token = make_jwt(user_name="   ")
+    def test_blank_tenant_claim_returns_403(self, client):
+        token = make_jwt(client_code="   ")
         resp = client.post("/query", headers=_bearer(token), json={"sql": "SELECT 1"})
         assert resp.status_code == 403
         assert resp.json()["detail"]["code"] == "MISSING_TENANT_CLAIM"

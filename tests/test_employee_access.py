@@ -192,6 +192,17 @@ class TestFreshnessProvisioning:
         with patch.object(ea, "_get_security_client", return_value=_freshness_client(7, 250)):
             assert ea._freshness("J", _settings()) == (True, 250)
 
+    def test_freshness_reads_new_table_and_snake_case_columns(self):
+        client = _freshness_client(1, 100)
+        with patch.object(ea, "_get_security_client", return_value=client):
+            ea._freshness("J", _settings())
+        sql = client.query.call_args.args[0]
+        # Reads the new snake_case columns from the dbpcm_warehouse_security table.
+        assert "`dbpcm_warehouse_security`.`user_employee_access`" in sql
+        assert "WHERE jti = " in sql
+        assert "max(updated_at)" in sql
+        assert client.query.call_args.kwargs["parameters"]["jti"] == "J"
+
 
 # ---------------------------------------------------------------------------
 # _fetch_employee_codes — forwards the caller's JWT
@@ -242,7 +253,10 @@ class TestWritePull:
             ea._write_pull("J", ["E1", "E2"], _settings())
         assert client.insert.call_count == 1
         kwargs = client.insert.call_args.kwargs
-        assert kwargs["column_names"] == ["JTI", "EmployeeCode", "pull_id"]
+        # snake_case columns keyed by jti, targeting the new security database.
+        assert kwargs["column_names"] == ["jti", "employee_code", "pull_id"]
+        assert kwargs["database"] == "dbpcm_warehouse_security"
+        assert kwargs["table"] == "user_employee_access"
         data = kwargs["data"]
         # sentinel first, then one row per code
         assert data[0][0] == "J" and data[0][1] == ea._SENTINEL_CODE

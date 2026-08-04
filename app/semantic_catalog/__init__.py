@@ -10,12 +10,16 @@ from app.semantic_catalog.loader import (
     invalidate_semantic_catalog_cache,
     load_semantic_catalog,
 )
-from app.semantic_catalog.overlay import build_table_schema_response
+from app.semantic_catalog.overlay import (
+    build_table_schema_response,
+    hidden_columns_for,
+)
 
 __all__ = [
     "build_table_schema_response",
     "get_catalog_sha",
     "get_semantic_catalog",
+    "hidden_columns_for",
     "invalidate_semantic_catalog_cache",
     "load_semantic_catalog",
 ]

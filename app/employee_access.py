@@ -1,22 +1,23 @@
 """Employee row-level-security (RLS) access provisioning.
 
-This module populates ``security.user_employee_access`` — the table a ClickHouse
-row policy on ``dbpcm_warehouse.employee`` reads to filter each tenant's rows to
-only the employees that tenant's JWT (identified by its stable composite ``JTI``)
-is permitted to see.  It is the WRITE half of the RLS feature; the row policy
-itself (the READ half) is a DBA-managed object (see the canonical DDL below).
+This module populates ``dbpcm_warehouse_security.user_employee_access`` — the
+table a ClickHouse row policy on ``dbpcm_warehouse.employee`` reads to filter each
+tenant's rows to only the employees that tenant's JWT (identified by its stable
+``jti``) is permitted to see.  It is the WRITE half of the RLS feature; the row
+policy itself (the READ half) is a DBA-managed object (see the canonical DDL
+below).
 
 Design (settled with the maintainer):
 
-  * **Storage** — ``ReplacingMergeTree(pull_id) ORDER BY (JTI, EmployeeCode)``.
-    Each *pull* of a JTI's access set is written with a fresh, monotonically
+  * **Storage** — ``ReplacingMergeTree(pull_id) ORDER BY (jti, employee_code)``.
+    Each *pull* of a jti's access set is written with a fresh, monotonically
     increasing ``pull_id``.  The row policy reads ONLY the latest pull:
 
-        EmployeeCode IN (
-            SELECT EmployeeCode FROM security.user_employee_access
-            WHERE JTI = getSetting('SQL_TENANT')
-              AND pull_id = (SELECT max(pull_id) FROM security.user_employee_access
-                             WHERE JTI = getSetting('SQL_TENANT'))
+        employee_code IN (
+            SELECT employee_code FROM dbpcm_warehouse_security.user_employee_access
+            WHERE jti = getSetting('paycom_authenticated_user')
+              AND pull_id = (SELECT max(pull_id) FROM dbpcm_warehouse_security.user_employee_access
+                             WHERE jti = getSetting('paycom_authenticated_user'))
         )
 
     The ``pull_id = max(pull_id)`` gate is what makes **revocation** correct:
@@ -25,14 +26,14 @@ Design (settled with the maintainer):
     without the gate the policy would keep returning revoked codes — a silent
     over-grant.  The gate excludes any code not present in the newest pull, and
     it is correct BEFORE any background merge, so ``FINAL`` is never needed.
-    ReplacingMergeTree then compacts the table to one row per (JTI, EmployeeCode).
+    ReplacingMergeTree then compacts the table to one row per (jti, employee_code).
 
   * **Atomic swap** — the whole pull is written in a SINGLE ``client.insert`` so
     that, on the single-node deployment, ``max(pull_id)`` advances in one atomic
     step.  A partial (multi-block) insert would briefly expose a half-loaded set.
 
-  * **Sentinel row** — every pull also writes ``(JTI, '', pull_id)``.  ``''`` can
-    never equal a real ``EmployeeCode``, so it never grants anything, but it
+  * **Sentinel row** — every pull also writes ``(jti, '', pull_id)``.  ``''`` can
+    never equal a real ``employee_code``, so it never grants anything, but it
     guarantees ``max(pull_id)`` advances even when the access set is EMPTY (all
     revoked).  Without it, an empty pull would leave the previous pull as the
     "latest" and fail to revoke-to-empty.
@@ -57,16 +58,17 @@ Design (settled with the maintainer):
 
   * **Least privilege** — a DISTINCT, server-side-only ClickHouse credential
     (``SECURITY_CH_*``, mirroring the scratch writer) GRANTed only **INSERT +
-    SELECT** on ``security.user_employee_access`` handles ALL app access to the
-    security database: BOTH the per-request freshness read AND the pull insert go
-    through it (a cached, thread-safe client), so the ordinary ``mcp_user`` query
-    connection never touches ``security.*`` at the app layer.  The table and the
-    row policy are **DBA-owned** objects (see the canonical DDL below); the app
-    issues NO DDL — refresh is append-only and eviction is the table's own TTL, so
-    no CREATE/DELETE/ALTER grant is needed.  (ClickHouse still evaluates the row
-    policy's subquery in the *querying* user's context, so ``mcp_user`` separately
-    needs SELECT on this table for the policy itself — that grant is for the DB
-    engine, not for any query this app issues as ``mcp_user``.)
+    SELECT** on ``dbpcm_warehouse_security.user_employee_access`` handles ALL app
+    access to the security database: BOTH the per-request freshness read AND the
+    pull insert go through it (a cached, thread-safe client), so the ordinary
+    ``mcp_user`` query connection never touches ``dbpcm_warehouse_security.*`` at
+    the app layer.  The table and the row policy are **DBA-owned** objects (see the
+    canonical DDL below); the app issues NO DDL — refresh is append-only and
+    eviction is the table's own TTL, so no CREATE/DELETE/ALTER grant is needed.
+    (ClickHouse still evaluates the row policy's subquery in the *querying* user's
+    context, so ``mcp_user`` separately needs SELECT on this table for the policy
+    itself — that grant is for the DB engine, not for any query this app issues as
+    ``mcp_user``.)
 
   * **Provisioning** — if the feature is enabled but the DBA table is absent, the
     freshness read fails closed loud (``EMPLOYEE_ACCESS_NOT_PROVISIONED``) rather
@@ -75,35 +77,36 @@ Design (settled with the maintainer):
 Canonical DBA objects (create once, out of band — the row policy references
 ``mcp_user`` and the warehouse and cannot be created by the writer credential):
 
-    CREATE DATABASE IF NOT EXISTS security;
+    CREATE DATABASE IF NOT EXISTS dbpcm_warehouse_security;
 
-    CREATE TABLE IF NOT EXISTS security.user_employee_access
+    CREATE TABLE IF NOT EXISTS dbpcm_warehouse_security.user_employee_access
     (
-        JTI          String,
-        EmployeeCode String,
-        pull_id      UInt64,
-        UpdatedAt    DateTime DEFAULT now()
+        jti           String,
+        employee_code String,
+        pull_id       UInt64,
+        updated_at    DateTime DEFAULT now()
     )
     ENGINE = ReplacingMergeTree(pull_id)
-    ORDER BY (JTI, EmployeeCode)
-    TTL UpdatedAt + INTERVAL 1 DAY;   -- housekeeping only; MUST exceed N (600s)
+    ORDER BY (jti, employee_code)
+    TTL updated_at + INTERVAL 1 DAY;   -- housekeeping only; MUST exceed N (600s)
 
     CREATE ROW POLICY employee_rls ON dbpcm_warehouse.employee
     USING
-            ClientCode  = getSetting('SQL_CLIENTCODE')
-        AND ProcCenter  = getSetting('SQL_PROCCENTER')
-        AND EmployeeCode IN (
-            SELECT EmployeeCode FROM security.user_employee_access
-            WHERE JTI = getSetting('SQL_TENANT')
-              AND pull_id = (SELECT max(pull_id) FROM security.user_employee_access
-                             WHERE JTI = getSetting('SQL_TENANT'))
+            client_code = getSetting('paycom_client_code')
+        AND proc_center = getSetting('paycom_proc_center')
+        AND employee_code IN (
+            SELECT employee_code FROM dbpcm_warehouse_security.user_employee_access
+            WHERE jti = getSetting('paycom_authenticated_user')
+              AND pull_id = (SELECT max(pull_id) FROM dbpcm_warehouse_security.user_employee_access
+                             WHERE jti = getSetting('paycom_authenticated_user'))
         )
     TO mcp_user;
 
-``SQL_TENANT`` / ``SQL_CLIENTCODE`` / ``SQL_PROCCENTER`` are injected per request
-via ``clickhouse_tenant_settings`` (config), so the map must contain e.g.
-``{"SQL_tenant":"jti","SQL_CLIENTCODE":"clientcode","SQL_PROCCENTER":"proc_center"}``.
-The LLM cannot override them — ``security.py`` blocks any user ``SETTINGS`` clause.
+``paycom_client_code`` / ``paycom_proc_center`` / ``paycom_authenticated_user`` are
+injected per request via ``clickhouse_tenant_settings`` (config), so the map must
+contain e.g. ``{"paycom_client_code":"clientcode","paycom_proc_center":"proc_center",
+"paycom_authenticated_user":"jti"}``.  The LLM cannot override them —
+``security.py`` blocks any user ``SETTINGS`` clause.
 """
 
 from __future__ import annotations
@@ -302,16 +305,16 @@ def _freshness(jti: str, settings: Settings) -> tuple[bool, int]:
 
     ``remaining_seconds = N - age`` is computed in SQL (``dateDiff`` against
     ``now()``) so there is no Python/ClickHouse timezone skew — it compares
-    against the same clock that stamped ``UpdatedAt``.  ``remaining > 0`` means
-    fresh.  ``count() == 0`` (table present, no rows for this JTI) is a genuine
-    COLD JTI.  A MISSING table means the DBA migration was not applied — that
+    against the same clock that stamped ``updated_at``.  ``remaining > 0`` means
+    fresh.  ``count() == 0`` (table present, no rows for this jti) is a genuine
+    COLD jti.  A MISSING table means the DBA migration was not applied — that
     fails closed loud (the app owns no DDL to bootstrap it).
     """
     n = int(settings.employee_access_refresh_seconds)
     sql = (
         "SELECT count() AS c, "
-        f"toInt64({{n:UInt32}}) - dateDiff('second', max(UpdatedAt), now()) AS remaining "
-        f"FROM {_qualified_table(settings)} WHERE JTI = {{jti:String}}"
+        f"toInt64({{n:UInt32}}) - dateDiff('second', max(updated_at), now()) AS remaining "
+        f"FROM {_qualified_table(settings)} WHERE jti = {{jti:String}}"
     )
     try:
         result = _get_security_client(settings).query(
@@ -429,14 +432,14 @@ def _write_pull(jti: str, codes: list[str], settings: Settings) -> None:
     data.extend([jti, code, pull_id] for code in codes)
 
     # ONE insert = one atomic pointer advance on single-node ClickHouse.
-    # UpdatedAt is omitted so ClickHouse fills it with DEFAULT now() (the
+    # updated_at is omitted so ClickHouse fills it with DEFAULT now() (the
     # server-clock value the freshness read compares against).  The cached client
     # is shared, so it is not closed here.
     _get_security_client(settings).insert(
         table=_TABLE,
         database=settings.security_database,
         data=data,
-        column_names=["JTI", "EmployeeCode", "pull_id"],
+        column_names=["jti", "employee_code", "pull_id"],
     )
     logger.info(
         "employee-access pull written: jti=%s codes=%d pull_id=%d",

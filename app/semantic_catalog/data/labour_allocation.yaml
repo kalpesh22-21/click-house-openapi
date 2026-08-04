@@ -1,0 +1,72 @@
+database: dbpcm_warehouse
+table: labor_allocation
+region: workforce_labor_allocation
+description: Tenant-scoped labor allocation reference using snake_case column names only.
+grain:
+- code
+- join_key
+primary_key: []
+primary_key_note: No business primary key is declared. The ClickHouse ORDER BY key is proc_center + client_code + code + join_key.
+grain_verifiable: true
+engine:
+  type: ReplacingMergeTree
+  order_by:
+  - code
+  - join_key
+  index_granularity: 8192
+  implicit_version_column: version
+  implicit_order_scope:
+  - proc_center
+  - client_code
+join_keys:
+- column: join_key
+  joins: employee.labor_allocation_key_1 through employee.labor_allocation_key_20
+  join_on:
+  - labor_allocation_key_<N> = join_key
+  cardinality: N:1
+  implicit_join_scope:
+  - client_code
+  - proc_center
+- column: join_key
+  joins: payroll.labor_allocation_key_1 through payroll.labor_allocation_key_20
+  join_on:
+  - labor_allocation_key_<N> = join_key
+  cardinality: N:1
+  implicit_join_scope:
+  - client_code
+  - proc_center
+columns:
+  code:
+    type: String
+    description: Labor allocation type code.
+    description_col: description
+  description:
+    type: Nullable(String)
+    description: Labor allocation display description.
+  join_key:
+    type: String
+    description: Join key used by labor allocation references on Employee and Payroll.
+rules:
+- id: DisplayValue
+  predicate: Use description for display and code for filtering or grouping.
+  applies_when: Labor allocation reporting.
+schema_notes:
+- snake_case column names only.
+- Physical ClickHouse table name is labor_allocation.
+- Grain verified against ClickHouse data: proc_center + client_code + code + join_key is unique.
+- Employee and Payroll use labor_allocation_key_1 through labor_allocation_key_20.
+- code is not enum-like in observed data; it has thousands of distinct client-defined values.
+mcp_projection:
+  source_file: labour_allocation_dim_schema_catalog.yaml
+  hidden_columns:
+  - client_code
+  - proc_center
+  - version
+  notes:
+  - client_code and proc_center are enforced by row-level policy and omitted from exposed joins.
+  - version is omitted from exposed columns as an internal ReplacingMergeTree version column.
+row_scope:
+  implicit_filters:
+  - client_code
+  - proc_center
+  enforced_by: ClickHouse row policy

@@ -40,8 +40,9 @@ class TestBuildCatalogExport:
         columns = employee["columns"]
         assert isinstance(columns, dict)
         # Column type is the YAML-declared catalog type, not a live DB type.
-        assert columns["EmployeeCode"]["type"] == "String"
-        assert columns["ClientCode"]["type"] == "Nullable(String)"
+        # (snake_case catalog, D70)
+        assert columns["employee_code"]["type"] == "String"
+        assert columns["first_name"]["type"] == "Nullable(String)"
 
     def test_rich_overlay_fields_preserved_verbatim(self):
         result = export.build_catalog_export()
@@ -53,7 +54,7 @@ class TestBuildCatalogExport:
         assert "ambiguities" in payroll
         assert "measures" in payroll
         #  - description-col linkage carried on the column block (not padded elsewhere)
-        assert payroll["columns"]["TypeCode"]["description_col"] == "TypeCodeDescription"
+        assert payroll["columns"]["type_code"]["description_col"] == "type_code_description"
 
     def test_result_is_json_serializable(self):
         result = export.build_catalog_export()

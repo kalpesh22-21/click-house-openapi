@@ -1,0 +1,52 @@
+database: dbpcm_warehouse
+table: department
+region: workforce_organization
+description: Tenant-scoped department reference using snake_case column names only.
+grain:
+- department_code
+primary_key: []
+primary_key_note: No business primary key is declared. The ClickHouse ORDER BY key is proc_center + client_code + department_code.
+grain_verifiable: true
+join_keys:
+- column: department_code
+  joins: employee.department_code
+  join_on:
+  - department_code
+  cardinality: N:1
+  implicit_join_scope:
+  - client_code
+  - proc_center
+- column: department_code
+  joins: payroll.department_code
+  join_on:
+  - department_code
+  cardinality: N:1
+  implicit_join_scope:
+  - client_code
+  - proc_center
+columns:
+  department_code:
+    type: String
+    description: Department code.
+    description_col: department_name
+  department_name:
+    type: Nullable(String)
+    description: Department display name.
+rules:
+- id: DepartmentLabel
+  predicate: Use department_name as the display label.
+  applies_when: Department display or grouping.
+schema_notes:
+- Grain verified against ClickHouse data: proc_center + client_code + department_code is unique.
+- Payroll joins use payroll.department_code; distributed_department_code is not exposed in the physical payroll table.
+mcp_projection:
+  hidden_columns:
+  - client_code
+  - proc_center
+  notes:
+  - client_code and proc_center are enforced by row-level policy and omitted from exposed columns and joins.
+row_scope:
+  implicit_filters:
+  - client_code
+  - proc_center
+  enforced_by: ClickHouse row policy

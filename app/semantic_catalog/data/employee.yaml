@@ -1,168 +1,709 @@
 database: dbpcm_warehouse
 table: employee
-description: Current-state employee record, one row per employee. Reflects current employee attributes, not historical snapshots.
-
-grain: [ EmployeeCode ]   # agent view is single-tenant via ClickHouse RLS (client_code from JWT); EmployeeCode is unique within that view
+region: workforce_employee
+description: Current-state employee master table using the new ClickHouse DDL structure with snake_case column names only.
+grain:
+- employee_code
+grain_verifiable: true
+primary_key:
+- employee_code
+primary_key_note: Tenant-scoped employee key. employee_code must not be used across clients or processing centers by itself.
 temporal:
-  # Current-state snapshot, no temporal dimension → no pin required (D65; was semantics: as_of_now).
   dimensions: []
   default_pin: null
-
-primary_key: [ EmployeeCode ]
-
-# Tenancy: the warehouse is multi-tenant, but isolation is enforced BELOW the agent by ClickHouse
-# row-level security (a custom client_code setting inferred from the JWT, applied by the MCP). The
-# agent never sees, supplies, or filters ClientCode and its query view is always a single tenant — so
-# joins need NO tenant predicate and grain is the within-tenant key. See AUTHORING_NOTES Tenancy.
 join_keys:
-  - { column: EmployeeCode, joins: payroll.EmployeeCode, cardinality: 1:N }
-  - { column: EmployeeCode, joins: weekly_booked_sales_reps_only.EmployeeCode, cardinality: 1:N }  # TODO: weekly_booked_sales_reps_only has no catalog YAML yet — getTableSchema(weekly_booked_sales_reps_only) will fail until authored
-  - { column: EmployeeCode, joins: accrual_events.EmployeeCode, cardinality: 1:N }
-  - { column: EmployeeCode, joins: performance_discussions.EmployeeCode, cardinality: 1:N }
-  - { column: EmployeeCode, joins: personnel_action_form_changes.EmployeeCode, cardinality: 1:N }
-  - { column: EmployeeCode, joins: applicant_tracking_application.EmployeeCode, cardinality: 1:N }
-
+- column: employee_code
+  joins: payroll.employee_code
+  join_on:
+  - employee_code
+  cardinality: 1:N
+  description: Join Employee to Payroll using tenant scope.
+  implicit_join_scope:
+  - client_code
+  - proc_center
+- column: department_code
+  joins: department.department_code
+  join_on:
+  - department_code
+  cardinality: N:1
+  description: Join Employee to department using tenant scope.
+  implicit_join_scope:
+  - client_code
+  - proc_center
+- column: primary_supervisor_ee_code
+  joins: employee.employee_code
+  join_on:
+  - primary_supervisor_ee_code = employee_code
+  cardinality: N:1
+  description: Primary supervisor employee self-join using tenant scope.
+  implicit_join_scope:
+  - client_code
+  - proc_center
+- column: secondary_supervisor_ee_code
+  joins: employee.employee_code
+  join_on:
+  - secondary_supervisor_ee_code = employee_code
+  cardinality: N:1
+  description: Secondary supervisor employee self-join using tenant scope.
+  implicit_join_scope:
+  - client_code
+  - proc_center
+- column: tertiary_supervisor_ee_code
+  joins: employee.employee_code
+  join_on:
+  - tertiary_supervisor_ee_code = employee_code
+  cardinality: N:1
+  description: Tertiary supervisor employee self-join using tenant scope.
+  implicit_join_scope:
+  - client_code
+  - proc_center
+- column: quaternary_supervisor_ee_code
+  joins: employee.employee_code
+  join_on:
+  - quaternary_supervisor_ee_code = employee_code
+  cardinality: N:1
+  description: Quaternary supervisor employee self-join using tenant scope.
+  implicit_join_scope:
+  - client_code
+  - proc_center
+# Labor allocation join model — TEMPLATED join_key (overlay pattern form):
+# the employee carries up to 20 INDEPENDENT labor-allocation dimension values in
+# labor_allocation_key_1..labor_allocation_key_20. Each key column holds a join_key
+# value that resolves to exactly one labor_allocation row (labor_allocation.join_key
+# is unique within a tenant), from which the allocation code and description are read.
+# The 20 keys are DISTINCT dimension slots (types 1..20) — the per-slot MEANING lives in
+# each labor_allocation_key_N column's own description below — but they ALL join
+# labor_allocation on join_key identically, so the JOIN is authored ONCE as a pattern
+# entry (column_pattern + index_range) instead of 20 near-identical rows. The overlay
+# (app/semantic_catalog/overlay.py) emits this as a SINGLE compact join_key carrying the
+# pattern + range + join_on template + description; it is NOT expanded to 20 entries in
+# getTableSchema. The model selects whichever key(s) 1..20 the question needs. Tenant
+# scope (the RLS columns) is applied server-side by the ClickHouse row policy and is
+# intentionally NOT part of the model-facing ON clause. Cardinality N:1.
+- column_pattern: labor_allocation_key_{n}
+  index_range: [1, 20]
+  joins: labor_allocation.join_key
+  join_on: labor_allocation_key_{n} = join_key
+  cardinality: N:1
+  description: Each labor_allocation_key_{n} (n=1..20) is a DISTINCT labor-allocation dimension (see each column's own description for what it represents); join the specific key(s) the question needs to labor_allocation on join_key to resolve its code/description.
 columns:
-  ClientCode: { type: Nullable(String), description: Client/company code. }
-  EmployeeCode: { type: String, description: Stable unique employee identifier; canonical employee join key. }
-  Department: { type: Nullable(String), client_defined: true, description: Current department label (CLIENT-DEFINED; resolve via resolveValues(Department, <concept>))., synonyms: [ dept, team ] }
-  Position: { type: Nullable(String), client_defined: true, description: Current position; preferred field for identifying/filtering managers (CLIENT-DEFINED; resolve via resolveValues(Position, <concept>)). }
-  EmployeeName: { type: Nullable(String), description: Default employee display name. }
-  EmployeeStatus:
+  employee_code:
+    type: String
+    description: The unique primary identifier associated with the employee across Paycom
+  clock_sequence:
     type: Nullable(String)
-    values: { A: active, D: deceased, I: inactive, N: not_hired, P: pre_hire, R: retired, T: terminated, V: on_leave }
-    observed_values: [ A, D, I, N, T, V ]
-    description: Current employee status code.
-  DepartmentCode: { type: Nullable(String), client_defined: true, description: Formal department code used in company maintenance/labor allocation context (CLIENT-DEFINED; resolve via resolveValues(DepartmentCode, <concept>)). }
-  LivesInState: { type: Nullable(String), description: Residence state for assigned tax profile. }
-  WorksInState: { type: Nullable(String), description: Work state for assigned tax profile. }
-  SUIState: { type: Nullable(String), description: State unemployment insurance agency state for assigned tax profile. }
-  TerminationDate: { type: Nullable(DateTime64(6)), description: Current or latest termination date. }
-  OldTerminationDate: { type: Nullable(DateTime64(6)), description: Prior termination date before rehire. }
-  FirstName: { type: Nullable(String), description: Employee first name. }
-  MiddleName: { type: Nullable(String), description: Employee middle name. }
-  LastName: { type: Nullable(String), description: Employee last name. }
-  Nickname: { type: Nullable(String), description: Employee nickname or preferred informal name. }
-  HireDate: { type: Nullable(DateTime64(6)), description: Original hire date. }
-  MostRecentHireDate: { type: Nullable(DateTime64(6)), description: Latest hire date; default field for generic hire-date questions. }
-  LeaveAbsenceStart: { type: Nullable(DateTime64(6)), description: Leave-of-absence start date. }
-  LeaveAbsenceEnd: { type: Nullable(DateTime64(6)), description: Leave-of-absence end date. }
-  PrimarySupervisorEmployeeName: { type: Nullable(String), description: Current primary supervisor name. }
-  SecondarySupervisorEmployeeName: { type: Nullable(String), description: Current secondary supervisor name. }
-  TertiarySupervisorEmployeeName: { type: Nullable(String), description: Current tertiary supervisor name. }
-  QuaternarySupervisorEmployeeName: { type: Nullable(String), description: Current quaternary supervisor name. }
-  CountryCode: { type: Nullable(String), description: Two-character residence country code. }
-  TermReason: { type: Nullable(String), client_defined: true, description: Termination reason code; CLIENT-DEFINED, requires lookup before interpreting — resolve via resolveValues(TermReason, <concept>). }
-  FullTimeToPartTimeDate: { type: Nullable(DateTime64(6)), description: Date employee moved from full-time to part-time. }
-  LastCheckDate: { type: Nullable(DateTime64(6)), description: Last pay date/check date. }
-  PositionFamilyName: { type: Nullable(String), client_defined: true, description: Broader position family classification (CLIENT-DEFINED; resolve via resolveValues(PositionFamilyName, <concept>)). }
-  AccrualProfileDesc: { type: Nullable(String), client_defined: true, description: Human-readable accrual profile description (CLIENT-DEFINED; resolve via resolveValues(AccrualProfileDesc, <concept>)). }
-  BusinessTitlePositionSeat: { type: Nullable(String), description: Assigned business title for current position seat. }
-  PositionLevel: { type: Nullable(Int32), description: Numeric org level; requires company mapping for semantic interpretation. }
-  PrimaryAddressLine1: { type: Nullable(String), description: Primary residence address line 1. }
-  PrimaryAddressLine2: { type: Nullable(String), description: Primary residence address line 2. }
-  PrimaryCityMunicipality: { type: Nullable(String), description: Primary residence city/municipality. }
-  PrimaryState: { type: Nullable(String), description: Primary residence state. }
-  PrimaryZipCode: { type: Nullable(String), description: Primary residence ZIP/postal code. }
-  RehireDate: { type: Nullable(DateTime64(6)), description: Most recent rehire date when applicable. }
-  LastPositionChangeDate: { type: Nullable(DateTime64(6)), description: Most recent position-change date. }
-  LastWorkedDate: { type: Nullable(DateTime64(6)), description: Last day worked. }
-  PositionTitlePositionInfo: { type: Nullable(String), description: Formal title from position management. }
-  PayTypeDescription:
+    description: An optional employee identifier used for imports and reporting. This is an alphanumeric field that can be
+      up to 15 characters.
+  employee_gl_code:
     type: Nullable(String)
-    observed_values: [ Commission Only, None, Salary ]
-    description: Pay type description.
-  WorkLocationDescription: { type: Nullable(String), client_defined: true, description: Human-readable work location name (CLIENT-DEFINED; resolve via resolveValues(WorkLocationDescription, <concept>)). }
-  WorkLocationAddress: { type: Nullable(String), description: Work location street address. }
-  WorkLocationCity: { type: Nullable(String), description: Work location city. }
-  WorkLocationState: { type: Nullable(String), description: Work location state. }
-  WorkLocationZip: { type: Nullable(String), description: Work location ZIP/postal code. }
-  WorkLocationCountry: { type: Nullable(String), description: Work location country. }
-  sales_sl_gradution: { type: Nullable(String), description: Internal sales training graduation date field; spelling preserved from source. }
-  sales_sl_start_date: { type: Nullable(String), description: Internal sales training start date field. }
-  AnnualSalary: { type: "Nullable(Decimal(18, 6))", unit: USD, description: "Authoritative annual salary figure; the single source for 'annual salary' / 'total salary' questions and department-level salary rollups (SUM(AnnualSalary) GROUP BY Department). Planned amount, not actual payroll paid." }
-  EmploymentType:
+    description: The unique primary identifier associated with General Ledger reporting
+  badge_number:
     type: Nullable(String)
-    values: { W2: employee, "1099": contractor }
-    observed_values: [ W2, "1099" ]
-    description: Worker classification.
-  Rate1: { type: "Nullable(Decimal(18, 6))", unit: USD, description: Base hourly/rate-1 pay rate when applicable. }
-
+    description: Badge numbers are the numbers that an employee will use when logging in to a kiosk or hardware clock. Badge
+      numbers must be unique. Employees without badge numbers may not be able to interact with kiosks or hardware clocks.
+      Badge numbers are not required for employees to use Web Time Clocks or Web Time Sheets.
+  employee_name:
+    type: Nullable(String)
+    description: This is the employee's full name in the format of Last Name, First Name Middle Initial
+  legal_employee_name:
+    type: Nullable(String)
+    description: This is the employees legal full name.
+  first_name:
+    type: Nullable(String)
+    description: This is the first name of the employee.
+  middle_name:
+    type: Nullable(String)
+    description: This is the optional middle name of the employee
+  middle_initial:
+    type: Nullable(String)
+    description: The first letter of the employee's optional middle initial.
+  last_name:
+    type: Nullable(String)
+    description: This is the last name or family name of the employee.
+  suffix:
+    type: Nullable(String)
+    description: A suffix in a person's name is a word or letters added to the end of a name to provide additional information
+      about a person's status, background, or profession. Examples of suffixes in names include Jr., Sr., III, and PhD.
+  nickname:
+    type: Nullable(String)
+    description: This is another accepted name to refer to the employee by. (nickname).
+  preferred_first_name:
+    type: Nullable(String)
+    description: This is the employees preferred first name, this may be different than the employees legal first name
+  preferred_middle_name:
+    type: Nullable(String)
+    description: This is the employees preferred middle name, this may be different than the employees legal middle name
+  preferred_last_name:
+    type: Nullable(String)
+    description: This is the employees preferred last name, this may be different than the employees legal last name
+  preferred_employee_suffix:
+    type: Nullable(String)
+    description: This is the employees preferred suffix. A suffix in a person's name is a word or letters added to the end
+      of a name to provide additional information about a person's status, background, or profession. Examples of suffixes
+      in names include Jr., Sr., III, and PhD.
+  employee_status:
+    type: Nullable(String)
+    description: The employee status code indicating whether the employee is Active, Terminated, Inactive, On Leave, Deceased,
+      Retired, Not Hired, or PreHire.
+    values:
+    - A
+    - D
+    - I
+    - R
+    - T
+    - V
+  hire_date:
+    type: Nullable(DateTime64(6))
+    description: This is the date the employee was hired in the company.
+  most_recent_hire_date:
+    type: Nullable(DateTime64(6))
+    description: This is the most recent date the employee was hired, reflective of any rehires
+  rehire_date:
+    type: Nullable(DateTime64(6))
+    description: This is the employees rehire date if they left the company or were terminated, and then they were hired again.
+  termination_date:
+    type: Nullable(DateTime64(6))
+    description: This is the date the employee was terminated
+  old_termination_date:
+    type: Nullable(DateTime64(6))
+    description: This is the date the employee was terminated before they were re-hired.
+  term_reason:
+    type: Nullable(String)
+    description: This was the 3 character termination reason for why the employee was terminated
+  seniority_date:
+    type: Nullable(DateTime64(6))
+    description: This is the date of an employees length of service (tenure) for an employee to be considered for PTO Accruals
+      or Benefits eligibility.
+  leave_absence_start:
+    type: Nullable(DateTime64(6))
+    description: This is the date the employee started Leave of Absence and became Inactive
+  leave_absence_end:
+    type: Nullable(DateTime64(6))
+    description: This is the date the employee ended Leave of Absence and is no longer Inactive
+  full_time_to_part_time_date:
+    type: Nullable(DateTime64(6))
+    description: This is the date the employee started working part time from working full time
+  last_worked_date:
+    type: Nullable(DateTime64(6))
+    description: This is the date that the employee worked last
+  department_code:
+    type: Nullable(String)
+    description: Employee home Department code. This is the code assigned to the department within company maintenance and
+      is related to labor allocations.
+    client_defined: true
+  department_name:
+    type: Nullable(String)
+    description: Employee Home Department description. This is the code assigned to the department within company maintenance
+      and is related to labor allocations.
+  lives_in_state:
+    type: Nullable(String)
+    description: The Lives In state is the state the employee lives in for their assigned tax profile.
+  works_in_state:
+    type: Nullable(String)
+    description: The Works In state is the state the employee works in for their assigned tax profile.
+  sui_state:
+    type: Nullable(String)
+    description: The Sui state is the state of their agency for state Unemployment Insurance for their assigned tax profile.
+  local_tax_1:
+    type: Nullable(String)
+    description: The Local Tax 1 is the 3 character local tax code in the employee's tax profile
+  date_of_birth:
+    type: Nullable(DateTime64(6))
+    description: This is the date of birth for the employee
+  marital_status_code:
+    type: Nullable(String)
+    description: This is the marital status code for the employee, values could be S - Single, M - Married, D - Divorced,
+      W - Widowed, or P - Domestic Partner
+    values:
+    - ''
+    - D
+    - M
+    - P
+    - S
+    - W
+  marital_status_description:
+    type: Nullable(String)
+    description: This is the marital status for the employee, values could be Single, Married, Divorced, Widowed, or Domestic
+      Partner. This could be used for benefits and tax purposes.
+    values:
+    - ''
+    - Divorced
+    - Domestic Partner
+    - Married
+    - Single
+    - Widowed
+  gender:
+    type: Nullable(String)
+    description: This is the gender reported by the employee
+    values:
+    - ''
+    - Female
+    - I do not wish to self-identify
+    - Male
+    - Non-Binary
+  ethnic_background:
+    type: Nullable(String)
+    description: This is the ethnic background code reported by the employee
+  country_code:
+    type: Nullable(String)
+    description: The 2-digit ISO country code associated with the employee's country of residence
+    values:
+    - US
+  street_address_1:
+    type: Nullable(String)
+    description: This is the physical street address the employee enters as their home street address.
+  street_address_2:
+    type: Nullable(String)
+    description: This is the optional second line the employee enters as their home street address.
+  city:
+    type: Nullable(String)
+    description: This is the city the employee enters for their home address.
+  state:
+    type: Nullable(String)
+    description: The state is the state the employee enters for their home address.
+  zip_code:
+    type: Nullable(String)
+    description: This is the zip code the employee enters as their home address.
+  work_email:
+    type: Nullable(String)
+    description: This is the email address entered by the employee for communication via email
+  personal_email:
+    type: Nullable(String)
+    description: This is an email address the employee has for personal uses, it is not a work email managed by the organization
+  secondary_email:
+    type: Nullable(String)
+    description: This is another email address that can be used for email correspondence with the employee
+  primary_phone:
+    type: Nullable(String)
+    description: The employee's Primary phone number to be reached
+  primary_phone_type:
+    type: Nullable(String)
+    description: This is the type of phone for the employee's primary phone number, e.g. Work, Cell
+    values:
+    - Cell
+    - Home
+    - Other
+    - Work
+  secondary_phone:
+    type: Nullable(String)
+    description: This refers to an employees second phone number
+  secondary_phone_type:
+    type: Nullable(String)
+    description: This is the type of phone for the employee's secondary phone number, e.g. Work, Cell
+    values:
+    - Cell
+    - Home
+    - Other
+    - Work
+  primary_emergency_contact_phone:
+    type: Nullable(String)
+    description: This is the phone number for the employees first emergency contact in case of an emergency
+  secondary_emergency_contact_phone:
+    type: Nullable(String)
+    description: This is the phone number for the employees second emergency contact in case of an emergency
+  tertiary_emergency_contact_phone:
+    type: Nullable(String)
+    description: This is the phone number for the employees third emergency contact in case of an emergency
+  primary_supervisor_ee_code:
+    type: Nullable(String)
+    description: This is the employee code the employee will report to as their primary supervisor.
+  secondary_supervisor_ee_code:
+    type: Nullable(String)
+    description: This is the employee code the employee will report to as their secondary supervisor.
+  tertiary_supervisor_ee_code:
+    type: Nullable(String)
+    description: This is the employee code the employee will report to as their tertiary supervisor
+  quaternary_supervisor_ee_code:
+    type: Nullable(String)
+    description: This is the employee code the employee will report to as their quaternary supervisor
+  primary_supervisor_name:
+    type: Nullable(String)
+    description: This is primary supervisor's full name the employee reports to.
+  secondary_supervisor_name:
+    type: Nullable(String)
+    description: This is secondary supervisor's full name the employee reports to
+  tertiary_supervisor_name:
+    type: Nullable(String)
+    description: This is tertiary supervisor's full name the employee reports to
+  quaternary_supervisor_name:
+    type: Nullable(String)
+    description: This is quaternary supervisor's full name the employee reports to
+  primary_supervisor_email:
+    type: Nullable(String)
+    description: The email address of the Primary Supervisor assigned to the employee's position seat
+  secondary_supervisor_email:
+    type: Nullable(String)
+    description: The email address of the Secondary Supervisor assigned to the employee's position seat
+  tertiary_supervisor_email:
+    type: Nullable(String)
+    description: The email address of the Tertiary Supervisor assigned to the employee's position seat
+  quaternary_supervisor_email:
+    type: Nullable(String)
+    description: The email address of the Quaternary Supervisor assigned to the employee's position seat
+  manager_level_code:
+    type: Nullable(String)
+    description: The Manager Level code is a hierarchical classification indicating a user's managerial authority tier for
+      routing approval workflows, security permissions, and escalation chains.
+    client_defined: true
+  manager_level_description:
+    type: Nullable(String)
+    description: 'Displays the description of the manager level, e.g. EXEC : C-Level'
+  position_code:
+    type: Nullable(String)
+    description: A unique alphanumeric code that refers to Position within Position Management
+    client_defined: true
+  position_level:
+    type: Nullable(Int32)
+    description: Position Level is an employee's rank or status within a specific position, in which this field displays it
+      as an numeric code to reference for the organization's career structure
+  position_title_position_info:
+    type: Nullable(String)
+    description: This is the employee's position title from position management.
+  status_position_info:
+    type: Nullable(String)
+    description: This is the position status of the position the employee is assigned in position management.
+    values:
+    - A
+  business_title_position_info:
+    type: Nullable(String)
+    description: This is the assigned business title of the employee current position from position management.
+  short_title:
+    type: Nullable(String)
+    description: Short Title provides a condensed title compared to its respective position title; for example if a position's
+      title is Chief Information Officer, the short title would then be CIO
+  effective_date_position_info:
+    type: Nullable(DateTime64(6))
+    description: Effective dates allow changes to Position Seats on a specific date. This enables the storing of historical,
+      current, and future information.
+  job_category:
+    type: Nullable(String)
+    description: The job category assigned to the employee's position, used to classify and group similar roles within the
+      organization
+  last_position_change_date:
+    type: Nullable(DateTime64(6))
+    description: This is the most recent date the employee had a position change
+  position_seat_number:
+    type: Nullable(String)
+    description: Position Seat Number is an alphanumeric code that refers to a Position Seat within Position Management
+  effective_date_position_seat:
+    type: Nullable(DateTime64(6))
+    description: This is the effective date for the employee's assigned position seat. Effective dates allow changes to Position
+      Seats on a specific date. This enables the storing of historical, current, and future information.
+  status_position_seat:
+    type: Nullable(String)
+    description: This is the position status of the position seat the employee is in.
+    values:
+    - A
+    - D
+    - I
+  union_code:
+    type: Nullable(String)
+    description: The Union code is a unique identifier used to reference which union the employee is apart of, if applicable
+    client_defined: true
+  eeo1_category:
+    type: Nullable(String)
+    description: The EEO-1 Category classifies jobs into the standardized job categories required for the federal EEO-1 Component
+      1 Report (Equal Employment Opportunity).
+  work_location_description:
+    type: Nullable(String)
+    description: This is the work location description of the employee's assigned position.
+  work_location_address:
+    type: Nullable(String)
+    description: This is the work location street address of the employee's assigned position.
+  work_location_city:
+    type: Nullable(String)
+    description: This is the work location city of the employee's assigned position.
+  work_location_state:
+    type: Nullable(String)
+    description: This is the work location state of the employee's assigned position.
+  work_location_zip:
+    type: Nullable(String)
+    description: This is the work location zip code of the employee's assigned position.
+  work_location_country:
+    type: Nullable(String)
+    description: This is the work location country of the employee's assigned position.
+  dol_status_description:
+    type: Nullable(String)
+    description: This is the Department Of Labor status for the employee, whether they are Full Time, Part Time, Temporary,
+      or a Seasonal employee.
+    values:
+    - Full Time
+    - None
+    - Part Time
+    - Seasonal
+  employment_type:
+    type: Nullable(String)
+    description: This field indicates whether the employee is a W2 employee or a 1099 employee.
+    values:
+    - '1099'
+    - W2
+  pay_basis:
+    type: Nullable(String)
+    description: This is type of pay the employee receives, some expected values could be Salary, Hourly, Commission, or By
+      Week.
+    values:
+    - Commission
+    - Hourly
+    - Piece Rate
+    - Salary
+  hourly_salary:
+    type: Nullable(Decimal(18, 6))
+    description: The calculated hourly salary of the employee based on their processing schedule, annual salary, and per pay
+      period hours
+    unit: USD
+  annual_salary:
+    type: Nullable(Decimal(18, 6))
+    description: This is the annual salary of the employee. (Estimated for hourly employee
+    unit: USD
+  scheduled_pay_period_hours:
+    type: Nullable(Decimal(18, 6))
+    description: The Scheduled Pay Period Hours specifies the number of hours the employee works each pay period.
+    unit: hours
+  salary_min:
+    type: Nullable(Decimal(18, 6))
+    description: Salary Min signifies the minimum amount an employee should be paid within a respective range.
+    unit: USD
+  salary_mid:
+    type: Nullable(Decimal(18, 6))
+    description: Salary Mid signifies the mid-point an employee should be paid within a respective range.
+    unit: USD
+  salary_max:
+    type: Nullable(Decimal(18, 6))
+    description: Salary Max signifies the maximum amount an employee should be paid within a respective range.
+    unit: USD
+  rate_1:
+    type: Nullable(Decimal(18, 6))
+    description: This is the base hourly Rate that the employee is paid for most earnings in the system. Usually this is used
+      for regular hours or other earnings that are designated as rate 1 earnings.
+    unit: USD
+  employee_pay_type:
+    type: LowCardinality(Nullable(String))
+    description: The type of pay the employee gets. It can be one of these 'Comission Only', 'Salary' and 'Hourly'.
+    values:
+    - Commission Only
+    - Hourly
+    - Salary
+  position_pay_type:
+    type: LowCardinality(Nullable(String))
+    description: The type of pay the this position gets. It can be one of these 'Comission Only', 'Salary' and 'Hourly'.
+    values:
+    - Commission Only
+    - None
+    - Salary
+  paycode_profile_code:
+    type: Nullable(String)
+    description: A unique 3 digit alphanumeric code provided by the user that is set when creating a Benefit Eligibility Profile.
+    client_defined: true
+  paycode_profile_description:
+    type: Nullable(String)
+    description: description or name of the Benefit Eligibility Profile set by the user in addition to the Profile code. The
+      description is a short name that describes the class of employees the profile is set up for.
+  pay_frequency:
+    type: Nullable(String)
+    description: Schedule indicating how often the employee receives compensation payments.
+  payroll_profile_fein:
+    type: Nullable(String)
+    description: Payroll Profile FEIN
+  pay_class:
+    type: Nullable(String)
+    description: A pay class is a set of rules governing how employees earn time and include all rules associated with employee
+      punches, rounding and grace periods. Pay classes are user-specific and set up by Paycom based on the information you
+      provide. This can be found in form 10 of the employee forms.
+  earning_profile:
+    type: Nullable(String)
+    description: Earning Profile will pull the name of the Earnings Profile that is assigned to an employee. Earning Profiles
+      allow the client specify which earnings will be available for supervisors and employees to add/edit.
+  schedule_group:
+    type: Nullable(String)
+    description: The Schedule Group represents the schedule the employee is apart of and the shift that are apart of the group.
+  last_check_date:
+    type: Nullable(DateTime64(6))
+    description: This is the date the employee was paid on last
+  direct_deposit:
+    type: Nullable(UInt8)
+    description: This is a flag on whether or not the employee uses direct deposit for their pay
+    values:
+    - 0
+    - 1
+  labor_allocation_key_1:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 1. Join labor_allocation_key_1 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_2:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 2. Join labor_allocation_key_2 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_3:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 3. Join labor_allocation_key_3 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_4:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 4. Join labor_allocation_key_4 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_5:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 5. Join labor_allocation_key_5 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_6:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 6. Join labor_allocation_key_6 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_7:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 7. Join labor_allocation_key_7 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_8:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 8. Join labor_allocation_key_8 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_9:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 9. Join labor_allocation_key_9 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_10:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 10. Join labor_allocation_key_10 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_11:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 11. Join labor_allocation_key_11 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_12:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 12. Join labor_allocation_key_12 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_13:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 13. Join labor_allocation_key_13 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_14:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 14. Join labor_allocation_key_14 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_15:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 15. Join labor_allocation_key_15 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_16:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 16. Join labor_allocation_key_16 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_17:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 17. Join labor_allocation_key_17 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_18:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 18. Join labor_allocation_key_18 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_19:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 19. Join labor_allocation_key_19 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
+  labor_allocation_key_20:
+    type: Nullable(String)
+    description: Labor allocation join key for dimension 20. Join labor_allocation_key_20 to labor_allocation.join_key to resolve
+      the allocation code and description; tenant scope is applied server-side by the row policy.
+    client_defined: true
 rules:
-  - id: active_employee
-    predicate: "EmployeeStatus = 'A'"
-    applies_when: user asks for active/current active employees
-    description: Restrict to active employees.
-
-  - id: exclude_not_hired_default
-    predicate: "EmployeeStatus != 'N' OR EmployeeStatus IS NULL"
-    applies_when: default for employee-based analysis when no explicit status filter (e.g. active_employee) is applied
-    description: Exclude not-hired (pre-hire) records by default because they were never actually hired. Headcount uses active_employee instead, which already excludes 'N' — do not stack both defaults.
-
-  - id: rehired_not_terminated
-    predicate: "TerminationDate IS NULL OR MostRecentHireDate IS NULL OR MostRecentHireDate < TerminationDate"
-    applies_when: termination-status evaluation — compose as `EmployeeStatus = 'T' AND <this guard>`
-    description: >
-      Rehire guard for the `terminated` resolution: excludes anyone rehired on/after their
-      TerminationDate (MostRecentHireDate >= TerminationDate ⇒ not currently terminated).
-      ASSUMPTION to confirm: rehire is signalled by MostRecentHireDate advancing past TerminationDate.
-
+- id: active_employee
+  predicate: employee_status = 'A'
+  applies_when: User asks for active/current active employees.
+  description: Restrict to active employees.
+- id: exclude_not_hired_default
+  predicate: employee_status != 'N' OR employee_status IS NULL
+  applies_when: Default employee analysis without an explicit status filter.
+  description: Exclude not-hired records by default.
+- id: rehired_not_terminated
+  predicate: termination_date IS NULL OR most_recent_hire_date IS NULL OR most_recent_hire_date < termination_date
+  applies_when: Termination-status evaluation.
+  description: Apply with the requested termination-state filter and account for rehire timing.
+- id: missing_date_sentinel
+  predicate: <date_column> != toDateTime64('1900-01-01 00:00:00', 6)
+  applies_when: Filtering for populated employee dates on fields that use default date sentinels.
+  description: Several nullable DateTime64 fields use 1900-01-01 00:00:00.000000 as a missing/default date rather than NULL.
 ambiguities:
-  - term: headcount
-    resolves_to: [ "COUNT(DISTINCT EmployeeCode) with EmployeeStatus = 'A'" ]
-    default: active_only
-    clarify_if: user asks for all employees, historical employees, terminated employees, or including not-hired records
-
-  - term: hire_date
-    resolves_to: [ MostRecentHireDate ]
-    default: most_recent_hire
-    clarify_if: user asks for original hire date or rehire-specific analysis
-
-  - term: terminated
-    resolves_to: [ "EmployeeStatus = 'T' with rehire check using MostRecentHireDate vs TerminationDate" ]
-    default: current_termination_state
-    clarify_if: user asks for termination events regardless of rehire
-
-  - term: manager
-    resolves_to: [ Position ]
-    default: position_based
-    clarify_if: user needs an exact business-defined manager population
-
-  - term: supervisor
-    resolves_to:
-      - PrimarySupervisorEmployeeName
-      - SecondarySupervisorEmployeeName
-      - TertiarySupervisorEmployeeName
-      - QuaternarySupervisorEmployeeName
-    default: primary_supervisor_name_best_effort
-    clarify_if: >
-      DATA LIMITATION — org hierarchy is exposed ONLY as supervisor NAME strings; there is no
-      SupervisorEmployeeCode and no reliable self-join key. "Who reports to X", span-of-control, and
-      org rollups must match Primary…Quaternary SupervisorEmployeeName against employee names, which is
-      non-unique and breaks on duplicate/changed names. Treat name matching as best-effort, not a
-      foreign key; confirm the supervisor identity and prefer asking which supervisor tier is meant.
-
-  - term: annual salary
-    resolves_to: [ AnnualSalary ]
-    default: employee_annual_salary
-    clarify_if: >
-      NOT ambiguous — "annual salary" / "total annual salary" (including department-filtered rollups
-      like SUM(AnnualSalary) GROUP BY Department) is always employee.AnnualSalary. Both the "annual"
-      qualifier and a department filter point to this table; do NOT re-check payroll, which holds only
-      per-period line items (no annual amount, temporally gated). Fall through to the broader 'salary'
-      ambiguity below only if the user explicitly asks for actually-PAID earnings or net/take-home pay.
-
-  - term: salary
-    resolves_to:
-      - AnnualSalary                                                    # planned annual (employee) — NOT actually paid
-      - Rate1                                                           # base rate (employee)
-      - "payroll gross earnings = SUM(Amount) WHERE RegisterType = 'EARN'"   # actually paid (payroll, per period)
-      - "payroll net pay = SUM(Amount) WHERE RegisterType = 'NETPAYDIST'"    # take-home (payroll, per period)
-    default: planned_annual_salary
-    clarify_if: >
-      For "annual salary" use AnnualSalary directly (see the 'annual salary' entry above) — this broader
-      ambiguity applies only when planned-vs-actual is genuinely unclear.
-      "salary" / "pay" / "compensation" is ambiguous across tables and meanings — planned AnnualSalary
-      (employee, not actually paid) vs base Rate1 vs actually-paid gross earnings (payroll EARN) vs
-      take-home net pay (payroll NETPAYDIST). Clarify planned-vs-actual and gross-vs-net; payroll
-      figures additionally require a pinned pay period (temporal gate).
+- term: hire_date
+  resolves_to:
+  - hire_date
+  - most_recent_hire_date
+  - rehire_date
+  default: most_recent_hire_date
+  clarify_if: The question distinguishes original hire from most recent hire or rehire.
+- term: supervisor
+  resolves_to:
+  - primary_supervisor_ee_code
+  - secondary_supervisor_ee_code
+  - tertiary_supervisor_ee_code
+  - quaternary_supervisor_ee_code
+  default: primary_supervisor_ee_code
+  clarify_if: A non-primary supervisor level is intended.
+- term: department
+  resolves_to:
+  - department_code
+  - department_name
+  - department.department_name
+  default: department_name for display and department_code for filtering
+  clarify_if: Conformed dimensional attributes are required.
+- term: labor_allocation
+  resolves_to:
+  - labor_allocation_key_1
+  - labor_allocation_key_2
+  - labor_allocation_key_3
+  - labor_allocation_key_4
+  - labor_allocation_key_5
+  - labor_allocation_key_6
+  - labor_allocation_key_7
+  - labor_allocation_key_8
+  - labor_allocation_key_9
+  - labor_allocation_key_10
+  - labor_allocation_key_11
+  - labor_allocation_key_12
+  - labor_allocation_key_13
+  - labor_allocation_key_14
+  - labor_allocation_key_15
+  - labor_allocation_key_16
+  - labor_allocation_key_17
+  - labor_allocation_key_18
+  - labor_allocation_key_19
+  - labor_allocation_key_20
+  default: Use the specifically requested allocation type
+  clarify_if: The allocation type number is not identified.
+schema_notes:
+- employee_pay_type and position_pay_type are LowCardinality(Nullable(String)).
+- labor_allocation_key_1 through labor_allocation_key_20 join independently to labor_allocation using client_code + proc_center
+  + join_key.
+- Date fields with observed 1900-01-01 00:00:00.000000 sentinel values include rehire_date, termination_date, old_termination_date,
+  seniority_date, leave_absence_start, leave_absence_end, full_time_to_part_time_date, last_worked_date, date_of_birth, and
+  last_check_date.
+mcp_projection:
+  hidden_columns:
+  - client_code
+  - proc_center
+  notes:
+  - client_code and proc_center are enforced by row-level policy and omitted from exposed columns and joins.
+row_scope:
+  implicit_filters:
+  - client_code
+  - proc_center
+  enforced_by: ClickHouse row policy

@@ -43,6 +43,9 @@ WRONG_PRIVATE_PEM = _pem(_WRONG_PRIVATE_KEY)
 def make_jwt(
     *,
     user_name: str = "alice",
+    client_code: str = "CLIENT_A",
+    proc_center: str = "PC01",
+    jti: str = "TESTJTI001",
     sub: str = "user-1",
     issuer: str | None = None,
     audience: str | None = None,
@@ -50,6 +53,7 @@ def make_jwt(
     algorithm: str = "RS256",
     signing_key: bytes | None = None,
     include_user_name: bool = True,
+    include_tenant_claims: bool = True,
     include_column_scope: bool = True,
     column_scope: list | None = None,
     session_id: str | None = None,
@@ -57,12 +61,18 @@ def make_jwt(
 ) -> str:
     """Mint a signed JWT for tests.
 
-    Defaults produce a fully valid token carrying the ``user_name`` tenant claim
-    and a ``column_scope`` JSON list.
+    Defaults produce a fully valid token carrying the three warehouse tenant
+    claims — ``clientcode`` / ``proc_center`` / ``jti`` (the claims the default
+    CLICKHOUSE_TENANT_SETTINGS map fills paycom_client_code / paycom_proc_center /
+    paycom_authenticated_user from) — plus a ``column_scope`` JSON list. A legacy
+    ``user_name`` claim is also included (some tests still assert on it); it is no
+    longer a tenant claim.
 
     Override the keyword args to exercise negative cases (expired, wrong
     audience/issuer, missing tenant claim, bad signature, alg=none, missing
-    scope, ...).
+    scope, ...).  ``include_tenant_claims=False`` omits all three tenant claims
+    (for the MISSING_TENANT_CLAIM 403 path); pass a blank value (e.g.
+    ``client_code="   "``) to exercise the blank-claim rejection.
 
     ``column_scope`` defaults to an empty list (no column restrictions) when
     ``include_column_scope=True``.  Pass a list of strings to restrict scope.
@@ -84,6 +94,10 @@ def make_jwt(
     }
     if include_user_name:
         claims["user_name"] = user_name
+    if include_tenant_claims:
+        claims["clientcode"] = client_code
+        claims["proc_center"] = proc_center
+        claims["jti"] = jti
     if include_column_scope:
         scope_list = column_scope if column_scope is not None else []
         claims["column_scope"] = _json.dumps(scope_list)

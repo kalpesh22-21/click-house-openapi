@@ -171,10 +171,17 @@ class Settings(BaseSettings):
     # JSON object mapping a ClickHouse custom-setting name -> the JWT claim that
     # fills it.  Each authenticated query injects settings[ch_setting] = jwt[claim]
     # via the trusted settings= channel (never concatenated into SQL).  ClickHouse
-    # row policies read getSetting('SQL_tenant') to filter rows per tenant.
-    # Example: CLICKHOUSE_TENANT_SETTINGS='{"SQL_tenant": "user_name"}'
+    # row policies read e.g. getSetting('paycom_client_code') to filter rows per
+    # tenant.  The default maps the three settings the warehouse row policies read:
+    #   paycom_client_code       <- 'clientcode' claim   (caller's client code)
+    #   paycom_proc_center       <- 'proc_center' claim   (caller's processing center)
+    #   paycom_authenticated_user <- 'jti' claim          (stable per-user id)
     clickhouse_tenant_settings: Dict[str, str] = Field(
-        default_factory=lambda: {"SQL_tenant": "user_name"},
+        default_factory=lambda: {
+            "paycom_client_code": "clientcode",
+            "paycom_proc_center": "proc_center",
+            "paycom_authenticated_user": "jti",
+        },
         description=(
             "JSON object mapping ClickHouse custom-setting name to the JWT claim "
             "that fills it. Keys must start with CLICKHOUSE_CUSTOM_SETTINGS_PREFIX "
@@ -182,7 +189,7 @@ class Settings(BaseSettings):
         ),
     )
     clickhouse_custom_settings_prefix: str = Field(
-        "SQL_",
+        "paycom_",
         description=(
             "Required prefix for tenant custom-setting keys. Must match the "
             "ClickHouse server's <custom_settings_prefixes> configuration."
@@ -305,17 +312,19 @@ class Settings(BaseSettings):
     )
 
     # --- Employee row-level-security (RLS) access provisioning ---
-    # Populates security.user_employee_access, the table the dbpcm_warehouse.employee
-    # row policy reads to scope each tenant (identified by its stable composite JTI)
-    # to only the employees it may see.  See app/employee_access.py for the full
-    # design (ReplacingMergeTree pull_id gate, staleness-gated refresh, sentinel
-    # row, fail-closed-loud).  Disabled by default so existing deploys are unaffected.
+    # Populates dbpcm_warehouse_security.user_employee_access, the table the
+    # dbpcm_warehouse.employee row policy reads to scope each tenant (identified by
+    # its stable jti) to only the employees it may see.  See app/employee_access.py
+    # for the full design (ReplacingMergeTree pull_id gate, staleness-gated refresh,
+    # sentinel row, fail-closed-loud).  Disabled by default so existing deploys are
+    # unaffected.
     employee_access_enabled: bool = Field(
         False,
         description=(
             "Enable per-request employee-access provisioning for the employee row "
             "policy. When true, EEACCESS_BASE_URL must be set and the tenant-settings "
-            "map should expose SQL_TENANT/SQL_CLIENTCODE/SQL_PROCCENTER."
+            "map should expose paycom_client_code/paycom_proc_center/"
+            "paycom_authenticated_user."
         ),
     )
     employee_access_refresh_seconds: int = Field(
@@ -327,17 +336,18 @@ class Settings(BaseSettings):
             "the Redis freshness-marker TTL. Default 600s (10 min)."
         ),
     )
-    # NOTE: the row-level TTL on security.user_employee_access is defined in the
-    # DBA-owned CREATE TABLE (see app/employee_access.py), NOT here — the app never
-    # creates that table. Recommended `TTL UpdatedAt + INTERVAL 1 DAY` (must exceed N).
+    # NOTE: the row-level TTL on dbpcm_warehouse_security.user_employee_access is
+    # defined in the DBA-owned CREATE TABLE (see app/employee_access.py), NOT here —
+    # the app never creates that table. Recommended `TTL updated_at + INTERVAL 1 DAY`
+    # (must exceed N).
     security_database: str = Field(
-        "security",
+        "dbpcm_warehouse_security",
         description="ClickHouse database holding user_employee_access (never the warehouse).",
     )
-    # Claim names the JTI / clientcode / proc_center are read from (the JTI keys the
+    # Claim names the jti / clientcode / proc_center are read from (the jti keys the
     # access table and identifies the user to /cl/eeaccess).
     employee_access_jti_claim: str = Field(
-        "jti", description="JWT claim carrying the stable composite JTI (row-policy key)."
+        "jti", description="JWT claim carrying the stable per-user id (row-policy key)."
     )
     # External access API (/cl/eeaccess).  The caller's own JWT is forwarded as a
     # Bearer credential (see _fetch_employee_codes), so no service key is needed.
@@ -380,7 +390,7 @@ class Settings(BaseSettings):
     )
     # Security-writer ClickHouse credential (mirrors SCRATCH_CH_*): a distinct,
     # server-side-only account GRANTed only INSERT + SELECT on
-    # `security.user_employee_access` (the table + row policy are DBA-owned; the
+    # `dbpcm_warehouse_security.user_employee_access` (the table + row policy are DBA-owned; the
     # app never issues DDL, and refresh is append-only with TTL eviction — so no
     # CREATE/DELETE/ALTER is needed).  Unset fields fall back to the main
     # CLICKHOUSE_* connection for dev/single-user convenience; a production deploy

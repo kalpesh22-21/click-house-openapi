@@ -347,9 +347,9 @@ class TestRealCatalogHasNameCollisions:
     def test_production_catalog_has_cross_table_column_name_collisions(self):
         """Confirms the xfail tests above are not purely synthetic: the real
         copied-in catalog under app/semantic_catalog/data/ has column names
-        (e.g. EmployeeCode, ClientCode) authored identically across multiple
+        (e.g. employee_code, client_code) authored identically across multiple
         tables, which is exactly the precondition that defeats the
-        single-candidate cross-table resolver in overlay.py."""
+        single-candidate cross-table resolver in overlay.py. (snake_case, D70.)"""
         from app.semantic_catalog.loader import load_semantic_catalog
 
         catalog = load_semantic_catalog()
@@ -358,8 +358,8 @@ class TestRealCatalogHasNameCollisions:
             for col_name in (entry.get("columns") or {}):
                 index.setdefault(col_name, set()).add(key)
         collisions = {name: tables for name, tables in index.items() if len(tables) > 1}
-        assert "EmployeeCode" in collisions
-        assert len(collisions["EmployeeCode"]) >= 2
+        assert "employee_code" in collisions
+        assert len(collisions["employee_code"]) >= 2
 
 
 # ===========================================================================
