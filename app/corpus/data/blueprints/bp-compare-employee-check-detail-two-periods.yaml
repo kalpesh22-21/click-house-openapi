@@ -1,0 +1,79 @@
+id: bp-compare-employee-check-detail-two-periods
+intent: Compare a single employee's two paychecks line-item by line-item across two pay periods, with per-item deltas
+slots_summary: employee, period_a, period_b
+status: validated
+drift_status: clean
+catalog_sha: ''
+uses:
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.pay_period_end_date
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.type_code
+- dbpcm_warehouse.payroll.type_code_description
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.type_hours
+slots:
+- name: employee
+  type: string
+  required: true
+  binds_to: dbpcm_warehouse.payroll.employee_code
+- name: period_a
+  type: period
+  required: true
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+- name: period_b
+  type: period
+  required: true
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+result_grain:
+- register_type
+- type_code
+composes:
+- order: 0
+  output:
+    detail_a: table
+  sql_template: |
+    SELECT toString(register_type) AS register_type,
+           toString(type_code) AS type_code,
+           any(toString(type_code_description)) AS type_code_description,
+           toFloat64(SUM(amount)) AS amount,
+           toFloat64(SUM(type_hours)) AS hours
+    FROM dbpcm_warehouse.payroll
+    WHERE employee_code = {employee}
+      AND pay_period_end_date = {period_a}
+    GROUP BY register_type, type_code
+- order: 1
+  output:
+    detail_b: table
+  sql_template: |
+    SELECT toString(register_type) AS register_type,
+           toString(type_code) AS type_code,
+           any(toString(type_code_description)) AS type_code_description,
+           toFloat64(SUM(amount)) AS amount,
+           toFloat64(SUM(type_hours)) AS hours
+    FROM dbpcm_warehouse.payroll
+    WHERE employee_code = {employee}
+      AND pay_period_end_date = {period_b}
+    GROUP BY register_type, type_code
+- order: 2
+  feeds_from:
+  - 0
+  - 1
+  consumes:
+    detail_a: $0
+    detail_b: $1
+  output: {}
+  sql_template: |
+    SELECT coalesce(a.register_type, b.register_type) AS register_type,
+           coalesce(a.type_code, b.type_code) AS type_code,
+           coalesce(a.type_code_description, b.type_code_description) AS type_code_description,
+           coalesce(a.amount, 0) AS amount_a,
+           coalesce(b.amount, 0) AS amount_b,
+           coalesce(b.amount, 0) - coalesce(a.amount, 0) AS amount_delta,
+           coalesce(a.hours, 0) AS hours_a,
+           coalesce(b.hours, 0) AS hours_b
+    FROM scratch.detail_a AS a
+    FULL OUTER JOIN scratch.detail_b AS b
+      ON a.register_type = b.register_type AND a.type_code = b.type_code
+    ORDER BY coalesce(a.register_type, b.register_type),
+             coalesce(a.type_code, b.type_code)

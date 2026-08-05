@@ -1,0 +1,36 @@
+id: bp-overtime-by-department
+intent: Total overtime pay by department for a given pay period
+slots_summary: department, pay_period
+status: validated
+drift_status: clean
+catalog_sha: ''
+uses:
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.pay_period_end_date
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name
+resolves:
+  overtime: gross_earnings
+slots:
+- name: department
+  type: string
+  required: true
+  binds_to: dbpcm_warehouse.employee.department_name
+- name: pay_period
+  type: period
+  required: true
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+uses_rules:
+- gross_earnings
+result_grain:
+- Department
+sql_template: |
+  SELECT e.department_name AS department, SUM(p.amount) AS overtime_pay
+  FROM dbpcm_warehouse.payroll AS p
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
+  WHERE p.register_type = 'EARN'
+    AND e.department_name = {department}
+    AND p.pay_period_end_date = {pay_period}
+  GROUP BY e.department_name

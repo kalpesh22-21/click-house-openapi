@@ -1,0 +1,30 @@
+id: bp-departments-above-company-average-salary
+intent: Departments whose average salary exceeds the company-wide average
+slots_summary: ''
+status: validated
+drift_status: clean
+catalog_sha: ''
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.annual_salary
+result_grain:
+- Department
+composes:
+- order: 0
+  output:
+    company_avg: scalar
+  sql_template: |
+    SELECT AVG(annual_salary) AS company_avg
+    FROM dbpcm_warehouse.employee
+- order: 1
+  feeds_from:
+  - 0
+  consumes:
+    company_avg: $0.company_avg
+  output: {}
+  sql_template: |
+    SELECT department_name AS department, AVG(annual_salary) AS dept_avg
+    FROM dbpcm_warehouse.employee
+    GROUP BY department_name
+    HAVING AVG(annual_salary) > {company_avg}

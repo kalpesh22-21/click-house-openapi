@@ -1,0 +1,24 @@
+id: bp-active-headcount-by-department
+intent: Active employee headcount by department
+slots_summary: department
+status: validated
+drift_status: clean
+catalog_sha: ''
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status
+slots:
+- name: department
+  type: string
+  required: true
+  binds_to: dbpcm_warehouse.employee.department_name
+uses_rules:
+- active_employee
+result_grain:
+- Department
+sql_template: |
+  SELECT department_name AS department, COUNT(DISTINCT employee_code) AS headcount
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'A' AND department_name = {department}
+  GROUP BY department_name

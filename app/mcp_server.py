@@ -69,6 +69,7 @@ from starlette.responses import JSONResponse
 from app.auth_jwt import JWTAuthError, validate_token
 from app.config import get_settings
 from app.principal import current_principal, current_scope, current_session_id
+from app.corpus.export import build_blueprints_export, build_knowledge_export
 from app.errors import (
     CartesianJoinError,
     ClickHouseQueryError,
@@ -635,6 +636,46 @@ async def catalog_export_route(request: Request) -> JSONResponse:
     payload.
     """
     return JSONResponse(build_catalog_export())
+
+
+# ---------------------------------------------------------------------------
+# Corpus-export side-channels (Phase 1: MCP-owned blueprint + knowledge corpus)
+#
+# Like /catalog/export above, these are PRIVILEGED, NON-TOOL routes: they are NOT
+# registered with @mcp.tool, so the agent LLM never sees them and cannot call them
+# (invariant #5). The AGENT reaches this MCP HTTP app via its mcp_url, so these
+# bootstrap endpoints MUST live here (not on the separate REST app). They ride the
+# same MCP app behind JWTAuthMiddleware, so a valid Bearer JWT is required
+# (default-deny: not in the middleware's public_paths). They are
+# scope-INDEPENDENT and session-INDEPENDENT: every authenticated principal gets
+# the identical full corpus. Blueprints and knowledge are versioned independently
+# (separate SHAs), so they are served by two distinct routes.
+# ---------------------------------------------------------------------------
+
+@mcp.custom_route("/blueprints/export", methods=["GET"])
+async def blueprints_export_route(request: Request) -> JSONResponse:
+    """Return the full, scope-independent blueprint corpus export (Phase 1).
+
+    Auth is enforced by JWTAuthMiddleware (a valid Bearer token is required; the
+    path is default-deny). The body is ``build_blueprints_export()`` verbatim: the
+    ``blueprints_sha`` content fingerprint plus every blueprint entry (each stamped
+    with the constant ``source: "mcp"`` / ``verified: true``). No column-scope
+    filtering is applied — every valid principal gets the identical payload.
+    """
+    return JSONResponse(build_blueprints_export())
+
+
+@mcp.custom_route("/knowledge/export", methods=["GET"])
+async def knowledge_export_route(request: Request) -> JSONResponse:
+    """Return the full, scope-independent knowledge corpus export (Phase 1).
+
+    Auth is enforced by JWTAuthMiddleware (a valid Bearer token is required; the
+    path is default-deny). The body is ``build_knowledge_export()`` verbatim: the
+    ``knowledge_sha`` content fingerprint plus every knowledge entry (each stamped
+    with the constant ``source: "mcp"`` / ``verified: true``). No column-scope
+    filtering is applied — every valid principal gets the identical payload.
+    """
+    return JSONResponse(build_knowledge_export())
 
 
 # ---------------------------------------------------------------------------

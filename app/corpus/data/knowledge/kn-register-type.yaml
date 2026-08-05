@@ -1,0 +1,5 @@
+id: kn-register-type
+title: Payroll register types
+doc_id: hr-glossary
+status: validated
+text: The register type classifies each payroll amount, for example regular pay, overtime, bonus or deduction. Filtering by register type isolates a single category of pay when aggregating amounts.

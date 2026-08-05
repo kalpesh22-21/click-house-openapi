@@ -1,0 +1,41 @@
+id: bp-earnings-by-department-via-scratch-join
+intent: Total earnings by department, materializing per-employee earnings and joining departments
+slots_summary: department
+status: validated
+drift_status: clean
+catalog_sha: ''
+uses:
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name
+slots:
+- name: department
+  type: string
+  required: true
+  binds_to: dbpcm_warehouse.employee.department_name
+result_grain:
+- Department
+composes:
+- order: 0
+  output:
+    emp_earnings: table
+  sql_template: |
+    SELECT toString(p.employee_code) AS employee_code,
+           toFloat64(SUM(p.amount)) AS earnings
+    FROM dbpcm_warehouse.payroll AS p
+    WHERE p.register_type = 'EARN'
+    GROUP BY p.employee_code
+- order: 1
+  feeds_from:
+  - 0
+  consumes:
+    emp_earnings: $0
+  output: {}
+  sql_template: |
+    SELECT e.department_name AS department, SUM(x.earnings) AS total_earnings
+    FROM scratch.emp_earnings AS x
+    JOIN dbpcm_warehouse.employee AS e ON e.employee_code = x.employee_code
+    WHERE e.department_name = {department}
+    GROUP BY e.department_name

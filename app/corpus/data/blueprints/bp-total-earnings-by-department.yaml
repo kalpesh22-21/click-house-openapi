@@ -1,0 +1,31 @@
+id: bp-total-earnings-by-department
+intent: Total earnings for a department, resolving the earnings register codes dynamically
+slots_summary: department
+status: validated
+drift_status: clean
+catalog_sha: ''
+uses:
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name
+slots:
+- name: department
+  type: string
+  required: true
+  binds_to: dbpcm_warehouse.employee.department_name
+uses_rules:
+- id: earnings_only
+  resolve_via: resolveValues(register_type, 'earnings')
+  table: dbpcm_warehouse.payroll
+  binds: earn_codes
+result_grain:
+- Department
+sql_template: |
+  SELECT e.department_name AS department, SUM(p.amount) AS total_earnings
+  FROM dbpcm_warehouse.payroll AS p
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
+  WHERE p.register_type IN {earn_codes}
+    AND e.department_name = {department}
+  GROUP BY e.department_name
