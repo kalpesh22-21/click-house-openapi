@@ -51,6 +51,7 @@ LLM usage pattern:
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import logging
 import sys
@@ -370,6 +371,10 @@ def explain_query(
 # intentionally-trusted transport.)
 SESSION_ID_HEADER = "x-session-id"
 
+# Static service-API-key header accepted on the scope-independent export routes
+# only (see JWTAuthMiddleware). It is an EITHER-OR alternative to a Bearer JWT.
+SERVICE_KEY_HEADER = "x-service-key"
+
 
 def _bearer_from_scope(scope: dict[str, Any]) -> Optional[str]:
     """Extract the Bearer token from an ASGI scope, or None if absent/malformed."""
@@ -386,6 +391,16 @@ def _bearer_from_scope(scope: dict[str, Any]) -> Optional[str]:
 def _session_id_from_scope(scope: dict[str, Any]) -> Optional[str]:
     """Extract the X-Session-Id header from an ASGI scope, or None if absent/empty."""
     target = SESSION_ID_HEADER.encode("latin-1")
+    for name, value in scope.get("headers", []):
+        if name == target:
+            decoded = value.decode("latin-1").strip()
+            return decoded or None
+    return None
+
+
+def _service_key_from_scope(scope: dict[str, Any]) -> Optional[str]:
+    """Extract the X-Service-Key header from an ASGI scope, or None if absent/empty."""
+    target = SERVICE_KEY_HEADER.encode("latin-1")
     for name, value in scope.get("headers", []):
         if name == target:
             decoded = value.decode("latin-1").strip()
@@ -460,10 +475,19 @@ class JWTAuthMiddleware:
     # always served without auth, regardless of the configured public_paths.
     _OAUTH_PRM_PREFIX = "/.well-known/oauth-protected-resource"
 
+    # Scope-independent export routes that additionally accept a static service
+    # API key (X-Service-Key) as an EITHER-OR alternative to a user JWT. These
+    # read no principal/scope/session, so a service-key request needs no binding.
+    # The service-key bypass is strictly limited to this set.
+    _EXPORT_PATHS = ("/catalog/export", "/blueprints/export", "/knowledge/export")
+
     def __init__(self, app, settings, public_paths: tuple[str, ...] = ("/health",)) -> None:
         self.app = app
         self.settings = settings
         self._public_paths = frozenset(p.rstrip("/") or "/" for p in public_paths)
+        self._export_paths = frozenset(
+            p.rstrip("/") or "/" for p in self._EXPORT_PATHS
+        )
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
@@ -474,6 +498,36 @@ class JWTAuthMiddleware:
         if path in self._public_paths or path.startswith(self._OAUTH_PRM_PREFIX):
             await self.app(scope, receive, send)
             return
+
+        # Static service-API-key bypass — EXPORT PATHS ONLY, and only when a
+        # non-empty key is configured (empty ⇒ feature OFF / fail-closed: an empty
+        # configured key must never match, so a missing/empty X-Service-Key can't
+        # authenticate). A matching key lets a trusted system hydrator fetch the
+        # scope-independent export routes WITHOUT a user JWT; the export handlers
+        # read no principal/scope/session, so no contextvars are bound here.
+        # On absent/mismatched key we do NOT reject — we fall through to the
+        # existing JWT path unchanged, so a valid user JWT still authenticates
+        # (EITHER-OR). hmac.compare_digest keeps the compare constant-time.
+        #
+        # The `path in self._export_paths` membership is exact (both sides
+        # rstrip('/')-normalized), and its safety depends on NOTHING being mounted
+        # under any of the export paths (e.g. /catalog/export/*): the trailing-slash
+        # laxity is only sound because no such sub-route exists, so a normalized
+        # match can only ever hit the intended export handler.
+        #
+        # Compare on BYTES, not str: the header is decoded latin-1, so an attacker
+        # can deliver any byte 0x80–0xFF, and hmac.compare_digest raises TypeError
+        # on non-ASCII str args — a remotely-triggerable 500 at the auth boundary.
+        # Both sides always encode cleanly to utf-8, so the compare is total (and
+        # still constant-time). A non-ASCII header simply won't match an ASCII key.
+        service_key = self.settings.mcp_service_key
+        if path in self._export_paths and service_key:
+            presented = _service_key_from_scope(scope)
+            if presented is not None and hmac.compare_digest(
+                presented.encode("utf-8"), service_key.encode("utf-8")
+            ):
+                await self.app(scope, receive, send)
+                return
 
         token = _bearer_from_scope(scope)
         if token is None:

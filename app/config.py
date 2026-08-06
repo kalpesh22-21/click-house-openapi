@@ -250,6 +250,26 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Static service API key for the MCP export side-channels ---
+    # A shared secret that lets a trusted system hydrator fetch the scope-
+    # independent export routes (/catalog/export, /blueprints/export,
+    # /knowledge/export) WITHOUT a user JWT, via the X-Service-Key header. It is
+    # an EITHER-OR alternative to a Bearer JWT and applies ONLY to those export
+    # paths (see JWTAuthMiddleware). Empty (the default) means the feature is OFF
+    # and FAIL-CLOSED: an empty configured key must NEVER match, so a missing or
+    # empty X-Service-Key can never authenticate. Secret; belongs in Vault
+    # (MCP_SERVICE_KEY_VAULT_PATH) when enabled.
+    mcp_service_key: str = Field(
+        "",
+        description=(
+            "Static shared secret accepted on the MCP export routes via the "
+            "X-Service-Key header (constant-time compared), as an EITHER-OR "
+            "alternative to a user JWT. Export-paths only. Empty → feature OFF "
+            "and fail-closed (an empty key never matches). Secret; from Vault "
+            "when enabled."
+        ),
+    )
+
     # --- Scratch-reference fail-closed gate (ADR-0002, H3) ---
     # When true, ANY query that references the scratch database is fail-closed
     # unless it belongs to the current session — enforced on ALL transports incl.
@@ -520,6 +540,14 @@ class Settings(BaseSettings):
         description=(
             "Vault KV path holding the employee-access Redis URL (key: REDIS_URL). "
             "Empty → use env/default."
+        ),
+    )
+    mcp_service_key_vault_path: str = Field(
+        "",
+        description=(
+            "Vault KV path holding the MCP export service key (key: "
+            "MCP_SERVICE_KEY). Empty → use env/default (and, if that is also "
+            "empty, the service-key path stays OFF / fail-closed)."
         ),
     )
 
@@ -874,6 +902,12 @@ def load_settings_from_vault() -> Settings:
     if settings.redis_vault_path:
         settings.redis_url = _read_vault_secret(
             vc, "REDIS_URL", settings.redis_vault_path, settings.redis_url
+        )
+
+    # --- MCP export service key ---
+    if settings.mcp_service_key_vault_path:
+        settings.mcp_service_key = _read_vault_secret(
+            vc, "MCP_SERVICE_KEY", settings.mcp_service_key_vault_path, settings.mcp_service_key
         )
 
     # Fail closed: Vault is enabled, so the core ClickHouse identity MUST be present.
