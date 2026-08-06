@@ -18,7 +18,9 @@ from app.errors import (
     ClickHouseAPIError,
     ClickHouseQueryError,
     ClickHouseUnavailableError,
+    ColumnScopeError,
     DatabaseNotAllowedError,
+    ParseFailedError,
     QueryValidationError,
     TableNotFoundError,
 )
@@ -141,6 +143,14 @@ _DOMAIN_ERROR_STATUS: dict[type, int] = {
     QueryValidationError: 400,
     CartesianJoinError: 400,
     ClickHouseQueryError: 400,
+    # ADR-0002/H3: scratch-session isolation now fires on REST too (a scratch
+    # reference on a scope-less REST request fails closed). These two never fired
+    # on REST before (scope was always None), so they were absent from this map and
+    # would have surfaced as a generic 500. Map them to clean 4xx:
+    #   ColumnScopeError → 403 (SCRATCH_SESSION_VIOLATION / COLUMN_SCOPE_VIOLATION)
+    #   ParseFailedError → 400 (PARSE_FAILED_CLOSED)
+    ColumnScopeError: 403,
+    ParseFailedError: 400,
     DatabaseNotAllowedError: 403,
     TableNotFoundError: 404,
     ClickHouseUnavailableError: 502,

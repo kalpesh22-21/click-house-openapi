@@ -197,16 +197,72 @@ class TestD64ScratchParseFailClosed:
         mock_execute.assert_not_called()
 
 
-class TestD64ScratchNoSessionIdNoCheck:
-    """D64-scratch-no-session-id-no-check — when scope is None (stdio), scratch names
-    are not validated.  This matches the stdio/local-trust path."""
+class TestScratchNoSessionFailsClosedEvenScopeless:
+    """ADR-0002 / H3 — with the gate ON (default), a scratch reference on the
+    scope-less/session-less path (stdio or REST shape) is now FAIL-CLOSED.
 
-    def test_D64_scratch_no_session_id_no_check(self, mock_execute, mock_catalog):
-        # scope=None → enforcement is entirely skipped, no session validation.
+    This SUPERSEDES the old D64 "no-session-id-no-check" behavior. The gate is
+    transport-agnostic: stdio has no production scratch use and cannot create
+    scratch tables, so a session-less scratch READ must be denied there too
+    (north-star: only the creating session ever sees its scratch table). The
+    legacy skip-and-execute behavior is now reachable ONLY via the off-switch
+    (require_session_scratch_gate=False), pinned by the companion test below."""
+
+    def test_scratch_scopeless_no_session_fails_closed(self, mock_execute, mock_catalog):
+        # scope=None + session=None + a scratch reference → SCRATCH_SESSION_VIOLATION.
+        # The scratch-reference pre-check triggers provenance even with no scope, so
+        # the None session can never prove ownership and the read is rejected.
         sql = (
             "SELECT employee_id "
             "FROM scratch.s_sessxyz_whatever"
         )
+        from app.principal import current_scope, current_session_id
+        scope_token = current_scope.set(None)
+        session_token = current_session_id.set(None)
+        try:
+            with pytest.raises(ColumnScopeError) as exc_info:
+                service.run_query(sql)
+        finally:
+            current_scope.reset(scope_token)
+            current_session_id.reset(session_token)
+        assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
+        mock_execute.assert_not_called()
+        # The catalog IS consulted now — provenance runs to validate the scratch ref.
+        mock_catalog.assert_called()
+
+    def test_scratch_scopeless_gate_off_reverts_to_skip_and_execute(
+        self, mock_execute, mock_catalog
+    ):
+        """Off-switch: with require_session_scratch_gate=False the scratch-reference
+        disjunct is disabled, so scope=None + session=None reverts to the legacy
+        skip-and-execute behavior (no provenance parse, query runs). This is the
+        ONE test that pins the pre-ADR-0002 permissive stdio path."""
+        from app.config import Settings
+        gate_off = Settings().model_copy(update={"require_session_scratch_gate": False})
+        sql = (
+            "SELECT employee_id "
+            "FROM scratch.s_sessxyz_whatever"
+        )
+        from app.principal import current_scope, current_session_id
+        scope_token = current_scope.set(None)
+        session_token = current_session_id.set(None)
+        try:
+            result = service.run_query(sql, settings=gate_off)
+        finally:
+            current_scope.reset(scope_token)
+            current_session_id.reset(session_token)
+        assert result is not None
+        mock_execute.assert_called_once()
+        # No catalog query was needed — enforcement skipped (legacy scope-only trigger).
+        mock_catalog.assert_not_called()
+
+    def test_warehouse_scopeless_still_skips_provenance_and_executes(
+        self, mock_execute, mock_catalog
+    ):
+        """GPT-unaffected invariant: a NON-scratch (warehouse) query on the same
+        scope-less/session-less path still skips provenance entirely and executes —
+        only scratch references trigger the gate."""
+        sql = "SELECT employee_id FROM analytics.employees"
         from app.principal import current_scope, current_session_id
         scope_token = current_scope.set(None)
         session_token = current_session_id.set(None)
@@ -217,7 +273,6 @@ class TestD64ScratchNoSessionIdNoCheck:
             current_session_id.reset(session_token)
         assert result is not None
         mock_execute.assert_called_once()
-        # No catalog query was needed
         mock_catalog.assert_not_called()
 
     def test_D64_scope_set_but_no_session_id_fails_closed_on_scratch(

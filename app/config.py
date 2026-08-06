@@ -250,6 +250,28 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Scratch-reference fail-closed gate (ADR-0002, H3) ---
+    # When true, ANY query that references the scratch database is fail-closed
+    # unless it belongs to the current session — enforced on ALL transports incl.
+    # REST/stdio, NOT just the scoped MCP path. This closes H3: on REST
+    # current_scope is None, so the legacy `scope is not None` trigger skipped
+    # scratch enforcement and a REST caller could read another session's scratch
+    # table. With this flag on, a scratch-referencing query triggers provenance
+    # extraction regardless of scope; a None/mismatched session then fails closed
+    # via _validate_scratch_name (SCRATCH_SESSION_VIOLATION). A normal warehouse
+    # query (no scratch reference) is unaffected — provenance is NOT run, so the
+    # GPT Action's ordinary queries keep working with no PARSE_FAILED_CLOSED
+    # regression. Default True; off-switch for a staged rollout — when False,
+    # behavior reverts to the legacy `scope is not None` trigger exactly.
+    require_session_scratch_gate: bool = Field(
+        True,
+        description=(
+            "When true, any query that references the scratch database is "
+            "fail-closed unless it belongs to the current session — enforced on "
+            "ALL transports incl. REST/stdio. Off-switch for staged rollout."
+        ),
+    )
+
     # --- Scratch-write side-channel (table-intermediate Slice 1) ---
     # The scratch-write endpoints (/scratch/v1/materialize, /scratch/v1/drop) run
     # under a DISTINCT, server-side-only ClickHouse credential that is GRANTed
@@ -697,6 +719,45 @@ class Settings(BaseSettings):
             "password": password,
             "secure": secure,
         }
+
+    @model_validator(mode="after")
+    def _validate_scratch_db_single_source(self) -> "Settings":
+        """Fail LOUD if SCRATCH_DATABASE diverges from the provenance extractor's
+        hardcoded scratch DB name (single source of truth, ADR-0002 review).
+
+        Two components must agree on which database is "scratch":
+          - ``_references_scratch_db`` (the ADR-0002 pre-check) scans for THIS
+            configurable ``scratch_database`` to decide whether to run provenance;
+          - the D64 ownership parser (``_validate_scratch_name`` /
+            ``_build_alias_map`` in app/sqlparse/provenance.py) treats the hardcoded
+            module constant ``_SCRATCH_DB`` as THE scratch database.
+
+        If they diverge (e.g. an operator sets ``SCRATCH_DATABASE=sandbox`` while
+        the parser still knows only ``scratch``), the pre-check would trip on
+        ``sandbox.*`` but provenance would treat ``sandbox.*`` as an uncatalogued
+        WAREHOUSE table → ``PARSE_FAILED_CLOSED`` even for the OWNER's own
+        legitimate scratch access (north-star broken), AND the gate would silently
+        stop recognising the real scratch DB. Rather than degrade silently, refuse
+        to boot until the two identifiers agree. (The parser constant is not
+        threaded through as a parameter in this slice — that would touch the whole
+        D64 ownership chain and its tests; this assertion is the low-risk guarantee
+        that the two can never diverge unnoticed.)
+        """
+        # Lazy import: keeps sqlglot (imported by provenance) off the config
+        # module-import path; this runs once per Settings construction.
+        from app.sqlparse.provenance import _SCRATCH_DB
+
+        if self.scratch_database != _SCRATCH_DB:
+            raise ValueError(
+                f"SCRATCH_DATABASE='{self.scratch_database}' diverges from the "
+                f"provenance extractor's scratch database '{_SCRATCH_DB}' "
+                "(app/sqlparse/provenance.py::_SCRATCH_DB). The scratch-reference "
+                "gate and the D64 ownership parser must name the SAME database, or "
+                "the fail-closed scratch gate silently degrades. Set SCRATCH_DATABASE "
+                f"to '{_SCRATCH_DB}', or update _SCRATCH_DB to match, so there is one "
+                "source of truth."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_employee_access(self) -> "Settings":

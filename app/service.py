@@ -109,6 +109,47 @@ def _execute(
         ) from exc
 
 
+def _references_scratch_db(sql: str, scratch_db: str) -> bool:
+    """Fail-closed-safe over-approximation: does *sql* reference the scratch DB?
+
+    Any REAL reference to a scratch table (``scratch.<tbl>``, the backtick-quoted
+    ``\\`scratch\\`.\\`<tbl>\\``, or the double-quoted ``"scratch"."<tbl>"``)
+    REQUIRES the literal scratch-database identifier to appear as a token in the
+    SQL. We replace identifier quote characters with WHITESPACE (NOT empty string)
+    and then search case-insensitively for the scratch_db name as a word-boundary
+    token.
+
+    Why replace-with-space, not delete: deleting the quote FUSES the preceding
+    keyword with the identifier — ``FROM"scratch"`` would collapse to
+    ``FROMscratch``, destroying the left word boundary so ``\\bscratch\\b`` no
+    longer matches (a verified false-negative bypass on the REST path). A real
+    scratch reference always has whitespace OR a quote between ``FROM``/``JOIN`` and
+    the identifier (``FROMscratch`` with neither is a single invalid identifier that
+    cannot reference the DB), so substituting a space for every quote GUARANTEES a
+    left boundary and kills that false-negative class.
+
+    This is DELIBERATELY an over-approximation (fail-closed-safe): it MAY return
+    True spuriously — e.g. a column or alias literally named ``scratch`` — which
+    only causes the provenance parse to run (a safe, fail-closed cost that never
+    grants access). It must NEVER return False for a query that actually references
+    the scratch DB, because a false negative would let a scratch reference skip the
+    session gate entirely (the H3 fail-open). When in doubt it returns True.
+
+    NOT self-sufficient: this pre-check relies on upstream ``validate_and_sanitize``
+    to strip comments, reject multi-statement input, and deny table functions —
+    so a comment-split token (``scr/**/atch``) or a table-function reference to the
+    scratch DB (``merge('scratch', ...)``) is handled by that layer / by the
+    provenance parse itself, not by this token scan.
+    """
+    # Replace identifier quoting with a SPACE (preserving word boundaries) so a
+    # backtick-/double-quoted, no-space `"scratch"` still exposes a `\bscratch\b`
+    # token to the search below. See docstring — delete-the-quote fused the token
+    # onto the preceding keyword and re-opened the H3 bypass.
+    stripped = sql.replace("`", " ").replace('"', " ")
+    pattern = re.compile(rf"\b{re.escape(scratch_db)}\b", re.IGNORECASE)
+    return pattern.search(stripped) is not None
+
+
 def _forbidden_out_of_scope_columns(
     uses: frozenset[tuple[str, str]],
     scope: frozenset[str],
@@ -434,7 +475,17 @@ def sample_rows(
     scope = get_current_scope()
     session_id = get_current_session_id()
 
-    if scope is not None:
+    # Same trigger as _enforce_query_guardrails (ADR-0002/H3): run provenance when
+    # a scope is bound (scoped MCP path, unchanged) OR the sample SQL references the
+    # scratch DB while the gate is on. A session-less sampleRows of a foreign scratch
+    # table (scope=None on REST) then fails closed via _validate_scratch_name. A
+    # normal warehouse sample references no scratch DB → no provenance parse.
+    references_scratch = _references_scratch_db(sql, settings.scratch_database)
+    need_provenance = (scope is not None) or (
+        settings.require_session_scratch_gate and references_scratch
+    )
+
+    if need_provenance:
         catalog = get_catalog_schema()
 
         try:
@@ -494,36 +545,42 @@ def sample_rows(
     return _compact_result(columns, rows, settings.max_response_rows, truncated_override=False)
 
 
-def run_query(
-    sql: str,
-    limit: int | None = None,
-    settings: Settings | None = None,
-) -> dict[str, Any]:
-    """Validate, optionally limit, and execute *sql*.
+def _enforce_query_guardrails(
+    clean_sql: str,
+    settings: Settings,
+    caller: str = "query_guardrails",
+) -> None:
+    """Apply the shared security guardrails to already-sanitized *clean_sql*.
 
-    SQL is passed through validate_and_sanitize() before execution.  An
-    explicit *limit* overrides the injected default (capped at max_response_rows).
+    This is the SINGLE enforcement code path shared by run_query and
+    explain_query so the two can never drift — a scoped caller must not be able
+    to bypass a gate by wrapping a query in EXPLAIN. It applies, in order:
 
-    Returns the compact {columns, rows, row_count, truncated} shape.
+      1. Cartesian-join rejection (UNCONDITIONAL — every caller, scoped or not).
+      2. Scratch-session isolation + column-scope enforcement, triggered when
+         EITHER a scope is bound (``scope is not None`` — the scoped MCP path,
+         behavior identical to before) OR the query references the scratch
+         database while ``require_session_scratch_gate`` is on (ADR-0002, H3).
+         The latter disjunct is what makes scratch access fail closed on EVERY
+         transport — including REST/stdio where scope is None — so a session-less
+         caller can never read another session's scratch table. A normal
+         warehouse query on a scope-less transport references no scratch DB, so
+         provenance is NOT run and the GPT Action keeps working unchanged (no new
+         PARSE_FAILED_CLOSED regression).
 
-    Raises:
-        QueryValidationError:    if SQL fails the security guardrails.
-        CartesianJoinError:      if the query cross-joins two physical base tables
-                                  without a join condition (CARTESIAN_JOIN_FORBIDDEN).
-        ClickHouseQueryError:    if ClickHouse returns a query-level error.
-        ClickHouseUnavailableError: if ClickHouse is unreachable.
+    Args:
+        clean_sql: SQL already passed through validate_and_sanitize.
+        settings:  Runtime settings — supplies ``scratch_database`` (the identifier
+                   the scratch-reference pre-check scans for) and
+                   ``require_session_scratch_gate`` (the ADR-0002 off-switch).
+        caller:    Short label used only as the log-line prefix so incident triage
+                   can tell which entry point (run_query / explain_query) tripped
+                   the gate. It never affects control flow or the raised codes.
+
+    Raises the identical exception types/codes the inline run_query block raised:
+    CARTESIAN_JOIN_FORBIDDEN, SCRATCH_SESSION_VIOLATION, PARSE_FAILED_CLOSED,
+    and COLUMN_SCOPE_VIOLATION. Returns None when the query is permitted.
     """
-    if settings is None:
-        settings = get_settings()
-
-    try:
-        clean_sql = validate_and_sanitize(sql, settings.default_limit)
-    except HTTPException as exc:
-        raise QueryValidationError(
-            message=exc.detail.get("error", "Query validation failed"),
-            code=exc.detail.get("code", "QUERY_VALIDATION_ERROR"),
-        ) from exc
-
     # ---------------------------------------------------------------------------
     # Cartesian-join guardrail (applies to EVERY caller — scoped HTTP/JWT AND the
     # no-scope/stdio path — so the block cannot be bypassed by dropping the scope).
@@ -538,7 +595,8 @@ def run_query(
         reject_cartesian_joins(clean_sql)
     except CartesianJoinForbiddenError as exc:
         logger.warning(
-            "run_query: cartesian join forbidden tables=(%s, %s) code=CARTESIAN_JOIN_FORBIDDEN",
+            "%s: cartesian join forbidden tables=(%s, %s) code=CARTESIAN_JOIN_FORBIDDEN",
+            caller,
             exc.table_a,
             exc.table_b,
         )
@@ -548,13 +606,24 @@ def run_query(
         ) from exc
 
     # ---------------------------------------------------------------------------
-    # Column-scope and scratch-isolation enforcement (D57, D63, D64)
+    # Column-scope and scratch-isolation enforcement (D57, D63, D64, ADR-0002/H3)
     # ---------------------------------------------------------------------------
     scope = get_current_scope()
     session_id = get_current_session_id()
 
-    if scope is not None:
-        # Scope is set (HTTP/JWT transport) — enforce column-level access control.
+    # Trigger provenance extraction when EITHER a scope is bound (scoped MCP path,
+    # unchanged) OR the query references the scratch DB while the ADR-0002 gate is
+    # on. The scratch-reference disjunct is what closes H3 on scope-less transports
+    # (REST/stdio): a scratch reference with a None/mismatched session then fails
+    # closed inside extract_column_provenance. A normal warehouse query on a
+    # scope-less transport references no scratch DB → need_provenance is False → no
+    # parse, no PARSE_FAILED_CLOSED regression (the GPT Action stays working).
+    references_scratch = _references_scratch_db(clean_sql, settings.scratch_database)
+    need_provenance = (scope is not None) or (
+        settings.require_session_scratch_gate and references_scratch
+    )
+
+    if need_provenance:
         catalog = get_catalog_schema()
 
         try:
@@ -562,7 +631,7 @@ def run_query(
         except ScratchSessionError as exc:
             # Scratch table belongs to a different session (D64).
             logger.error(
-                "run_query: scratch session violation code=SCRATCH_SESSION_VIOLATION"
+                "%s: scratch session violation code=SCRATCH_SESSION_VIOLATION", caller
             )
             raise ColumnScopeError(
                 message="Query accesses a scratch table that does not belong to this session.",
@@ -571,12 +640,13 @@ def run_query(
         except ProvenanceExtractionError as exc:
             # Parse/qualify failed — fail-closed (D63): never execute.
             logger.error(
-                "run_query: provenance extraction failed code=PARSE_FAILED_CLOSED"
+                "%s: provenance extraction failed code=PARSE_FAILED_CLOSED", caller
             )
             raise ParseFailedError(
                 message=(
                     "Column provenance could not be extracted from this query. "
-                    "Use explainQuery to diagnose, then resubmit."
+                    "Simplify or restructure the SQL so it parses — EXPLAIN is "
+                    "subject to the same verification and will not bypass it."
                 ),
                 code="PARSE_FAILED_CLOSED",
             ) from exc
@@ -598,7 +668,8 @@ def run_query(
                 # NAMES themselves are catalog metadata (surfaced to the model
                 # in the error message below), not a secret.
                 logger.warning(
-                    "run_query: column scope violation forbidden_count=%d code=COLUMN_SCOPE_VIOLATION",
+                    "%s: column scope violation forbidden_count=%d code=COLUMN_SCOPE_VIOLATION",
+                    caller,
                     len(forbidden),
                 )
                 # Column NAMES are catalog metadata (not PII / cell values, D25),
@@ -614,6 +685,45 @@ def run_query(
                     code="COLUMN_SCOPE_VIOLATION",
                 )
     # ---------------------------------------------------------------------------
+
+
+def run_query(
+    sql: str,
+    limit: int | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Validate, optionally limit, and execute *sql*.
+
+    SQL is passed through validate_and_sanitize() before execution.  An
+    explicit *limit* overrides the injected default (capped at max_response_rows).
+
+    Returns the compact {columns, rows, row_count, truncated} shape.
+
+    Raises:
+        QueryValidationError:    if SQL fails the security guardrails.
+        CartesianJoinError:      if the query cross-joins two physical base tables
+                                  without a join condition (CARTESIAN_JOIN_FORBIDDEN).
+        ColumnScopeError:        if the query references a scratch table owned by
+                                  another session (SCRATCH_SESSION_VIOLATION) or a
+                                  column outside the caller's scope
+                                  (COLUMN_SCOPE_VIOLATION).
+        ParseFailedError:        if column provenance cannot be extracted, so the
+                                  query is fail-closed unexecuted (PARSE_FAILED_CLOSED).
+        ClickHouseQueryError:    if ClickHouse returns a query-level error.
+        ClickHouseUnavailableError: if ClickHouse is unreachable.
+    """
+    if settings is None:
+        settings = get_settings()
+
+    try:
+        clean_sql = validate_and_sanitize(sql, settings.default_limit)
+    except HTTPException as exc:
+        raise QueryValidationError(
+            message=exc.detail.get("error", "Query validation failed"),
+            code=exc.detail.get("code", "QUERY_VALIDATION_ERROR"),
+        ) from exc
+
+    _enforce_query_guardrails(clean_sql, settings, caller="run_query")
 
     # Apply caller-supplied limit override.
     # The substitution pattern preserves a trailing OFFSET clause (captured in
@@ -643,10 +753,22 @@ def explain_query(
     The inner SQL is still validated by the guardrails.  truncated is always
     False because EXPLAIN output is tiny.
 
+    explain_query applies the SAME scope/session/scratch guardrails as run_query
+    BEFORE wrapping the SQL in EXPLAIN, so it is NOT an escape hatch: a query that
+    fails those gates is rejected here too, without a plan ever being built.
+
     Returns the compact {columns, rows, row_count, truncated=False} shape.
 
     Raises:
         QueryValidationError:    if the inner SQL fails the security guardrails.
+        CartesianJoinError:      if the query cross-joins two physical base tables
+                                  without a join condition (CARTESIAN_JOIN_FORBIDDEN).
+        ColumnScopeError:        if the query references a scratch table owned by
+                                  another session (SCRATCH_SESSION_VIOLATION) or a
+                                  column outside the caller's scope
+                                  (COLUMN_SCOPE_VIOLATION).
+        ParseFailedError:        if column provenance cannot be extracted, so the
+                                  query is fail-closed unexecuted (PARSE_FAILED_CLOSED).
         ClickHouseQueryError:    if ClickHouse returns a query-level error.
         ClickHouseUnavailableError: if ClickHouse is unreachable.
     """
@@ -660,6 +782,13 @@ def explain_query(
             message=exc.detail.get("error", "Query validation failed"),
             code=exc.detail.get("code", "QUERY_VALIDATION_ERROR"),
         ) from exc
+
+    # Apply the SAME guardrails run_query applies BEFORE wrapping in EXPLAIN.
+    # Without this, a scoped caller could EXPLAIN a SELECT against another
+    # session's scratch table (or an out-of-scope column) and have ClickHouse
+    # confirm its existence/structure while building the plan — the exact leak
+    # this shared gate closes.
+    _enforce_query_guardrails(inner_sql, settings, caller="explain_query")
 
     explain_sql = f"EXPLAIN {inner_sql}"
     columns, rows = _execute(explain_sql, settings)

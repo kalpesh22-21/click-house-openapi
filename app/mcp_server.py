@@ -140,7 +140,8 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
     if isinstance(exc, QueryValidationError):
         return ToolError(
             f"[{exc.code}] SQL validation failed: {exc.message}. "
-            "Fix the SQL and try again, or call explainQuery to diagnose."
+            "Fix the SQL and try again (explainQuery runs the same validation, so "
+            "it will not diagnose this — correct the statement first)."
         )
     if isinstance(exc, DatabaseNotAllowedError):
         return ToolError(
@@ -177,7 +178,8 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
         return ToolError(
             f"[{exc.code}] The query could not be parsed for column-scope verification "
             "and was rejected without execution. "
-            "Call explainQuery to diagnose SQL syntax issues, then resubmit."
+            "Simplify or restructure the SQL so it parses — explainQuery enforces "
+            "the same verification and will not bypass it."
         )
     # Log full detail server-side so operators can investigate, but return a
     # generic message to the LLM to avoid leaking internal stack traces or
@@ -294,7 +296,9 @@ def sample_rows(
         "If 'truncated' is true, the result was capped at the server MAX_RESPONSE_ROWS limit "
         "— narrow your query with a more selective WHERE clause or reduce your LIMIT. "
         "Always call getTableSchema before writing a query against an unfamiliar table. "
-        "If you get a validation error, call explainQuery first to diagnose your SQL. "
+        "explainQuery can validate a well-formed, in-scope query's plan before you run it, "
+        "but it enforces the same scope/session/scratch guardrails — it will not bypass a "
+        "validation, column-scope, or scratch-session rejection. "
         "INSERT, UPDATE, DELETE, DDL, and external table functions are blocked."
     ),
 )
@@ -326,8 +330,12 @@ def run_query(
     description=(
         "Run EXPLAIN on a SQL statement and return the query execution plan without executing it. "
         "Use this to validate SQL syntax and inspect the query plan BEFORE calling runQuery, "
-        "especially for complex queries or when runQuery returns an error. "
+        "especially for complex queries. "
         "If EXPLAIN succeeds the query is syntactically valid and safe to run. "
+        "explainQuery enforces the SAME scope, session, and scratch-isolation guardrails as "
+        "runQuery — it is NOT an escape hatch: a query that fails those gates (column-scope, "
+        "scratch-session, or provenance-parse) is rejected here too, so do not retry a "
+        "gate-rejected query through explainQuery. "
         "EXPLAIN is fast and cheap — it does not read actual data rows."
     ),
 )
