@@ -11,10 +11,16 @@ uses:
 resolves:
   salary: annual_salary
 slots:
+# `department` is OPTIONAL: when omitted, `optional_pattern` collapses the
+# `department_name = {department}` predicate to TRUE (average salary for ALL
+# departments, grouped). NOTE: the runtime applies optional_pattern only once
+# executor "Slice C" lands; until then an omitted optional slot falls back to
+# the raw loop. Works today when a department IS supplied.
 - name: department
   type: string
-  required: true
+  required: false
   binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
 result_grain:
 - Department
 sql_template: |

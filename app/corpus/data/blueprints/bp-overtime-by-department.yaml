@@ -1,18 +1,22 @@
 id: bp-overtime-by-department
-intent: Total overtime pay by department for a given pay period
-slots_summary: department, pay_period
+# The warehouse has no dedicated overtime register/type_code (every EARN row is
+# type_code 'REG'), so overtime is selected by passing the appropriate pay-type
+# code rather than hard-coded. `type_code` is a slot: pass the overtime type_code
+# to get overtime pay; the blueprint computes earnings for whichever pay type is
+# supplied, by department, for one pay period.
+intent: Earnings by department for a given pay period, filtered to a specific pay type (type_code) such as overtime
+slots_summary: department, pay_period, type_code
 status: validated
 drift_status: clean
 catalog_sha: ''
 uses:
 - dbpcm_warehouse.payroll.employee_code
 - dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.type_code
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.pay_period_end_date
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
-resolves:
-  overtime: gross_earnings
 slots:
 - name: department
   type: string
@@ -22,15 +26,20 @@ slots:
   type: period
   required: true
   binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+- name: type_code
+  type: string
+  required: true
+  binds_to: dbpcm_warehouse.payroll.type_code
 uses_rules:
 - gross_earnings
 result_grain:
 - Department
 sql_template: |
-  SELECT e.department_name AS department, SUM(p.amount) AS overtime_pay
+  SELECT e.department_name AS department, SUM(p.amount) AS earnings
   FROM dbpcm_warehouse.payroll AS p
   JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
   WHERE p.register_type = 'EARN'
+    AND p.type_code = {type_code}
     AND e.department_name = {department}
     AND p.pay_period_end_date = {pay_period}
   GROUP BY e.department_name

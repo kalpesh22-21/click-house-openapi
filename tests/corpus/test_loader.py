@@ -42,11 +42,13 @@ class TestLoadBlueprints:
 
     def test_entry_carries_authored_fields_verbatim(self):
         bp = loader.load_blueprints()["bp-overtime-by-department"]
-        assert bp["intent"].startswith("Total overtime pay by department")
+        assert bp["intent"].startswith("Earnings by department")
         assert bp["status"] == "validated"
         assert bp["drift_status"] == "clean"
         assert bp["result_grain"] == ["Department"]
         assert "dbpcm_warehouse.payroll.amount" in bp["uses"]
+        # pay type is now a slot, not hard-coded (warehouse has no overtime code).
+        assert "dbpcm_warehouse.payroll.type_code" in bp["uses"]
         assert bp["sql_template"].startswith("SELECT e.department_name")
         # source/verified are NOT stored in the YAML — injected only at export.
         assert "source" not in bp
