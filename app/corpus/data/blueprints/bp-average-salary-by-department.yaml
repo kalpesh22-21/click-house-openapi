@@ -11,11 +11,9 @@ uses:
 resolves:
   salary: annual_salary
 slots:
-# `department` is OPTIONAL: when omitted, `optional_pattern` collapses the
-# `department_name = {department}` predicate to TRUE (average salary for ALL
-# departments, grouped). NOTE: the runtime applies optional_pattern only once
-# executor "Slice C" lands; until then an omitted optional slot falls back to
-# the raw loop. Works today when a department IS supplied.
+# `department` is OPTIONAL: when omitted, the runtime applies `optional_pattern`,
+# collapsing the `department_name = {department}` predicate to TRUE (average
+# salary for ALL departments, grouped); when supplied, it filters to that department.
 - name: department
   type: string
   required: false
