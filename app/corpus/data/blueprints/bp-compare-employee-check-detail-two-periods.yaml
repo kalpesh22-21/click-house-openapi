@@ -28,33 +28,38 @@ slots:
 result_grain:
 - register_type
 - type_code
+# Nodes 0 and 1 REFERENCE bp-employee-check-detail-for-period rather than repeating
+# its SQL: the two per-period detail queries differed only in which pay-period slot
+# they filtered on. The consumer's corpus loader resolves each `ref` and INLINES that
+# blueprint's SQL at load, renaming its `{period}` bind site to `{period_a}` /
+# `{period_b}` per the `slots` map — so the executor still sees two ordinary inline
+# nodes and this file cannot drift from the blueprint it composes.
+#
+# `employee: employee` is written out even though the names match: a reference never
+# binds a slot implicitly. After inlining only THIS blueprint's slot declarations
+# exist (slots resolve once per blueprint, before the DAG walk), so an implicit bind
+# would let a rename here silently re-point the referenced filter.
+#
+# `uses` must cover everything a reference reads — the loader refuses the load
+# otherwise. Both lists happen to be identical here; that is the union rule holding,
+# not a coincidence worth relying on.
 composes:
 - order: 0
   output:
     detail_a: table
-  sql_template: |
-    SELECT toString(register_type) AS register_type,
-           toString(type_code) AS type_code,
-           any(toString(type_code_description)) AS type_code_description,
-           toFloat64(SUM(amount)) AS amount,
-           toFloat64(SUM(type_hours)) AS hours
-    FROM dbpcm_warehouse.payroll
-    WHERE employee_code = {employee}
-      AND pay_period_end_date = {period_a}
-    GROUP BY register_type, type_code
+  ref:
+    blueprint: bp-employee-check-detail-for-period
+    slots:
+      employee: employee
+      period: period_a
 - order: 1
   output:
     detail_b: table
-  sql_template: |
-    SELECT toString(register_type) AS register_type,
-           toString(type_code) AS type_code,
-           any(toString(type_code_description)) AS type_code_description,
-           toFloat64(SUM(amount)) AS amount,
-           toFloat64(SUM(type_hours)) AS hours
-    FROM dbpcm_warehouse.payroll
-    WHERE employee_code = {employee}
-      AND pay_period_end_date = {period_b}
-    GROUP BY register_type, type_code
+  ref:
+    blueprint: bp-employee-check-detail-for-period
+    slots:
+      employee: employee
+      period: period_b
 - order: 2
   feeds_from:
   - 0

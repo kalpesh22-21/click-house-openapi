@@ -14,8 +14,12 @@ def _reset_cache():
     loader.invalidate_corpus_cache()
 
 
-# All ten seed blueprint ids and three knowledge ids migrated from the source
-# corpus fixtures — asserted explicitly so a dropped file fails the suite.
+# Every seed blueprint id and the three knowledge ids migrated from the source corpus
+# fixtures — asserted explicitly so a dropped file fails the suite. Was ten; grew to
+# eleven when `bp-employee-check-detail-for-period` was extracted from
+# `bp-compare-employee-check-detail-two-periods`, whose nodes 0 and 1 were identical
+# apart from the pay-period slot and now REFERENCE it (`composes[].ref`, resolved and
+# inlined by the consumer's corpus loader at load time).
 _BLUEPRINT_IDS = {
     "bp-overtime-by-department",
     "bp-active-headcount-by-department",
@@ -27,6 +31,7 @@ _BLUEPRINT_IDS = {
     "bp-hires-in-range",
     "bp-hires-projection",
     "bp-compare-employee-check-detail-two-periods",
+    "bp-employee-check-detail-for-period",
 }
 _KNOWLEDGE_IDS = {
     "kn-overtime-multiplier",

@@ -1,0 +1,44 @@
+id: bp-employee-check-detail-for-period
+# Extracted from bp-compare-employee-check-detail-two-periods, whose nodes 0 and 1
+# were byte-identical apart from the pay-period slot. Both now REFERENCE this
+# blueprint (`composes[].ref`), which the consumer's corpus loader resolves and
+# INLINES at load — so the one-period detail is authored once, is retrievable and
+# runnable in its own right, and the comparison composite cannot drift from it.
+intent: A single employee's paycheck line items for one pay period, with per-item amount and hours
+slots_summary: employee, period
+status: validated
+drift_status: clean
+catalog_sha: ''
+uses:
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.pay_period_end_date
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.type_code
+- dbpcm_warehouse.payroll.type_code_description
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.type_hours
+slots:
+- name: employee
+  type: string
+  required: true
+  binds_to: dbpcm_warehouse.payroll.employee_code
+- name: period
+  type: period
+  required: true
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+result_grain:
+- register_type
+- type_code
+# The casts are load-bearing for the referencing composite, not decoration: its
+# terminal node FULL OUTER JOINs two materializations of this result, so the join
+# keys must be a stable String and the measures a stable Float64.
+sql_template: |
+  SELECT toString(register_type) AS register_type,
+         toString(type_code) AS type_code,
+         any(toString(type_code_description)) AS type_code_description,
+         toFloat64(SUM(amount)) AS amount,
+         toFloat64(SUM(type_hours)) AS hours
+  FROM dbpcm_warehouse.payroll
+  WHERE employee_code = {employee}
+    AND pay_period_end_date = {period}
+  GROUP BY register_type, type_code
