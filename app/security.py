@@ -10,7 +10,11 @@ Defense-in-depth strategy:
    false rejection.
 3. Reject multi-statement input (more than one statement separated by ';').
 4. Allowlist: statement must start with SELECT, WITH, EXPLAIN, SHOW, DESCRIBE,
-   or DESC.
+   or DESC.  A caller whose SQL must additionally pass column-provenance
+   extraction (any scoped caller) is held to the narrower
+   ``_PROVENANCE_ALLOWED_PREFIXES`` — SELECT / WITH only — via
+   :func:`statement_supports_provenance`, called from the service layer where
+   the scope is known.
 5. Denylist: reject if any dangerous keyword or table-function name appears at
    a word boundary.
 6. Auto-inject LIMIT when the outer SELECT has no LIMIT clause.
@@ -121,6 +125,45 @@ def _mask_string_literals(sql: str) -> str:
 # ---------------------------------------------------------------------------
 
 _ALLOWED_PREFIXES = ("select", "with", "explain", "show", "describe", "desc")
+
+# ---------------------------------------------------------------------------
+# The NARROWER allowlist that applies whenever the caller's SQL must pass column
+# provenance extraction (any scoped caller, plus any query touching the scratch
+# database under the ADR-0002 gate — see app/service.py::_enforce_query_guardrails).
+#
+# WHY A SECOND LIST rather than shrinking _ALLOWED_PREFIXES: SHOW / DESCRIBE /
+# EXPLAIN genuinely work — and are genuinely useful — on the UNSCOPED paths (REST
+# admin/GPT Action and MCP stdio local-trust), where `current_scope is None` means
+# the provenance extractor never runs and the statement goes straight to the
+# executor.  Removing the prefixes outright would break those callers.
+#
+# WHY THEY CANNOT BE ALLOWED ONCE PROVENANCE RUNS: sqlglot parses SHOW and EXPLAIN
+# as exp.Command and DESCRIBE / DESC as exp.Describe.  extract_column_provenance
+# accepts only Select / Union / With / Subquery, so these die downstream as
+# PARSE_FAILED_CLOSED whose message asks the caller to "simplify the SQL" — advice
+# no rewrite can satisfy, because nothing turns SHOW TABLES into a SELECT.  The
+# honest rejection is this one: immediate, and it names the allowed set.
+#
+# NOT FIXABLE by routing them past provenance: SHOW TABLES reveals table names and
+# DESCRIBE reveals column names, which is exactly what column scope governs, so an
+# exemption would be a scope hole rather than a feature.  Scoped callers get that
+# metadata from the listTables / getTableSchema tools, which apply scope filtering.
+# ---------------------------------------------------------------------------
+
+_PROVENANCE_ALLOWED_PREFIXES = ("select", "with")
+
+
+def statement_supports_provenance(sql: str) -> bool:
+    """Return True if *sql* is a statement kind the provenance extractor can process.
+
+    Expects SQL that has already been through :func:`validate_and_sanitize` (comments
+    stripped, trailing semicolon removed), so the leading keyword is the first token.
+
+    Non-raising by design: the caller decides the error shape, because only the
+    caller knows whether provenance is actually about to run for this request.
+    """
+    return sql.strip().lower().startswith(_PROVENANCE_ALLOWED_PREFIXES)
+
 
 # ---------------------------------------------------------------------------
 # Denylist — dangerous keywords that must never appear in user-supplied SQL.

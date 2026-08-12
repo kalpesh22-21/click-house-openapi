@@ -40,7 +40,7 @@ from app.errors import (
     TableNotFoundError,
 )
 from app.principal import get_current_scope, get_current_session_id
-from app.security import validate_and_sanitize
+from app.security import statement_supports_provenance, validate_and_sanitize
 from app.semantic_catalog import (
     build_table_schema_response,
     get_catalog_sha,
@@ -557,6 +557,11 @@ def _enforce_query_guardrails(
     to bypass a gate by wrapping a query in EXPLAIN. It applies, in order:
 
       1. Cartesian-join rejection (UNCONDITIONAL — every caller, scoped or not).
+      1b. Statement-kind gate, applied ONLY when provenance is required (below):
+         SHOW / DESCRIBE / DESC / EXPLAIN are rejected up front with
+         DISALLOWED_STATEMENT_TYPE because the extractor cannot process them.  They
+         remain available to unscoped callers (REST/stdio), which never enter that
+         branch.
       2. Scratch-session isolation + column-scope enforcement, triggered when
          EITHER a scope is bound (``scope is not None`` — the scoped MCP path,
          behavior identical to before) OR the query references the scratch
@@ -579,7 +584,8 @@ def _enforce_query_guardrails(
 
     Raises the identical exception types/codes the inline run_query block raised:
     CARTESIAN_JOIN_FORBIDDEN, SCRATCH_SESSION_VIOLATION, PARSE_FAILED_CLOSED,
-    and COLUMN_SCOPE_VIOLATION. Returns None when the query is permitted.
+    and COLUMN_SCOPE_VIOLATION — plus QueryValidationError/DISALLOWED_STATEMENT_TYPE
+    from the statement-kind gate. Returns None when the query is permitted.
     """
     # ---------------------------------------------------------------------------
     # Cartesian-join guardrail (applies to EVERY caller — scoped HTTP/JWT AND the
@@ -624,6 +630,41 @@ def _enforce_query_guardrails(
     )
 
     if need_provenance:
+        # -----------------------------------------------------------------------
+        # Statement-kind gate — reject metadata SQL HONESTLY, before the extractor.
+        #
+        # SHOW / DESCRIBE / DESC / EXPLAIN clear validate_and_sanitize's allowlist
+        # because they are legitimate on the unscoped REST/stdio paths, where this
+        # branch is never entered.  Once provenance IS required they cannot succeed:
+        # SHOW/EXPLAIN parse as exp.Command and DESCRIBE/DESC as exp.Describe, none
+        # of which extract_column_provenance accepts, so they used to fall through to
+        # PARSE_FAILED_CLOSED — an error telling the caller to "simplify the SQL",
+        # which is unactionable because no rewrite makes SHOW TABLES a SELECT.
+        #
+        # Found by tracing live agent turns: the model retried rejected metadata SQL
+        # round-trip after round-trip against that advice and ran out its budget.
+        # DISALLOWED_STATEMENT_TYPE names the allowed set and the tools that serve the
+        # same need, so the model can correct on the first attempt.
+        #
+        # Routing these PAST provenance instead would be a scope hole, not a fix:
+        # SHOW TABLES reveals table names and DESCRIBE reveals column names, which is
+        # precisely what column scope governs.  listTables / getTableSchema serve that
+        # need with scope filtering applied.
+        # -----------------------------------------------------------------------
+        if not statement_supports_provenance(clean_sql):
+            logger.warning(
+                "%s: metadata statement rejected code=DISALLOWED_STATEMENT_TYPE", caller
+            )
+            raise QueryValidationError(
+                message=(
+                    "Only SELECT and WITH statements can be run here. SHOW, DESCRIBE "
+                    "and EXPLAIN cannot be checked against your column scope — use the "
+                    "listTables and getTableSchema tools for metadata, and pass a plain "
+                    "SELECT (no EXPLAIN prefix) to explainQuery for a query plan."
+                ),
+                code="DISALLOWED_STATEMENT_TYPE",
+            )
+
         catalog = get_catalog_schema()
 
         try:
