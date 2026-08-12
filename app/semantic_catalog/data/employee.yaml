@@ -191,6 +191,7 @@ columns:
     description: Employee home Department code. This is the code assigned to the department within company maintenance and
       is related to labor allocations.
     client_defined: true
+    description_col: department_name
   department_name:
     type: Nullable(String)
     description: Employee Home Department description. This is the code assigned to the department within company maintenance
@@ -345,6 +346,7 @@ columns:
     description: The Manager Level code is a hierarchical classification indicating a user's managerial authority tier for
       routing approval workflows, security permissions, and escalation chains.
     client_defined: true
+    description_col: manager_level_description
   manager_level_description:
     type: Nullable(String)
     description: 'Displays the description of the manager level, e.g. EXEC : C-Level'
@@ -494,6 +496,7 @@ columns:
     type: Nullable(String)
     description: A unique 3 digit alphanumeric code provided by the user that is set when creating a Benefit Eligibility Profile.
     client_defined: true
+    description_col: paycode_profile_description
   paycode_profile_description:
     type: Nullable(String)
     description: description or name of the Benefit Eligibility Profile set by the user in addition to the Profile code. The
