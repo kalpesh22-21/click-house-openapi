@@ -291,12 +291,14 @@ def sample_rows(
 @mcp.tool(
     name="runQuery",
     description=(
-        "Execute a read-only SQL query (SELECT, WITH, SHOW, DESCRIBE) against ClickHouse "
+        "Execute a read-only SQL query (SELECT or WITH) against ClickHouse "
         "and return results in a compact {columns, rows, row_count, truncated} format. "
         "The server enforces read-only mode, execution time limits, and row caps. "
         "If 'truncated' is true, the result was capped at the server MAX_RESPONSE_ROWS limit "
         "— narrow your query with a more selective WHERE clause or reduce your LIMIT. "
         "Always call getTableSchema before writing a query against an unfamiliar table. "
+        "SHOW and DESCRIBE are rejected here — use listTables and getTableSchema for "
+        "metadata instead. "
         "explainQuery can validate a well-formed, in-scope query's plan before you run it, "
         "but it enforces the same scope/session/scratch guardrails — it will not bypass a "
         "validation, column-scope, or scratch-session rejection. "
@@ -305,7 +307,13 @@ def sample_rows(
 )
 def run_query(
     sql: Annotated[
-        str, Field(description="Read-only SQL statement (SELECT / WITH / SHOW / DESCRIBE)")
+        str,
+        Field(
+            description=(
+                "Read-only SELECT or WITH statement "
+                "(not SHOW / DESCRIBE — use listTables / getTableSchema)"
+            ),
+        ),
     ],
     limit: Annotated[
         Optional[int],
