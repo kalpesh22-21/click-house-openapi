@@ -52,6 +52,8 @@ Algorithm
 1. Guard: empty/whitespace input -> fail-closed.
 2. Parse with sqlglot ClickHouse dialect (parse_one, raises on multi-statement).
 3. Reject non-SELECT/WITH statement kinds (DDL, INSERT, SHOW, Block/stacked).
+3b. No table reference at all -> return frozenset() (determined-empty, not
+   undetermined: the query reads nothing, so there is nothing to fail closed on).
 4. qualify_tables: fill in database prefix for bare table references.
 5. Build a mapping: alias -> (real_table_name, database), CTE names excluded.
 6. qualify_columns: resolve unqualified column refs to their owning table.
@@ -453,6 +455,29 @@ def _scalar_with_aliases(ast: exp.Expression) -> set[str]:
     return names
 
 
+def _union_output_alias_names(set_op: exp.Expression) -> set[str]:
+    """Aliases declared by the FIRST branch of a set operation — its output column names.
+
+    SQL takes a UNION / EXCEPT / INTERSECT's output column names from its LEFTMOST
+    branch, and an ORDER BY / HAVING attached to the set operation may only reference
+    those output names.  sqlglot, however, parses that trailing ORDER BY onto the LAST
+    branch Select, so `_is_output_alias_reference` looked for the alias in the wrong
+    place.  Nested set operations nest to the left (`A UNION B UNION C` is
+    `Union(this=Union(this=A, expression=B), expression=C)`), so we walk `.this` down
+    to the leftmost Select.
+    """
+    node: exp.Expression = set_op
+    while isinstance(node, exp.SetOperation):
+        node = node.this
+    if not isinstance(node, exp.Select):
+        return set()
+    return {
+        proj.alias
+        for proj in node.expressions
+        if isinstance(proj, exp.Alias) and proj.alias
+    }
+
+
 def _is_output_alias_reference(col_node: exp.Column) -> bool:
     """Return True if an unresolved unqualified column is a provable SELECT-list alias ref.
 
@@ -506,6 +531,21 @@ def _is_output_alias_reference(col_node: exp.Column) -> bool:
         for proj in sel.expressions
         if isinstance(proj, exp.Alias) and proj.alias
     }
+
+    # A set operation's trailing ORDER BY belongs to the UNION, not to the branch
+    # sqlglot parked it on — it may only reference the union's output column names,
+    # which SQL takes from the FIRST branch.  Without this,
+    #   SELECT EmployeeCode AS ec FROM payroll
+    #   UNION ALL SELECT EmployeeCode FROM payroll ORDER BY ec
+    # failed closed: `sel` resolves to the LAST branch, whose projections carry no
+    # alias, so `ec` looked like an unresolvable base-table column.  Adding the first
+    # branch's aliases cannot admit a genuinely unverifiable reference: a name that
+    # matches a declared output alias IS that output column, and whatever the branches
+    # read to produce it was already extracted from inside the branches themselves.
+    set_op = col_node.find_ancestor(exp.SetOperation)
+    if set_op is not None:
+        alias_names |= _union_output_alias_names(set_op)
+
     return col_node.name in alias_names
 
 
@@ -756,6 +796,39 @@ def extract_column_provenance(
             f"Unexpected top-level statement type {type(ast).__name__} "
             "(expected SELECT / WITH / UNION) — fail-closed (D63)."
         )
+
+    # ------------------------------------------------------------------
+    # Step 3b: No table reference AT ALL -> provenance is DETERMINED and EMPTY
+    # ------------------------------------------------------------------
+    # A query with no `exp.Table` node anywhere reads nothing: no catalogued table,
+    # no uncatalogued table, no scratch table, no table function.  Its USES set is
+    # not *undetermined* (the fail-closed condition) — it is determined, and empty.
+    # This is the same reasoning as the pure-generator exemption above, applied one
+    # level up: where `numbers(n)` is a source that exposes nothing, this is the
+    # absence of any source at all.
+    #
+    # THE LOAD-BEARING DISTINCTION — this must not mask a genuinely undetermined
+    # query.  It does not, because EVERY data-reading source parses to an exp.Table:
+    #   - catalogued/uncatalogued named tables  -> Table(name='payroll' / 'ghost')
+    #   - system.*                              -> Table(name='tables', db='system')
+    #   - scratch.*                             -> Table(name='s_<sid>_x', db='scratch')
+    #   - table functions (url/file/s3/remote/  -> Table(this=Anonymous(...)) with an
+    #     generateRandom/merge/numbers/...)        EMPTY .name — step 6b's key
+    #   - tables inside subqueries/CTEs         -> found by find_all over the whole AST
+    # so `SELECT foo FROM not_in_catalog` still fails closed (it HAS a Table node, and
+    # step 6 rejects the uncatalogued name), and `SELECT * FROM url(...)` still fails
+    # closed at step 6b.  Verified against sqlglot 30.12.x for each shape above.
+    #
+    # What this newly admits is only the constant/derived family, e.g.
+    # `SELECT 'x' AS database, 'y' AS name UNION ALL SELECT 'x','y' ORDER BY name`,
+    # which failed closed because the union's ORDER BY alias reference could not be
+    # resolved (see `_is_output_alias_reference`, fixed there too).  A query that
+    # touches no table cannot leak a column, so there was never anything to fail
+    # closed about.  Observed live: a scoped agent lost round-trips to
+    # PARSE_FAILED_CLOSED on exactly that shape.
+    # ------------------------------------------------------------------
+    if next(ast.find_all(exp.Table), None) is None:
+        return frozenset()
 
     # ------------------------------------------------------------------
     # Step 4: qualify_tables — fill database prefix for bare table names

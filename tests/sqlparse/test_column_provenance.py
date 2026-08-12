@@ -1198,3 +1198,141 @@ def test_prov_unqualified_scratch_only_column_not_rejected() -> None:
     )
     result = extract_column_provenance(sql, CATALOG_SCHEMA, session_id="sessabc123")
     assert result == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# PART 5 — DETERMINED-EMPTY PROVENANCE (queries that read no table)
+# ---------------------------------------------------------------------------
+#
+# A query with no table reference at all has provenance that is DETERMINED and
+# EMPTY, not undetermined: there is no source, so there is nothing to fail closed
+# about.  Found from live agent traces — a scoped turn lost round-trips to
+# PARSE_FAILED_CLOSED on a FROM-less constant SELECT whose UNION-level ORDER BY
+# referenced a first-branch alias.
+#
+# The load-bearing boundary is UNCATALOGUED vs NO TABLE: a query naming a table
+# the catalog does not know must STILL fail closed.  Every case below that names
+# a source — catalogued, uncatalogued, system, scratch, or table function —
+# keeps its previous behaviour.
+
+
+def test_prov_fromless_union_order_by_alias_determined_empty() -> None:
+    """E-01 · prov-fromless-union-order-by-alias — the reproduced live failure.
+
+    Decision refs: D63, D70
+    Bug repro: `SELECT 'x' AS database, 'y' AS name UNION ALL SELECT 'x','y' ORDER BY name`
+    raised PARSE_FAILED_CLOSED.  The ORDER BY belongs to the UNION but sqlglot parks it
+    on the LAST branch, whose projections are unaliased, so `name` looked like an
+    unresolvable base-table column.  The query reads no table, so its USES set is empty.
+    """
+    sql = (
+        "SELECT 'x' AS database, 'y' AS name "
+        "UNION ALL SELECT 'x', 'y' ORDER BY name"
+    )
+    assert extract_column_provenance(sql, CATALOG_SCHEMA) == frozenset()
+
+
+def test_prov_fromless_constant_select_determined_empty() -> None:
+    """E-02 · prov-fromless-constant-select — constant projections read nothing.
+
+    Decision refs: D63
+    """
+    assert extract_column_provenance("SELECT 1 AS n, 'a' AS s", CATALOG_SCHEMA) == frozenset()
+
+
+def test_prov_union_order_by_first_branch_alias_over_real_table() -> None:
+    """E-03 · prov-union-order-by-first-branch-alias — same bug, WITH a real table.
+
+    Decision refs: D63, D70
+    The determined-empty rule cannot save this shape (it references a catalogued table),
+    so `_is_output_alias_reference` must resolve a set operation's ORDER BY against the
+    FIRST branch's aliases — the union's output column names.  The real column read by
+    the branches is still extracted, so scope enforcement is unaffected.
+    """
+    sql = (
+        "SELECT EmployeeCode AS ec FROM payroll "
+        "UNION ALL SELECT EmployeeCode FROM payroll ORDER BY ec"
+    )
+    assert extract_column_provenance(sql, CATALOG_SCHEMA) == frozenset([(_P, "EmployeeCode")])
+
+
+def test_prov_uncatalogued_table_still_failclosed() -> None:
+    """E-04 · prov-uncatalogued-table-still-failclosed — the load-bearing distinction.
+
+    Decision refs: D63, D70
+    Regression guard for the determined-empty rule: an UNCATALOGUED table is a genuinely
+    undetermined source (the extractor cannot say what it exposes) and must keep failing
+    closed.  It is distinguishable because it still parses to an exp.Table node, whereas
+    a FROM-less query has none.
+    """
+    for sql in (
+        "SELECT foo FROM not_in_catalog",
+        "SELECT * FROM not_in_catalog",
+        "SELECT a.x FROM ghost_table a",
+        "SELECT 'lit' AS c FROM system.tables",
+        "SELECT (SELECT count() FROM ghost_table) AS c",
+        "SELECT 'x' AS c FROM not_in_catalog UNION ALL SELECT 'y' ORDER BY c",
+    ):
+        with pytest.raises(ProvenanceExtractionError):
+            extract_column_provenance(sql, CATALOG_SCHEMA)
+
+
+def test_prov_table_function_still_failclosed() -> None:
+    """E-05 · prov-table-function-still-failclosed — unverifiable sources keep failing.
+
+    Decision refs: D63
+    Regression guard for the determined-empty rule: a table-valued function parses to an
+    exp.Table with an EMPTY name, so it is never mistaken for "no table" and stays
+    fail-closed at the step-6b guard.  Only the narrow pure-generator allowlist is exempt.
+    """
+    for sql in (
+        "SELECT * FROM url('http://evil/', 'CSV', 'x String')",
+        "SELECT * FROM file('a.csv')",
+        "SELECT * FROM generateRandom('x Int')",
+        "SELECT * FROM merge('system', '.*')",
+        "SELECT * FROM remote('h', 'db', 't')",
+    ):
+        with pytest.raises(ProvenanceExtractionError):
+            extract_column_provenance(sql, CATALOG_SCHEMA)
+
+
+def test_prov_pure_generator_exemption_unchanged() -> None:
+    """E-06 · prov-pure-generator-exemption-unchanged — numbers(n) still admitted.
+
+    Decision refs: D63
+    Regression guard: the pure row generators (numbers / numbers_mt / generate_series)
+    read nothing and stay exempt, and a generator JOINed to a real table still reports
+    that table's columns in full.
+    """
+    assert extract_column_provenance("SELECT number FROM numbers(6)", CATALOG_SCHEMA) == frozenset()
+    assert extract_column_provenance(
+        "SELECT number FROM numbers_mt(6)", CATALOG_SCHEMA
+    ) == frozenset()
+
+    # A generator JOINed to a real table still reports that table's columns in full.
+    # (The generator's own column is referenced bare here: a TABLE-QUALIFIED reference
+    # through a generator alias — `n.number` — is a separate, pre-existing limitation,
+    # unchanged by this fix.)
+    joined = (
+        "SELECT number, p.Amount FROM numbers(6) "
+        "JOIN payroll p ON p.EmployeeCode = toString(number)"
+    )
+    result = extract_column_provenance(joined, CATALOG_SCHEMA)
+    assert (_P, "Amount") in result
+    assert (_P, "EmployeeCode") in result
+
+
+def test_prov_scratch_reference_still_session_gated() -> None:
+    """E-07 · prov-scratch-reference-still-session-gated — scratch is not "no table".
+
+    Decision refs: D64, D69/OQ-4
+    Regression guard for the determined-empty rule: a scratch table parses to an
+    exp.Table, so a cross-session scratch read still raises ScratchSessionError instead
+    of being waved through as an empty-provenance query.
+    """
+    with pytest.raises(ScratchSessionError):
+        extract_column_provenance(
+            "SELECT c FROM scratch.s_othersession_t",
+            CATALOG_SCHEMA,
+            session_id="sessabc123",
+        )
