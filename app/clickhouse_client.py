@@ -139,6 +139,25 @@ def readonly_settings(settings: Settings) -> dict[str, Any]:
         "max_result_rows": settings.max_result_rows,
         "result_overflow_mode": "throw",
         "max_rows_to_read": settings.max_rows_to_read,
+        # Pin ALIAS-FIRST name resolution (this is ClickHouse's default, 0).
+        #
+        # This is a COLUMN-SCOPE-ENFORCEMENT setting, not a performance knob. The
+        # provenance extractor treats an unqualified name in WHERE / GROUP BY /
+        # HAVING / ORDER BY that matches a declared SELECT-list alias as a
+        # query-internal reference that reads no new column (sqlglot's alias
+        # expansion, and the catalog-named case-(A) escape in
+        # `sqlparse.provenance.extract_column_provenance`). That is sound ONLY
+        # while ClickHouse resolves the alias before a same-named source column,
+        # which is exactly what this setting governs.
+        #
+        # If a server default or user profile set it to 1 (source-column-first),
+        # `SELECT lower(earn_code) AS status FROM accrual_events ORDER BY status`
+        # would READ `accrual_events.status` while the extractor's USES set omits
+        # it — an under-reported access, i.e. a scope-check bypass. Per-query
+        # SETTINGS clauses are already denied by the statement gate, so sending it
+        # ourselves on every read-only query closes the remaining environmental
+        # hole (a server/profile-level flip we do not control).
+        "prefer_column_name_to_alias": 0,
     }
     # Optional dedup-at-read for ReplacingMergeTree/CollapsingMergeTree tables.
     # Query-global: ClickHouse applies FINAL to every MergeTree-family table in

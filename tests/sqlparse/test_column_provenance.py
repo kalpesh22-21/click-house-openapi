@@ -1336,3 +1336,312 @@ def test_prov_scratch_reference_still_session_gated() -> None:
             CATALOG_SCHEMA,
             session_id="sessabc123",
         )
+
+
+# ---------------------------------------------------------------------------
+# PART 6 — OUTER ORDER BY OVER A CTE/SUBQUERY, ON A CATALOG-NAMED OUTPUT COLUMN
+# ---------------------------------------------------------------------------
+#
+# Live failure: an outer SELECT over a CTE that CONTAINS A JOIN, ordered by one of
+# its own output columns, raised PARSE_FAILED_CLOSED whenever the ORDER BY key's
+# name ALSO exists as a column name somewhere in the catalog.  `ORDER BY pto` (a
+# name no catalog table uses) was accepted; the semantically identical
+# `ORDER BY employee_name` was rejected.
+#
+# Mechanics: with a JOIN inside the CTE, qualify_columns leaves the outer ORDER BY
+# reference unqualified (col.table == ''), because SQL resolves ORDER BY against the
+# enclosing SELECT's OUTPUT columns before its source columns.  The step-8
+# unqualified branch tested catalog MEMBERSHIP first, so a catalog-named key raised
+# "exists in the catalog but was not resolved" before ever reaching
+# `_is_output_alias_reference` — the guard that lets non-catalog names through.  The
+# "already in uses" escape (case B) could not save it either: ORDER BY nodes are
+# walked BEFORE the CTE body contributes to `uses`.
+#
+# The fix lets a catalog-named unqualified column escape ONLY when it is a provable
+# output-alias reference.  Such a reference reads nothing but the enclosing SELECT's
+# own projections, and whatever those projections read was already extracted from
+# inside the CTE/subquery — no new data access can be admitted (D63/D70 preserved).
+
+# Minimal snake_case catalog for this part (deliberately independent of the
+# CamelCase payroll/employee fixtures above — the defect is about a name existing
+# ANYWHERE in the catalog).
+PTO_CATALOG: dict[str, dict[str, str]] = {
+    "dbpcm_warehouse.accrual_events": {
+        "employee_code": "String",
+        "hours": "Nullable(Decimal(18, 6))",
+        "status": "Nullable(String)",
+        "event_type": "Nullable(String)",
+        "earn_code": "Nullable(String)",
+    },
+    "dbpcm_warehouse.employee": {
+        "employee_code": "String",
+        "employee_name": "Nullable(String)",
+    },
+}
+
+_AE = "dbpcm_warehouse.accrual_events"
+_EMP = "dbpcm_warehouse.employee"
+
+# A CTE that CONTAINS A JOIN, projecting one passthrough column (`employee_code`),
+# one catalog-named computed column (`employee_name`), and one NON-catalog-named
+# computed column (`pto`).  The outer SELECT is completed per-test.
+_JOIN_CTE = """
+    WITH per_employee AS (
+        SELECT
+            ae.employee_code,
+            any(e.employee_name) AS employee_name,
+            sum(ae.hours) AS pto,
+            countIf(ae.status = 'Requested') AS pending
+        FROM dbpcm_warehouse.accrual_events AS ae
+        LEFT JOIN dbpcm_warehouse.employee AS e
+            ON ae.employee_code = e.employee_code
+        WHERE ae.event_type = 'Time Off Request' AND ae.earn_code = 'PTO'
+        GROUP BY ae.employee_code
+    )
+    SELECT employee_code, employee_name, pto, pending
+    FROM per_employee
+"""
+
+# Every column the CTE body reads — the expected USES set for every outer variant
+# below, since an outer ORDER BY over CTE outputs adds no data access.
+_JOIN_CTE_USES = frozenset([
+    (_AE, "employee_code"),
+    (_AE, "hours"),
+    (_AE, "status"),
+    (_AE, "event_type"),
+    (_AE, "earn_code"),
+    (_EMP, "employee_code"),
+    (_EMP, "employee_name"),
+])
+
+
+def test_prov_cte_join_order_by_catalog_named_alias() -> None:
+    """F-01 · prov-cte-join-order-by-catalog-named-alias — the reported false-reject.
+
+    Decision refs: D63, D70
+    Bug repro: outer `ORDER BY employee_name` over a JOIN-containing CTE raised
+    PARSE_FAILED_CLOSED solely because `employee_name` also names a catalog column.
+    """
+    sql = _JOIN_CTE + " ORDER BY employee_name"
+    assert extract_column_provenance(sql, PTO_CATALOG) == _JOIN_CTE_USES
+
+
+def test_prov_cte_join_order_by_passthrough_column() -> None:
+    """F-02 · prov-cte-join-order-by-passthrough-column — same shape, passthrough key.
+
+    Decision refs: D63, D70
+    `employee_code` is projected straight through the CTE rather than computed, so the
+    outer ORDER BY names a real catalog column — still an OUTPUT reference, still no
+    new access.
+    """
+    sql = _JOIN_CTE + " ORDER BY employee_code"
+    assert extract_column_provenance(sql, PTO_CATALOG) == _JOIN_CTE_USES
+
+
+def test_prov_cte_join_order_by_mixed_keys() -> None:
+    """F-03 · prov-cte-join-order-by-mixed-keys — catalog-named and non-catalog keys together.
+
+    Decision refs: D63, D70
+    """
+    sql = _JOIN_CTE + " ORDER BY pto DESC, employee_name ASC"
+    assert extract_column_provenance(sql, PTO_CATALOG) == _JOIN_CTE_USES
+
+
+def test_prov_cte_join_order_by_non_catalog_alias_unchanged() -> None:
+    """F-04 · prov-cte-join-order-by-non-catalog-alias — the case that always worked.
+
+    Decision refs: D63, D70
+    Regression guard: `pto` is not a catalog column name, so this shape reached
+    `_is_output_alias_reference` before the fix and was accepted.  It must stay accepted.
+    """
+    sql = _JOIN_CTE + " ORDER BY pto"
+    assert extract_column_provenance(sql, PTO_CATALOG) == _JOIN_CTE_USES
+
+
+def test_prov_cte_join_without_order_by_unchanged() -> None:
+    """F-05 · prov-cte-join-without-order-by — no ORDER BY, with and without a window fn.
+
+    Decision refs: D63, D70
+    Regression guard: without an ORDER BY there is no unqualified reference at all, so
+    both shapes extracted cleanly before the fix and must be untouched by it.
+    """
+    assert extract_column_provenance(_JOIN_CTE, PTO_CATALOG) == _JOIN_CTE_USES
+
+    windowed = _JOIN_CTE.replace(
+        "SELECT employee_code, employee_name, pto, pending",
+        "SELECT employee_code, employee_name, pto, pending, "
+        "sum(pending) OVER () AS total_pending",
+    )
+    assert extract_column_provenance(windowed, PTO_CATALOG) == _JOIN_CTE_USES
+
+
+def test_prov_single_source_cte_order_by_catalog_column() -> None:
+    """F-06 · prov-single-source-cte-order-by-catalog-column — no JOIN in the CTE.
+
+    Decision refs: D63, D70
+    The JOIN is incidental to the mechanism: a single-source CTE leaves the outer
+    ORDER BY unqualified too (ORDER BY resolves against output columns first), so this
+    shape was ALSO rejected before the fix.  It must extract only the CTE body's reads.
+    """
+    sql = """
+        WITH per_employee AS (
+            SELECT employee_code, employee_name
+            FROM dbpcm_warehouse.employee
+        )
+        SELECT employee_code, employee_name
+        FROM per_employee
+        ORDER BY employee_name
+    """
+    assert extract_column_provenance(sql, PTO_CATALOG) == frozenset([
+        (_EMP, "employee_code"),
+        (_EMP, "employee_name"),
+    ])
+
+
+def test_prov_subquery_order_by_shadowing_alias() -> None:
+    """F-07 · prov-subquery-order-by-shadowing-alias — derived table instead of a CTE.
+
+    Decision refs: D63, D70
+    A FROM-subquery whose computed alias SHADOWS a catalog column name behaves exactly
+    like the CTE form.  Only the subquery body's real reads are captured.
+    """
+    sql = """
+        SELECT employee_code, employee_name
+        FROM (
+            SELECT ae.employee_code, any(e.employee_name) AS employee_name
+            FROM dbpcm_warehouse.accrual_events AS ae
+            LEFT JOIN dbpcm_warehouse.employee AS e
+                ON ae.employee_code = e.employee_code
+            GROUP BY ae.employee_code
+        ) AS s
+        ORDER BY employee_name
+    """
+    assert extract_column_provenance(sql, PTO_CATALOG) == frozenset([
+        (_AE, "employee_code"),
+        (_EMP, "employee_code"),
+        (_EMP, "employee_name"),
+    ])
+
+
+def test_prov_live_pto_pending_query() -> None:
+    """F-08 · prov-live-pto-pending-query — the exact query observed failing in production.
+
+    Decision refs: D63, D70
+    CTE with a LEFT JOIN + countIf + WHERE; outer window `sum(...) OVER ()` plus an
+    ORDER BY on two keys, one of which (`employee_name`) is a catalog column name.
+    """
+    sql = """
+        WITH per_employee AS (
+            SELECT ae.employee_code, any(e.employee_name) AS employee_name,
+                sum(ae.hours) AS pto_hours_requested,
+                countIf(ae.status = 'Requested') AS pending_approval_requests
+            FROM dbpcm_warehouse.accrual_events AS ae
+            LEFT JOIN dbpcm_warehouse.employee AS e ON ae.employee_code = e.employee_code
+            WHERE ae.event_type = 'Time Off Request' AND ae.earn_code = 'PTO'
+                AND ae.hours IS NOT NULL
+            GROUP BY ae.employee_code
+        )
+        SELECT employee_code, employee_name, pto_hours_requested, pending_approval_requests,
+            sum(pending_approval_requests) OVER () AS total_pending_approval_requests
+        FROM per_employee
+        ORDER BY pto_hours_requested DESC, employee_name ASC
+    """
+    assert extract_column_provenance(sql, PTO_CATALOG) == _JOIN_CTE_USES
+
+
+def test_prov_cte_join_order_by_unprojected_column_failclosed() -> None:
+    """F-09 · prov-cte-join-order-by-unprojected-column — fail-closed preserved.
+
+    Decision refs: D63, D70
+    `status` is read inside the CTE but is NOT an output column of the outer SELECT, so
+    the outer `ORDER BY status` is not an output-alias reference and cannot be proven to
+    be free of new access.  It must keep failing closed — this is the exact escape the
+    fix must not widen into.
+    """
+    sql = _JOIN_CTE + " ORDER BY status"
+    with pytest.raises(ProvenanceExtractionError):
+        extract_column_provenance(sql, PTO_CATALOG)
+
+
+def test_prov_cte_join_order_by_wrong_case_failclosed() -> None:
+    """F-10 · prov-cte-join-order-by-wrong-case — the case-mismatch branch is untouched.
+
+    Decision refs: D63, D70
+    ClickHouse identifiers are case-sensitive: `Employee_Name` is not `employee_name`
+    and is not an output column of any SELECT here.  The case-insensitive-mismatch
+    branch must keep rejecting it.
+    """
+    sql = _JOIN_CTE + " ORDER BY Employee_Name"
+    with pytest.raises(ProvenanceExtractionError):
+        extract_column_provenance(sql, PTO_CATALOG)
+
+
+def test_prov_bare_unresolvable_projection_failclosed() -> None:
+    """F-11 · prov-bare-unresolvable-projection — projections still cannot escape.
+
+    Decision refs: D63, D70
+    A column that IS a projection output cannot be *referencing* an output alias, so
+    `_is_output_alias_reference` refuses it by LOCATION regardless of catalog
+    membership.  Both an uncatalogued name and a catalog-named-but-absent-here column
+    must fail closed.
+    """
+    with pytest.raises(ProvenanceExtractionError):
+        extract_column_provenance(
+            "SELECT not_a_column FROM dbpcm_warehouse.employee", PTO_CATALOG
+        )
+    # `hours` exists in the catalog (on accrual_events) but not on `employee`.
+    with pytest.raises(ProvenanceExtractionError):
+        extract_column_provenance(
+            "SELECT employee_code, hours FROM dbpcm_warehouse.employee", PTO_CATALOG
+        )
+
+
+def test_prov_alias_shadows_unread_column_of_same_table() -> None:
+    """F-12 · prov-alias-shadows-unread-column — the escape's WIDEST reach, pinned.
+
+    Decision refs: D63, D70
+    This is the most permissive shape the case-(A) escape admits: a DIRECT catalog-table
+    source (no CTE, no subquery), where the ORDER BY key is a SELECT-list alias that
+    SHADOWS a different, genuinely-unread real column OF THAT SAME TABLE.  `status` is a
+    real `accrual_events` column that this query never reads; the extractor must report
+    `earn_code` ONLY, with `status` deliberately ABSENT from the USES set.
+
+    GROUND TRUTH being relied on: ClickHouse binds the ALIAS here, not the source column
+    (24.8 analyzer; verified live during security review).  That is ClickHouse's default
+    resolution order and is pinned server-side by `prefer_column_name_to_alias=0` in
+    `clickhouse_client.readonly_settings()` — under `=1` the query would instead READ
+    `accrual_events.status` and this USES set would be an UNDER-REPORT (a scope-check
+    bypass).  If a future sqlglot or ClickHouse version flips that resolution, this test
+    must FAIL loudly rather than let the extractor go silently fail-open.
+    """
+    sql = (
+        "SELECT lower(earn_code) AS status "
+        "FROM dbpcm_warehouse.accrual_events "
+        "ORDER BY status"
+    )
+    assert extract_column_provenance(sql, PTO_CATALOG) == frozenset([(_AE, "earn_code")])
+
+    # DISTINCT ON takes the same escape path — the alias binds, `status` stays absent.
+    distinct_on = (
+        "SELECT DISTINCT ON (status) lower(earn_code) AS status, employee_code "
+        "FROM dbpcm_warehouse.accrual_events"
+    )
+    assert extract_column_provenance(distinct_on, PTO_CATALOG) == frozenset([
+        (_AE, "earn_code"),
+        (_AE, "employee_code"),
+    ])
+
+    # LIMIT BY does NOT currently take that path: sqlglot qualifies the LIMIT BY key to
+    # the SOURCE column, so `status` is reported as read even though ClickHouse binds the
+    # alias.  That is the CONSERVATIVE direction (an over-reported USES set can only
+    # false-reject, never fail open), so it is pinned as-is rather than "fixed".
+    limit_by = (
+        "SELECT lower(earn_code) AS status, employee_code "
+        "FROM dbpcm_warehouse.accrual_events "
+        "ORDER BY employee_code LIMIT 1 BY status"
+    )
+    assert extract_column_provenance(limit_by, PTO_CATALOG) == frozenset([
+        (_AE, "earn_code"),
+        (_AE, "employee_code"),
+        (_AE, "status"),
+    ])

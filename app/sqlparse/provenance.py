@@ -972,8 +972,10 @@ def extract_column_provenance(
             #     from within the expression that defines the alias).
             #
             # Distinguishing rule:
-            #   - col_name exactly in catalog AND not yet in uses → case (A) → raise
-            #   - col_name exactly in catalog AND already in uses  → case (B) → skip
+            #   - col_name exactly in catalog, not yet in uses, and NOT a provable
+            #     output-alias reference                           → case (A) → raise
+            #   - col_name exactly in catalog AND (already in uses OR a provable
+            #     output-alias reference)                          → case (B) → skip
             #   - col_name NOT in catalog exactly, but matches a catalog name
             #     case-insensitively                               → case-mismatch → raise
             #   - col_name not in catalog (exact or case-fold), AND it is a provable
@@ -999,14 +1001,37 @@ def extract_column_provenance(
             # else fails closed.
             extracted_col_names_so_far = {cn for _, cn in uses}
             if col_name in all_catalog_column_names:
-                if col_name not in extracted_col_names_so_far:
-                    # Exact catalog match but not yet captured — unresolved real column (case A)
+                # A catalog-NAMED unqualified column is normally unverifiable (case A).
+                # But a PROVABLE output-alias reference is not a data access at all, and
+                # a name being present somewhere in the catalog does not make it one:
+                # SQL resolves ORDER BY / GROUP BY / HAVING against the enclosing
+                # SELECT's OWN OUTPUT COLUMNS before its source columns, and an output
+                # column's sources were already extracted from inside the query that
+                # produced them (the CTE/subquery body).  So such a reference can admit
+                # NO new data access — fail-closed is preserved (D63/D70).
+                #
+                # This branch is what un-hides `_is_output_alias_reference` for
+                # catalog-named columns.  Live repro: an outer SELECT over a CTE that
+                # CONTAINS A JOIN — qualify_columns then leaves the outer
+                # `ORDER BY employee_name` unqualified — was rejected purely because
+                # `employee_name` also names a catalog column, while the identical query
+                # ordering by a non-catalog alias (`ORDER BY pto`) was accepted.  Case (B)
+                # below could not save it: ORDER BY nodes are walked BEFORE the CTE body
+                # contributes to `uses`, so the "already extracted" test is
+                # iteration-order-dependent and had not yet seen the real access.
+                if (
+                    col_name not in extracted_col_names_so_far
+                    and not _is_output_alias_reference(col_node)
+                ):
+                    # Exact catalog match, not yet captured, and not an output-alias
+                    # reference — an unresolved real column (case A).
                     raise ProvenanceExtractionError(
                         f"Column '{col_name}' could not be attributed to any table after "
                         "qualify_columns — it exists in the catalog but was not resolved. "
                         "Fail-closed (D63)."
                     )
-                # else: case (B) — already captured via the real access; skip the alias ref
+                # else: case (B) — already captured via the real access, or a provable
+                # output-alias reference; either way it adds no data access. Skip.
             elif col_name.lower() in all_catalog_column_names_lower:
                 # Case-mismatch: `amount` vs `Amount`, `registerType` vs `RegisterType`, etc.
                 # The identifier looks like a catalog column name but uses wrong case.
