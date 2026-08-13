@@ -16,7 +16,7 @@ slots:
   required: true
   binds_to: dbpcm_warehouse.employee.department_name
 uses_rules:
-- id: earnings_only
+- id: gross_earnings
   resolve_via: resolveValues(register_type, 'earnings')
   table: dbpcm_warehouse.payroll
   binds: earn_codes
