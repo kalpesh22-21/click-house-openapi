@@ -16,6 +16,7 @@ slots:
   max_value: 36
 result_grain:
 - month
+window_anchor: data
 sql_template: |
   SELECT toStartOfMonth(hire_date) AS month,
          COUNT(DISTINCT employee_code) AS hires

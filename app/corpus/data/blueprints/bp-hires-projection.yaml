@@ -20,6 +20,7 @@ slots:
   min_value: 1
   max_value: 24
 result_grain: []
+window_anchor: data
 sql_template: |
   SELECT
     COUNT(DISTINCT employee_code) AS hires_in_window,
