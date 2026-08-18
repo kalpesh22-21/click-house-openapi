@@ -455,7 +455,10 @@ columns:
     unit: USD
   annual_salary:
     type: Nullable(Decimal(18, 6))
-    description: This is the annual salary of the employee. (Estimated for hourly employee
+    description: This is the annual salary of the employee. (Estimated for hourly employee). For a MEDIAN of this column,
+      ClickHouse quantileExact(0.5) returns the UPPER middle value when the group has an even number of rows, not the average
+      of the two middle values; for a true median use (quantileExactLow(0.5)(annual_salary) + quantileExactHigh(0.5)(annual_salary))
+      / 2.
     unit: USD
   scheduled_pay_period_hours:
     type: Nullable(Decimal(18, 6))
@@ -651,7 +654,7 @@ ambiguities:
   - hire_date
   - most_recent_hire_date
   - rehire_date
-  default: most_recent_hire_date
+  default: hire_date
   clarify_if: The question distinguishes original hire from most recent hire or rehire.
 - term: supervisor
   resolves_to:

@@ -1,5 +1,5 @@
 id: bp-hires-in-range
-intent: New hires per month within an explicit start/end date range
+intent: New hires per month within an explicit start/end date range — counts by original hire date; rehires are not re-counted
 slots_summary: hire_window
 status: validated
 drift_status: clean

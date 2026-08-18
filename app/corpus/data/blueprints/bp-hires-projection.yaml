@@ -1,5 +1,5 @@
 id: bp-hires-projection
-intent: Projected number of hires over the next N months at the current hiring pace (run-rate over a trailing window)
+intent: Projected number of hires over the next N months at the current hiring pace (run-rate over a trailing window) — counts by original hire date; rehires are not re-counted
 slots_summary: window_months, horizon_months
 status: validated
 drift_status: clean

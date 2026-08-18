@@ -1,5 +1,5 @@
 id: bp-hires-per-month
-intent: New hires per month over a trailing window of the last N months
+intent: New hires per month over a trailing window of the last N months — counts by original hire date; rehires are not re-counted
 slots_summary: window_months
 status: validated
 drift_status: clean
