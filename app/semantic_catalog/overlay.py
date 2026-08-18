@@ -621,6 +621,7 @@ def build_table_schema_response(
     catalog: dict[str, dict[str, Any]],
     scope: frozenset[str] | None,
     introspected_schema: dict[str, dict[str, str]] | None = None,
+    columns_filter: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the merged (+ scope-filtered) getTableSchema response (design §1.2).
 
@@ -648,6 +649,43 @@ def build_table_schema_response(
     taken from `introspected_columns` (never the catalog `columns:` block),
     regardless of whether `introspected_schema` is supplied, since that
     parameter is already the real per-table introspection result.
+
+    `columns_filter` (M3) narrows the emitted `columns` array to the named
+    columns only — the affordance a model needs when the runtime's schema
+    preview showed a column as name/type only and it wants that column's full
+    documentation. Semantics:
+
+      * The filter is applied LAST — after the `mcp_projection.hidden_columns`
+        projection AND after scope enforcement — so it can only ever REMOVE
+        entries from the already-authorized column list. It is structurally
+        incapable of reaching a column that projection or scope hides; there is
+        no code path on which a filtered response contains a column an
+        unfiltered response would not.
+      * Matching is exact and CASE-SENSITIVE against the catalog's own spelling,
+        matching the D70 merge join — the model copies names out of the schema
+        skeleton, which carries that spelling.
+      * `None` and `[]` BOTH mean "all columns". An empty list is what a
+        confused model sends when it means "no narrowing"; reading it as "no
+        columns" would return a husk (base sections with an empty column array)
+        that looks like a table with no columns and would send the model
+        chasing a non-problem.
+      * Requested names that do not appear in the final authorized column list
+        are echoed back under `columns_not_found` (present ONLY when a
+        narrowing filter was actually applied, so an unfiltered call's response
+        shape is byte-identical to before). That bucket is deliberately
+        UNDIFFERENTIATED: a name that does not exist, a name hidden by
+        `mcp_projection`, and a name outside the caller's scope are
+        indistinguishable in it. Echoing back only the caller's own supplied
+        strings discloses nothing the caller did not already know — whereas a
+        "hidden" vs "unknown" distinction would confirm the existence of an
+        RLS/tenancy column whose NAME this module strips from every other
+        surface unconditionally (A-H1/A-H2).
+
+    The filter narrows `columns` ONLY. Every base section (description, grain,
+    temporal, primary_key, join_keys, measures, rules, ambiguities) always
+    rides complete — they are the table-level semantics the model needs to use
+    whichever columns it asked about, and withholding them would make a
+    narrowed fetch strictly less useful than a full one.
 
     Does NOT set `catalog_sha` — the caller (app/service.py) attaches that from
     `app.semantic_catalog.loader.get_catalog_sha()`.
@@ -756,7 +794,24 @@ def build_table_schema_response(
             )
             temporal = _filter_temporal(temporal, qualified_key, scope)
 
-    return {
+    # M3 column narrowing — applied LAST, on the fully authorized column list.
+    # Everything above this line (hidden-column projection, scope enforcement)
+    # has already run, so this can only remove entries, never restore one.
+    # `None` and `[]` alike mean "all columns" (see the docstring).
+    columns_not_found: list[str] | None = None
+    if columns_filter:
+        requested: list[str] = []
+        for name in columns_filter:
+            if name not in requested:
+                requested.append(name)
+        available = {c["name"] for c in merged_columns}
+        # Preserve the merged (introspection position) order rather than the
+        # caller's argument order, so the narrowed array reads like a slice of
+        # the full response.
+        merged_columns = [c for c in merged_columns if c["name"] in requested]
+        columns_not_found = [name for name in requested if name not in available]
+
+    response = {
         "database": database,
         "table": table,
         "catalogued": catalogued,
@@ -770,3 +825,6 @@ def build_table_schema_response(
         "rules": rules,
         "ambiguities": ambiguities,
     }
+    if columns_not_found is not None:
+        response["columns_not_found"] = columns_not_found
+    return response

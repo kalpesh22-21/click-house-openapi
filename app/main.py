@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.employee_access import EmployeeAccessError
 from app.errors import (
+    ArgumentValidationError,
     CartesianJoinError,
     ClickHouseAPIError,
     ClickHouseQueryError,
@@ -141,6 +142,7 @@ app = FastAPI(
 # these explicitly; this is the backstop for the rest.)
 _DOMAIN_ERROR_STATUS: dict[type, int] = {
     QueryValidationError: 400,
+    ArgumentValidationError: 400,
     CartesianJoinError: 400,
     ClickHouseQueryError: 400,
     # ADR-0002/H3: scratch-session isolation now fires on REST too (a scratch

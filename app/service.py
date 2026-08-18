@@ -30,6 +30,7 @@ from app.clickhouse_client import execute_query
 from app.config import Settings, get_settings
 from app.employee_access import ensure_employee_access_fresh
 from app.errors import (
+    ArgumentValidationError,
     CartesianJoinError,
     ClickHouseQueryError,
     ClickHouseUnavailableError,
@@ -276,10 +277,82 @@ def list_tables(
     return tables
 
 
+# Caps on the getTableSchema `columns` narrowing argument (M3). The values are
+# caller-supplied strings that get ECHOED BACK in `columns_not_found`, so they
+# are bounded on both axes before anything is done with them: a 64-name list is
+# far past any real "show me the docs for these few columns" request, and 128
+# chars is far past any real ClickHouse column identifier. Rejecting (rather
+# than silently truncating) keeps the model honest — a truncated list would
+# quietly drop names and look like "those columns don't exist".
+_MAX_SCHEMA_COLUMNS_FILTER = 64
+_MAX_SCHEMA_COLUMN_NAME_LEN = 128
+
+
+def _validate_columns_filter(columns: list[str] | None) -> list[str] | None:
+    """Validate the getTableSchema `columns` narrowing argument (M3).
+
+    Returns the list unchanged when it is well-formed, or None when the caller
+    asked for no narrowing. `None` and `[]` are BOTH normalized to None — they
+    mean the same thing ("all columns"); see build_table_schema_response.
+
+    This lives at the service layer, not the tool layer, because it is the
+    choke point BOTH transports share: the MCP tool's pydantic annotation also
+    declares the cap (so the model can see it in the tool schema), but a direct
+    service caller must not be able to bypass the bound.
+
+    Raises:
+        ArgumentValidationError: INVALID_ARGUMENT if the value is not a list of
+            plain strings, carries more than 64 entries, or carries a name
+            longer than 128 characters.
+    """
+    if columns is None:
+        return None
+    if not isinstance(columns, list):
+        raise ArgumentValidationError(
+            message=(
+                "The 'columns' argument must be a list of column-name strings "
+                "(or omitted entirely to get every column)."
+            ),
+            code="INVALID_ARGUMENT",
+        )
+    if not columns:
+        return None
+    if len(columns) > _MAX_SCHEMA_COLUMNS_FILTER:
+        raise ArgumentValidationError(
+            message=(
+                f"The 'columns' argument accepts at most {_MAX_SCHEMA_COLUMNS_FILTER} "
+                f"column names ({len(columns)} given). Request fewer columns, or omit "
+                "'columns' entirely to get the full schema."
+            ),
+            code="INVALID_ARGUMENT",
+        )
+    for entry in columns:
+        # bool is an int, not a str, so it lands here too — as it should.
+        if not isinstance(entry, str):
+            raise ArgumentValidationError(
+                message=(
+                    "Every entry in the 'columns' argument must be a column-name "
+                    "string."
+                ),
+                code="INVALID_ARGUMENT",
+            )
+        if len(entry) > _MAX_SCHEMA_COLUMN_NAME_LEN:
+            raise ArgumentValidationError(
+                message=(
+                    "A column name in the 'columns' argument exceeds "
+                    f"{_MAX_SCHEMA_COLUMN_NAME_LEN} characters. Column names are "
+                    "copied verbatim from the schema — check the name you sent."
+                ),
+                code="INVALID_ARGUMENT",
+            )
+    return columns
+
+
 def get_table_schema(
     database: str,
     table: str,
     settings: Settings | None = None,
+    columns: list[str] | None = None,
 ) -> dict[str, Any]:
     """Return the merged, scope-filtered column schema for *database*.*table* (D83/D84).
 
@@ -293,6 +366,15 @@ def get_table_schema(
     ambiguities, catalog_sha. An uncatalogued table returns catalogued=False
     with all catalog-derived fields null and columns carrying introspection
     fields only (design §1.3) — still scope-filtered.
+
+    `columns` (M3) narrows the emitted `columns` array to the named columns,
+    adding a `columns_not_found` key that echoes back any requested name that
+    did not survive. It is applied INSIDE build_table_schema_response, last —
+    after the hidden-column projection and after scope enforcement — so it can
+    only ever remove entries from the authorized list, never reach past it.
+    `None` and `[]` both mean "all columns"; on either, the response shape is
+    unchanged from before M3 (no `columns_not_found` key). See
+    build_table_schema_response for the full semantics.
 
     Scratch-table isolation (D64): when *database* is the scratch database, the
     requested table must belong to the caller's session (same owning-session check
@@ -308,9 +390,15 @@ def get_table_schema(
                                   scratch db and *table* does not belong to the
                                   current session (or no session is bound).
         TableNotFoundError:      if the table has no columns (does not exist).
+        ArgumentValidationError: INVALID_ARGUMENT if *columns* is malformed
+                                  (not a list of strings, or over the caps).
     """
     if settings is None:
         settings = get_settings()
+
+    # Validate the caller-supplied narrowing list BEFORE any I/O: a malformed
+    # argument is the caller's bug, not a reason to hit ClickHouse.
+    columns_filter = _validate_columns_filter(columns)
 
     _check_database_allowed(database, settings)
 
@@ -367,6 +455,7 @@ def get_table_schema(
         catalog=get_semantic_catalog(),
         scope=scope,
         introspected_schema=introspected_schema,
+        columns_filter=columns_filter,
     )
     response["catalog_sha"] = get_catalog_sha()
     return response

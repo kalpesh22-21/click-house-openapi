@@ -14,9 +14,14 @@ def _reset_cache():
     loader.invalidate_corpus_cache()
 
 
-# Every seed blueprint id and the three knowledge ids migrated from the source corpus
-# fixtures — asserted explicitly so a dropped file fails the suite. Was ten; grew to
-# eleven when `bp-employee-check-detail-for-period` was extracted from
+# Every seed blueprint id and every knowledge id in the canon — the knowledge set was
+# the three ids migrated from the source corpus fixtures, and grew to four when
+# `kn-clickhouse-median` was authored in f838a7f (the ClickHouse median guidance:
+# runtime schema previews truncate wide tables' column descriptions, so recall-based
+# knowledge is the surface that reliably reaches the model). That commit added the YAML
+# without updating this closed set, landing this assertion red; it is corrected here.
+# Both sets are asserted explicitly so a dropped file fails the suite. The blueprint set
+# was ten; it grew to eleven when `bp-employee-check-detail-for-period` was extracted from
 # `bp-compare-employee-check-detail-two-periods`, whose nodes 0 and 1 were identical
 # apart from the pay-period slot and now REFERENCE it (`composes[].ref`, resolved and
 # inlined by the consumer's corpus loader at load time).
@@ -37,6 +42,7 @@ _KNOWLEDGE_IDS = {
     "kn-overtime-multiplier",
     "kn-pay-period-definition",
     "kn-register-type",
+    "kn-clickhouse-median",
 }
 
 

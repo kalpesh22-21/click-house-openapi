@@ -47,7 +47,7 @@ The same Docker image can run as an MCP server — exposing the same six operati
 |------|---------|
 | `listDatabases` | Discover accessible databases |
 | `listTables` | List tables in a database |
-| `getTableSchema` | Column names, types, comments (call before writing a query) |
+| `getTableSchema` | Column names, types, comments (call before writing a query); optional `columns` narrows the column array to named columns only |
 | `sampleRows` | Preview up to 50 real rows |
 | `runQuery` | Execute a validated read-only SQL query |
 | `explainQuery` | EXPLAIN a query without executing it |

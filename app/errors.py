@@ -25,6 +25,21 @@ class QueryValidationError(ClickHouseAPIError):
     """
 
 
+class ArgumentValidationError(ClickHouseAPIError):
+    """Raised when a NON-SQL tool/route argument is malformed (M3).
+
+    Distinct from QueryValidationError, which means "your SQL failed the
+    security guardrails" and whose caller-facing message tells the model to fix
+    its SQL.  A malformed `columns` narrowing list on getTableSchema has no SQL
+    to fix — reusing QueryValidationError would hand a self-correcting model a
+    misleading instruction and send it editing a query it never sent.
+
+    Code: INVALID_ARGUMENT
+
+    Maps to HTTP 400 in the REST layer.
+    """
+
+
 class DatabaseNotAllowedError(ClickHouseAPIError):
     """Raised when the requested database is not in the ALLOWED_DATABASES allowlist.
 

@@ -39,6 +39,8 @@ Tool catalogue
   listDatabases       — discover which databases are available
   listTables          — list tables inside a database
   getTableSchema      — get column names, types, comments for a table
+                        (optional `columns` narrows the column array; the
+                         base sections always ride complete)
   sampleRows          — fetch a small sample of real rows from a table
   runQuery            — execute a validated read-only SQL query
   explainQuery        — EXPLAIN a query without executing it
@@ -72,6 +74,7 @@ from app.config import get_settings
 from app.principal import current_principal, current_scope, current_session_id
 from app.corpus.export import build_blueprints_export, build_knowledge_export
 from app.errors import (
+    ArgumentValidationError,
     CartesianJoinError,
     ClickHouseQueryError,
     ClickHouseUnavailableError,
@@ -144,6 +147,12 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
             "Fix the SQL and try again (explainQuery runs the same validation, so "
             "it will not diagnose this — correct the statement first)."
         )
+    if isinstance(exc, ArgumentValidationError):
+        # A malformed tool ARGUMENT (e.g. getTableSchema's `columns` list) —
+        # deliberately NOT routed through the QueryValidationError branch, whose
+        # message would tell the model to go fix SQL it never sent. The message
+        # is an author-controlled string naming the constraint that was broken.
+        return ToolError(f"[{exc.code}] {exc.message}")
     if isinstance(exc, DatabaseNotAllowedError):
         return ToolError(
             f"[{exc.code}] {exc.message}. "
@@ -247,16 +256,39 @@ def list_tables(
         "Knowing the schema tells you exact column names, types (e.g. UInt64, Nullable(String), "
         "DateTime64(3)), and descriptive comments — preventing type-mismatch errors and helping "
         "you write correct WHERE clauses and aggregations. "
-        "Columns and catalog entries outside your permitted access scope are omitted."
+        "Columns and catalog entries outside your permitted access scope are omitted. "
+        "Use the optional 'columns' argument to fetch the FULL documentation for specific "
+        "columns when a schema preview showed them as name/type only: pass the exact column "
+        "names, spelled as the schema spells them (matching is case-sensitive). The table-level "
+        "sections (description, grain, rules, ambiguities, join keys, measures, temporal, "
+        "primary key) are always returned in full — 'columns' narrows the column list only. "
+        "Omit 'columns' (or pass an empty list) to get every column. Requested names that are "
+        "not available to you are omitted and echoed back under 'columns_not_found'."
     ),
 )
 def get_table_schema(
     database: Annotated[str, Field(description="The database containing the table")],
     table: Annotated[str, Field(description="The table to describe")],
+    columns: Annotated[
+        Optional[list[str]],
+        Field(
+            description=(
+                "Optional: return only these columns, with their full documentation. "
+                "Exact, case-sensitive column names as spelled in the schema. Omit or "
+                "pass an empty list for all columns. Maximum 64 names."
+            ),
+            max_length=64,
+        ),
+    ] = None,
 ) -> dict[str, Any]:
-    """Return the merged, scope-filtered column schema for the given table (D83/D84)."""
+    """Return the merged, scope-filtered column schema for the given table (D83/D84).
+
+    *columns* (M3) narrows the returned column array only — every base section
+    always rides complete, and the narrowing is applied after scope/projection
+    enforcement, so it can never surface a column an unnarrowed call would hide.
+    """
     try:
-        return svc_get_table_schema(database, table)
+        return svc_get_table_schema(database, table, columns=columns)
     except Exception as exc:
         raise _domain_to_tool_error(exc) from exc
 
