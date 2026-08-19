@@ -1,0 +1,25 @@
+id: bp::sha256:1b72b2afce35954f816dec028fdc1963baafb61bb1a9fa24fa64032f0e748c22
+intent: Calculate the average annual salary per employee filtered by employee status.
+slots_summary: employee_status
+status: validated
+drift_status: clean
+catalog_sha: ''
+uses:
+- dbpcm_warehouse.employee.annual_salary
+- dbpcm_warehouse.employee.employee_status
+slots:
+- name: employee_status
+  type: enum
+  binds_to: dbpcm_warehouse.employee.employee_status
+  required: true
+  enum_values:
+  - A
+  - D
+  - I
+  - R
+  - T
+  - V
+sql_template: SELECT avg(annual_salary) AS average_annual_salary_per_employee FROM
+  dbpcm_warehouse.employee WHERE employee_status = {employee_status}
+resolves:
+  average annual salary per employee: dbpcm_warehouse.employee.annual_salary
