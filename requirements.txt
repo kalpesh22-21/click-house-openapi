@@ -10,7 +10,7 @@ openpyxl==3.1.5
 # against XML entity-expansion (billion-laughs) on untrusted uploads. Explicit dep.
 defusedxml==0.7.1
 uvicorn[standard]==0.32.1
-clickhouse-connect==0.7.16
+clickhouse-connect>=1.7.2,<2
 pydantic-settings==2.7.1
 pydantic==2.11.7
 python-dotenv==1.0.1

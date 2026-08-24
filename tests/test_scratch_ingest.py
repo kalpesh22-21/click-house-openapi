@@ -66,13 +66,14 @@ class FakeCHClient:
     def command(self, sql: str) -> None:
         self.commands.append(sql)
 
-    def insert(self, table, data, column_names, database) -> None:  # noqa: ANN001
+    def insert(self, table, data, column_names, database, settings=None) -> None:  # noqa: ANN001
         self.inserts.append(
             {
                 "table": table,
                 "data": data,
                 "column_names": column_names,
                 "database": database,
+                "settings": settings,
             }
         )
 
@@ -191,6 +192,55 @@ class TestScratchDDL:
             build_scratch_create_sql(
                 "warehouse; DROP", "t", [{"name": "k", "type": "Int64"}], 3600
             )
+
+    def test_ddl_single_node_default_has_no_cluster_clause(self):
+        # Default (cluster="") must be byte-for-byte the original node-local shape.
+        ddl = build_scratch_create_sql(
+            "scratch", "s_sess_x_bp_abc", [{"name": "k", "type": "Int64"}], 3600
+        )
+        assert "ENGINE = MergeTree" in ddl
+        assert "ON CLUSTER" not in ddl
+        assert "Replicated" not in ddl
+
+    def test_ddl_cluster_mode_is_replicated_on_cluster(self):
+        ddl = build_scratch_create_sql(
+            "scratch",
+            "s_sess_x_bp_abc",
+            [{"name": "k", "type": "Int64"}],
+            3600,
+            cluster="my_cluster",
+            replica_path_prefix="/clickhouse/tables/{shard}",
+            replica_name="{replica}",
+        )
+        assert "`scratch`.`s_sess_x_bp_abc` ON CLUSTER 'my_cluster'" in ddl
+        # Keeper path is <prefix>/<db>/<table>, unique per uuid table name.
+        assert (
+            "ENGINE = ReplicatedMergeTree("
+            "'/clickhouse/tables/{shard}/scratch/s_sess_x_bp_abc', '{replica}')"
+        ) in ddl
+        assert "TTL `_scratch_created_at` + INTERVAL 3600 SECOND" in ddl
+
+    @pytest.mark.parametrize(
+        "field",
+        ["cluster", "replica_path_prefix", "replica_name"],
+    )
+    def test_ddl_cluster_literal_rejects_injection(self, field):
+        # A quote/backslash in any cluster literal is refused, never interpolated.
+        kwargs = {
+            "cluster": "c",
+            "replica_path_prefix": "/clickhouse/tables/{shard}",
+            "replica_name": "{replica}",
+        }
+        kwargs[field] = "x' , 'y"  # would break out of the single-quoted literal
+        with pytest.raises(ScratchWriteError) as exc:
+            build_scratch_create_sql(
+                "scratch",
+                "s_sess_x_bp_abc",
+                [{"name": "k", "type": "Int64"}],
+                3600,
+                **kwargs,
+            )
+        assert exc.value.code == "SCRATCH_CLUSTER_MISCONFIGURED"
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +382,51 @@ class TestDrop:
         with pytest.raises(ScratchWriteError):
             scratch_ingest.drop("sess_me", f"scratch.s_sess_other_bp_{_HEX}", settings)
         assert fake_client.commands == []
+
+
+# ---------------------------------------------------------------------------
+# Cluster mode — ON CLUSTER / ReplicatedMergeTree DDL + quorum insert
+# ---------------------------------------------------------------------------
+
+
+class TestClusterMode:
+    @pytest.fixture()
+    def cluster_settings(self, settings):
+        return settings.model_copy(update={"scratch_cluster": "prod_cluster"})
+
+    def test_materialize_creates_on_cluster_and_quorum_inserts(
+        self, fake_client, cluster_settings
+    ):
+        scratch_ingest.materialize(
+            "sessabc123",
+            [{"name": "k", "type": "Int64"}],
+            [[1]],
+            cluster_settings,
+        )
+        create_tbl = [
+            c for c in fake_client.commands if c.upper().startswith("CREATE TABLE")
+        ]
+        assert create_tbl and "ON CLUSTER 'prod_cluster'" in create_tbl[0]
+        assert "ReplicatedMergeTree(" in create_tbl[0]
+        # Quorum insert so the write is durable cluster-wide before returning.
+        assert fake_client.inserts[0]["settings"] == {
+            "insert_quorum": "auto",
+            "insert_quorum_parallel": 0,
+        }
+
+    def test_materialize_single_node_passes_no_insert_settings(
+        self, fake_client, settings
+    ):
+        scratch_ingest.materialize(
+            "sessabc123", [{"name": "k", "type": "Int64"}], [[1]], settings
+        )
+        assert fake_client.inserts[0]["settings"] is None
+
+    def test_drop_is_on_cluster(self, fake_client, cluster_settings):
+        name = f"s_sess_me_bp_{_HEX}"
+        scratch_ingest.drop("sess_me", f"scratch.{name}", cluster_settings)
+        assert fake_client.commands[0].upper().startswith("DROP TABLE IF EXISTS")
+        assert "ON CLUSTER 'prod_cluster'" in fake_client.commands[0]
 
 
 # ---------------------------------------------------------------------------

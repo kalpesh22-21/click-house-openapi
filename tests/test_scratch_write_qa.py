@@ -78,9 +78,15 @@ class FakeCHClient:
     def command(self, sql: str) -> None:
         self.commands.append(sql)
 
-    def insert(self, table, data, column_names, database) -> None:  # noqa: ANN001
+    def insert(self, table, data, column_names, database, settings=None) -> None:  # noqa: ANN001
         self.inserts.append(
-            {"table": table, "data": data, "column_names": column_names, "database": database}
+            {
+                "table": table,
+                "data": data,
+                "column_names": column_names,
+                "database": database,
+                "settings": settings,
+            }
         )
 
     def close(self) -> None:

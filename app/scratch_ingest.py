@@ -343,18 +343,66 @@ def _coerce_row(row: list[Any], columns: list[dict[str, str]]) -> list[Any]:
 # DDL
 # ---------------------------------------------------------------------------
 
+# Characters that would break out of a single-quoted SQL literal (the cluster
+# name, Keeper path, and replica name are interpolated into `ON CLUSTER '...'` and
+# the ReplicatedMergeTree('...','...') engine args).  These values come from
+# SERVER config (never the request), but we still reject quote/backslash/backtick/
+# control chars defensively before interpolating — the same fail-closed posture as
+# the identifier whitelist.
+_UNSAFE_LITERAL_RE = re.compile(r"""['"`\\\x00-\x1f]""")
+
+
+def _validate_cluster_literal(value: str, what: str) -> str:
+    """Return *value* if it is safe to interpolate into a single-quoted DDL literal.
+
+    Cluster names, Keeper paths, and replica names legitimately contain ``/``,
+    ``{``/``}`` (ClickHouse macros such as ``{shard}``/``{replica}``), letters,
+    digits, ``-`` and ``_`` — which ``validate_identifier`` would reject — so this
+    uses a denylist of literal-breaking characters rather than the identifier
+    whitelist.  A hostile value is refused, never smuggled into the DDL.
+    """
+    if not isinstance(value, str) or not value:
+        raise ScratchWriteError(
+            f"Cluster {what} must be a non-empty string.",
+            code="SCRATCH_CLUSTER_MISCONFIGURED",
+            status_code=500,
+        )
+    if _UNSAFE_LITERAL_RE.search(value):
+        raise ScratchWriteError(
+            f"Cluster {what} contains an unsafe character.",
+            code="SCRATCH_CLUSTER_MISCONFIGURED",
+            status_code=500,
+        )
+    return value
+
 
 def build_scratch_create_sql(
     database: str,
     table: str,
     columns: list[dict[str, str]],
     ttl_seconds: int,
+    *,
+    cluster: str = "",
+    replica_path_prefix: str = "/clickhouse/tables/{shard}",
+    replica_name: str = "{replica}",
 ) -> str:
     """Return the CREATE TABLE DDL for a session-scoped scratch table with a TTL.
 
     All identifiers/types are re-validated here (belt-and-suspenders — the caller
     already validated).  A hidden ``_scratch_created_at DateTime DEFAULT now()``
     column carries the wall-clock TTL so orphaned tables GC themselves.
+
+    Single-node (default, ``cluster`` empty): a node-local plain ``MergeTree``.
+    The create/insert and the later JOIN both hit the same endpoint, so a table
+    that lives on one node is sufficient.
+
+    Cluster mode (``cluster`` set): the table is created ``ON CLUSTER`` as a
+    ``ReplicatedMergeTree`` so it exists on every node AND its rows replicate,
+    letting the main read client resolve the JOIN on whichever node serves it —
+    the multi-node fix.  The Keeper path is ``<replica_path_prefix>/<db>/<table>``
+    (unique per table via the uuid table name, identical across a table's
+    replicas) and the replica is named by *replica_name* (typically the
+    ``{replica}`` macro).
     """
     db = validate_identifier(database)
     tbl = validate_identifier(table)
@@ -365,10 +413,22 @@ def build_scratch_create_sql(
         col_defs.append(f"    `{col_name}` {col_type}")
     col_defs.append(f"    `{_TTL_COLUMN}` DateTime DEFAULT now()")
     cols_sql = ",\n".join(col_defs)
+
+    if cluster:
+        cluster_lit = _validate_cluster_literal(cluster, "name")
+        prefix = _validate_cluster_literal(replica_path_prefix, "replica path prefix")
+        replica_lit = _validate_cluster_literal(replica_name, "replica name")
+        on_cluster = f" ON CLUSTER '{cluster_lit}'"
+        keeper_path = f"{prefix}/{db}/{tbl}"
+        engine = f"ReplicatedMergeTree('{keeper_path}', '{replica_lit}')"
+    else:
+        on_cluster = ""
+        engine = "MergeTree"
+
     return (
-        f"CREATE TABLE `{db}`.`{tbl}`\n"
+        f"CREATE TABLE `{db}`.`{tbl}`{on_cluster}\n"
         f"(\n{cols_sql}\n)\n"
-        f"ENGINE = MergeTree\n"
+        f"ENGINE = {engine}\n"
         f"ORDER BY tuple()\n"
         f"TTL `{_TTL_COLUMN}` + INTERVAL {int(ttl_seconds)} SECOND"
     )
@@ -408,12 +468,30 @@ def materialize(
     try:
         _ensure_scratch_db(client, settings.scratch_database)
         ddl = build_scratch_create_sql(
-            settings.scratch_database, table, validated_cols, settings.scratch_ttl_seconds
+            settings.scratch_database,
+            table,
+            validated_cols,
+            settings.scratch_ttl_seconds,
+            cluster=settings.scratch_cluster,
+            replica_path_prefix=settings.scratch_replica_path_prefix,
+            replica_name=settings.scratch_replica_name,
         )
         client.command(ddl)
 
         col_names = [c["name"] for c in validated_cols]
         coerced = [_coerce_row(r, validated_cols) for r in validated_rows]
+        # In cluster mode, block the INSERT until a majority of replicas have the
+        # rows (insert_quorum='auto') so materialize() only returns once the data
+        # is durable cluster-wide — this bounds the replication-lag window before
+        # the downstream JOIN.  For a HARD read-your-writes guarantee the reader
+        # must also run select_sequential_consistency=1 (a deployment-side profile
+        # setting; see Settings.scratch_cluster).  Single-node mode passes no
+        # settings and keeps the original fast, un-quorumed insert.
+        insert_settings = (
+            {"insert_quorum": "auto", "insert_quorum_parallel": 0}
+            if settings.scratch_cluster
+            else None
+        )
         # Native bulk insert — rows are DATA, never SQL text.  Only the user
         # columns are named; the DEFAULT-valued TTL column is filled by ClickHouse.
         client.insert(
@@ -421,6 +499,7 @@ def materialize(
             data=coerced,
             column_names=col_names,
             database=settings.scratch_database,
+            settings=insert_settings,
         )
         return {
             "table": f"{settings.scratch_database}.{table}",
@@ -442,8 +521,16 @@ def drop(session_id: str, table: Any, settings: Settings) -> dict[str, Any]:
     bare = _bare_scratch_name(table, session_id)
     client = build_scratch_client(settings)
     try:
+        # In cluster mode the table was created ON CLUSTER, so it must be dropped
+        # ON CLUSTER too — a node-local DROP would leave the replicas (and their
+        # Keeper metadata) behind.  Single-node mode drops the one local table.
+        on_cluster = ""
+        if settings.scratch_cluster:
+            cluster_lit = _validate_cluster_literal(settings.scratch_cluster, "name")
+            on_cluster = f" ON CLUSTER '{cluster_lit}'"
         client.command(
             f"DROP TABLE IF EXISTS `{validate_identifier(settings.scratch_database)}`.`{bare}`"
+            f"{on_cluster}"
         )
         return {"dropped": True}
     finally:

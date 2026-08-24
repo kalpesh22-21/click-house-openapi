@@ -94,6 +94,29 @@ class TestSafetyCapsWinMerge:
         # env restored; rebuild a clean (readonly=1) settings for later tests.
         get_settings.cache_clear()
 
+    def test_final_applied_by_default(self):
+        # Correctness-first default: FINAL rides every query so an LLM caller never
+        # sees un-merged duplicate rows from a Replacing/Collapsing table.
+        assert readonly_settings(get_settings())["final"] == 1
+
+    def test_final_can_be_disabled(self):
+        with patch.dict(os.environ, {"CLICKHOUSE_SELECT_FINAL": "false"}):
+            get_settings.cache_clear()
+            assert "final" not in readonly_settings(get_settings())
+        # env restored; rebuild a clean settings for later tests.
+        get_settings.cache_clear()
+
+    def test_sequential_consistency_off_by_default(self):
+        # Single-node default: no read-your-writes wait imposed on reads.
+        assert "select_sequential_consistency" not in readonly_settings(get_settings())
+
+    def test_sequential_consistency_on_in_cluster_mode(self):
+        with patch.dict(os.environ, {"SCRATCH_CLUSTER": "prod_cluster"}):
+            get_settings.cache_clear()
+            assert readonly_settings(get_settings())["select_sequential_consistency"] == 1
+        # env restored; rebuild a clean settings for later tests.
+        get_settings.cache_clear()
+
 
 # ---------------------------------------------------------------------------
 # End-to-end: the tenant setting reaches client.query, safety caps intact

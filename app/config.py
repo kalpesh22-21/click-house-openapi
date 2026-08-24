@@ -161,9 +161,12 @@ class Settings(BaseSettings):
     # applies FINAL to every MergeTree-family table in a query, not just Replacing
     # ones, so plain MergeTree tables pay the merge-at-read overhead too and large
     # full scans may newly hit max_execution_time.  No-ops on system tables.
-    # Default OFF; opt in per deployment.
+    # Default ON: correctness-first — an LLM caller should never see un-merged
+    # duplicate rows from a Replacing/Collapsing table.  Set CLICKHOUSE_SELECT_FINAL
+    # =false on a deployment whose warehouse has no Replacing/Collapsing tables and
+    # wants to shed the merge-at-read cost.
     clickhouse_select_final: bool = Field(
-        False,
+        True,
         description="Apply ClickHouse final=1 to every query (dedup ReplacingMergeTree reads).",
     )
 
@@ -339,6 +342,49 @@ class Settings(BaseSettings):
         description=(
             "Hard cap on rows a single /scratch/v1/materialize may load. Over-cap is "
             "rejected SCRATCH_TOO_LARGE so the runtime falls back to the raw loop (OQ-C)."
+        ),
+    )
+    # --- Multi-node / cluster support for the scratch side-channel ---
+    # The scratch table is CREATEd + INSERTed by one client, then JOINed by the
+    # main read client. On a single endpoint (or a load balancer with session
+    # affinity) both hit the same node, so a plain, node-local `MergeTree` scratch
+    # table is fine — the default.  On a genuine multi-node cluster reached through
+    # a non-sticky load balancer the create/insert and the JOIN can land on
+    # DIFFERENT nodes → the JOIN sees UNKNOWN_TABLE.  Set SCRATCH_CLUSTER to a
+    # ClickHouse cluster name to make the DDL cluster-aware: the table is created
+    # `ON CLUSTER` as a `ReplicatedMergeTree` so it exists AND its rows replicate
+    # to every node, and the JOIN resolves on whichever node serves it.  Empty
+    # (default) preserves the node-local single-node behaviour unchanged.
+    #
+    # READ-YOUR-WRITES on a cluster: cluster mode inserts with insert_quorum='auto'
+    # so the write is durable on a majority before materialize() returns, AND the
+    # reader automatically sends select_sequential_consistency=1 (see
+    # clickhouse_client.readonly_settings) so the immediately-following JOIN waits
+    # for its replica to catch up rather than reading a lagging one.  That read
+    # setting is query-global, so a cluster deployment pays a small replication-wait
+    # cost on every read; single-node deployments (the default) never do.
+    scratch_cluster: str = Field(
+        "",
+        description=(
+            "ClickHouse cluster name for `ON CLUSTER` scratch DDL. Empty (default) "
+            "keeps node-local plain-MergeTree scratch tables; set it to make scratch "
+            "tables ReplicatedMergeTree ON CLUSTER so multi-node reads resolve them."
+        ),
+    )
+    scratch_replica_path_prefix: str = Field(
+        "/clickhouse/tables/{shard}",
+        description=(
+            "ClickHouse Keeper/ZooKeeper path prefix for ReplicatedMergeTree scratch "
+            "tables (cluster mode only). The full path is "
+            "'<prefix>/<database>/<table>'. May contain ClickHouse macros such as "
+            "{shard}; leave them literal (server-expanded per node)."
+        ),
+    )
+    scratch_replica_name: str = Field(
+        "{replica}",
+        description=(
+            "ClickHouse replica name for ReplicatedMergeTree scratch tables (cluster "
+            "mode only). Typically the {replica} macro so each node names itself."
         ),
     )
     upload_max_bytes: int = Field(

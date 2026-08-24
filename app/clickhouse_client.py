@@ -164,6 +164,22 @@ def readonly_settings(settings: Settings) -> dict[str, Any]:
     # the query (no-op on system tables). Off by default; see config for caveats.
     if settings.clickhouse_select_final:
         ch_settings["final"] = 1
+    # READ-YOUR-WRITES for the cluster scratch side-channel. When SCRATCH_CLUSTER
+    # is set, materialize() writes scratch tables as ReplicatedMergeTree with a
+    # quorum insert (insert_quorum='auto'); replication is otherwise ASYNCHRONOUS,
+    # so a JOIN routed to a lagging replica could miss the just-written rows.
+    # select_sequential_consistency=1 makes the SELECT wait until its replica has
+    # applied the quorum insert, closing that window so the downstream JOIN always
+    # sees the scratch rows it just materialized.
+    #
+    # TRADEOFF (why it is gated, not always-on): this is query-GLOBAL and applies
+    # to every read, including plain warehouse queries. It is a no-op on
+    # non-replicated tables, but on Replicated warehouse tables it makes the read
+    # wait for replication — a latency cost we only accept in a cluster deployment
+    # that has explicitly opted in via SCRATCH_CLUSTER. Single-node deployments
+    # (the default) never pay it.
+    if settings.scratch_cluster:
+        ch_settings["select_sequential_consistency"] = 1
     return ch_settings
 
 
