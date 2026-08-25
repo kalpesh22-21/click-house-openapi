@@ -3,6 +3,9 @@
 Creates a single, connection-pooled clickhouse-connect client from application
 config and exposes a thin execute() helper that:
   - Applies mandatory read-only session settings on every query.
+  - Carries the per-tenant RLS identity settings in the SQL body's SETTINGS
+    clause (as typed param_* binds) so they survive CHProxy, which strips the
+    HTTP settings= channel clickhouse-connect would otherwise use.
   - Converts ClickHouse errors into clean HTTP 400 / 502 responses so that
     the LLM caller receives actionable error messages without stack traces.
 """
@@ -39,6 +42,11 @@ cc_common.set_setting("invalid_setting_action", "send")
 # Pattern that matches host:port style strings in error messages, used to
 # redact infrastructure details before forwarding errors to callers.
 _HOST_PORT_RE = re.compile(r"\b[\w\-.]+:\d{2,5}\b")
+
+# A plain ClickHouse identifier (setting name / bind-parameter name): a letter or
+# underscore followed by letters, digits, or underscores.  Used to re-assert that
+# a server-configured tenant-setting key is safe to inline into a SETTINGS clause.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _redact_connection_details(msg: str, settings: Settings) -> str:
@@ -221,6 +229,75 @@ def tenant_settings(settings: Settings) -> dict[str, Any]:
     return out
 
 
+def _append_tenant_settings_clause(
+    sql: str,
+    parameters: dict[str, Any] | None,
+    tenant: dict[str, Any],
+) -> tuple[str, dict[str, Any] | None]:
+    """Carry the per-tenant RLS settings in the SQL body's SETTINGS clause.
+
+    WHY THIS EXISTS (CHProxy): clickhouse-connect transmits ``settings=`` as HTTP
+    query parameters.  Our multi-node ClickHouse now sits behind CHProxy, which
+    forwards the SQL body and any ``param_*`` HTTP parameters but STRIPS other
+    incoming query parameters — including custom session settings.  The RLS row
+    policies read the tenant identity via ``getSetting('paycom_client_code')``
+    (and proc-center / authenticated-user), so those values MUST reach ClickHouse
+    or every policy evaluates against an empty setting and the query returns no
+    rows (or errors).  We therefore move them out of the stripped ``settings=``
+    channel and into the SETTINGS clause of the SQL body, binding each value as a
+    typed ``{name:String}`` query parameter — transported as a CHProxy-preserved
+    ``param_*`` — rather than concatenating raw values into SQL.
+
+    Only the CUSTOM ``paycom_*`` settings travel here: ClickHouse exempts custom
+    settings (under ``<custom_settings_prefixes>``) from the readonly constraint,
+    so a SETTINGS clause carrying them is accepted even when the ClickHouse user
+    profile pins ``readonly=1`` (see config.py notes on CLICKHOUSE_READONLY).  The
+    standard safety caps are NOT moved here — a query SETTINGS clause that changed
+    a standard setting under a profile-enforced readonly=1 would be rejected — so
+    they stay on the ``settings=`` channel (harmless if CHProxy strips them; they
+    are meant to be enforced by the ClickHouse profile / CHProxy on that path).
+
+    The setting VALUES originate only from the authenticated principal's JWT
+    claims (see ``tenant_settings``); security.py already rejects any caller
+    ``SETTINGS`` clause, so this appended clause is fully server-trusted.  The SQL
+    reaching here is single-statement, comment-stripped and trailing-semicolon-free
+    (user queries pass through validate_and_sanitize; internal queries are
+    server-built), so a trailing SETTINGS clause is always well-formed.
+
+    Returns the (sql, parameters) to hand to ``client.query``.  When *tenant* is
+    empty (no principal — internal schema/health queries), the inputs are returned
+    unchanged so those paths are entirely unaffected.
+    """
+    if not tenant:
+        return sql, parameters
+
+    # Copy so we never mutate a caller-owned parameters dict (e.g. a schema route
+    # binding {dbs:Array(String)}); the RLS binds live alongside those.
+    merged: dict[str, Any] = dict(parameters or {})
+    assignments: list[str] = []
+    for ch_key, value in tenant.items():
+        # ch_key is server-configured and already validated to sit under the
+        # custom-settings prefix, but it is inlined here as a bare setting name AND
+        # reused as a bind-parameter name, so re-assert it is a plain identifier —
+        # defence-in-depth against a malformed config key breaking the clause.
+        if not _IDENTIFIER_RE.match(ch_key):
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": f"Invalid tenant setting name '{ch_key}'.",
+                    "code": "INVALID_TENANT_SETTING",
+                },
+            )
+        # Distinctive prefix so the bind name can never collide with a caller's
+        # own parameter (schema routes use plain names like 'dbs' / 'table').
+        param_name = f"rls_{ch_key}"
+        merged[param_name] = value
+        assignments.append(f"{ch_key} = {{{param_name}:String}}")
+
+    clause = "SETTINGS " + ", ".join(assignments)
+    return f"{sql}\n{clause}", merged
+
+
 def execute_query(
     sql: str,
     settings: Settings | None = None,
@@ -253,11 +330,25 @@ def execute_query(
     # build a fresh client on every query and (historically) crash because
     # lru_cache cannot hash a Settings object.
     client = get_client()
-    # Per-tenant custom settings (e.g. paycom_client_code) FIRST, safety caps LAST,
-    # so a misconfigured tenant mapping can never overwrite readonly / the row caps.
-    # The user-supplied-SETTINGS denylist in security.py keeps a caller from
-    # injecting their own paycom_* settings; the only path that sets them is this dict.
-    ch_settings = {**tenant_settings(settings), **readonly_settings(settings)}
+    # Transport for the per-tenant RLS identity settings (paycom_*), gated by
+    # CLICKHOUSE_RLS_VIA_SQL_SETTINGS:
+    #   ON  (default, CHProxy-safe): carry them in the SQL body's SETTINGS clause as
+    #       CHProxy-preserved param_* binds — the settings= channel is stripped by
+    #       CHProxy, so the identity values would never reach ClickHouse there. The
+    #       safety caps stay on settings= (a standard setting changed under a
+    #       profile-enforced readonly=1 would be rejected, and the caps are enforced
+    #       by the ClickHouse profile / CHProxy on the proxied path).
+    #   OFF (legacy, direct ClickHouse): merge them into the settings= dict alongside
+    #       the safety caps — customs FIRST, caps LAST, so a misconfigured tenant
+    #       mapping can never overwrite readonly / the row caps.
+    # security.py already rejects any caller-supplied SETTINGS clause, so the only
+    # code that sets paycom_* is this trusted path.
+    tenant = tenant_settings(settings)
+    if settings.clickhouse_rls_via_sql_settings:
+        sql, parameters = _append_tenant_settings_clause(sql, parameters, tenant)
+        ch_settings = readonly_settings(settings)
+    else:
+        ch_settings = {**tenant, **readonly_settings(settings)}
 
     try:
         result = client.query(sql, parameters=parameters, settings=ch_settings)

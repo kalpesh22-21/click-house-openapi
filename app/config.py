@@ -198,6 +198,27 @@ class Settings(BaseSettings):
             "ClickHouse server's <custom_settings_prefixes> configuration."
         ),
     )
+    # --- RLS identity transport (CHProxy) ---
+    # How the per-tenant RLS identity settings (paycom_client_code / proc_center /
+    # authenticated_user) reach ClickHouse.  clickhouse-connect's settings= channel
+    # is sent as HTTP query parameters, which CHProxy (the multi-node cluster
+    # gateway) STRIPS — so on a CHProxy deployment the getSetting(...) row policies
+    # would see empty values and return no rows.  When true (the default), the
+    # identity values ride the SQL body's SETTINGS clause as typed, CHProxy-preserved
+    # param_* binds instead (see app/clickhouse_client._append_tenant_settings_clause).
+    # Set false to revert to the legacy transport — sending them via settings=
+    # alongside the safety caps — for a direct (non-CHProxy) ClickHouse endpoint.
+    # Only the CUSTOM paycom_* settings are affected; the safety caps always ride
+    # settings=.
+    clickhouse_rls_via_sql_settings: bool = Field(
+        True,
+        description=(
+            "Send the per-tenant RLS identity settings in the SQL body's SETTINGS "
+            "clause (as CHProxy-preserved param_* binds) instead of the settings= "
+            "HTTP channel that CHProxy strips. Default true (CHProxy-safe); set "
+            "false for the legacy settings= transport on a direct ClickHouse endpoint."
+        ),
+    )
 
     # --- Schema filtering ---
     allowed_databases: str = Field(

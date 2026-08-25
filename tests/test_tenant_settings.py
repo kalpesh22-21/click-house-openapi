@@ -19,7 +19,11 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from app.clickhouse_client import readonly_settings, tenant_settings
+from app.clickhouse_client import (
+    _append_tenant_settings_clause,
+    readonly_settings,
+    tenant_settings,
+)
 from app.config import get_settings
 from app.mcp_server import JWTAuthMiddleware
 from app.principal import Principal, current_principal
@@ -119,6 +123,51 @@ class TestSafetyCapsWinMerge:
 
 
 # ---------------------------------------------------------------------------
+# _append_tenant_settings_clause — CHProxy-safe transport of RLS identity
+# ---------------------------------------------------------------------------
+
+class TestAppendTenantSettingsClause:
+
+    def test_no_tenant_returns_inputs_unchanged(self):
+        # Internal/health queries (no principal) must be entirely unaffected — no
+        # SETTINGS clause appended, parameters passed through as-is (incl. None).
+        assert _append_tenant_settings_clause("SELECT 1", None, {}) == ("SELECT 1", None)
+        params = {"dbs": ["a"]}
+        sql, out = _append_tenant_settings_clause("SELECT 1", params, {})
+        assert sql == "SELECT 1"
+        assert out is params
+
+    def test_appends_settings_clause_with_typed_binds(self):
+        sql, params = _append_tenant_settings_clause(
+            "SELECT 1 LIMIT 1000",
+            None,
+            {"paycom_client_code": "CLIENT_B", "paycom_authenticated_user": "JTI-BOB"},
+        )
+        assert sql.startswith("SELECT 1 LIMIT 1000\nSETTINGS ")
+        assert "paycom_client_code = {rls_paycom_client_code:String}" in sql
+        assert "paycom_authenticated_user = {rls_paycom_authenticated_user:String}" in sql
+        assert params == {
+            "rls_paycom_client_code": "CLIENT_B",
+            "rls_paycom_authenticated_user": "JTI-BOB",
+        }
+
+    def test_preserves_caller_parameters_without_mutation(self):
+        original = {"dbs": ["warehouse"]}
+        sql, params = _append_tenant_settings_clause(
+            "SELECT 1", original, {"paycom_client_code": "CLIENT_B"}
+        )
+        # Caller's dict is copied, not mutated, and its binds survive alongside RLS.
+        assert original == {"dbs": ["warehouse"]}
+        assert params == {"dbs": ["warehouse"], "rls_paycom_client_code": "CLIENT_B"}
+
+    def test_rejects_non_identifier_setting_name(self):
+        # Defence-in-depth: a malformed config key must never be inlined raw.
+        with pytest.raises(HTTPException) as exc:
+            _append_tenant_settings_clause("SELECT 1", None, {"paycom bad": "x"})
+        assert exc.value.status_code == 500
+
+
+# ---------------------------------------------------------------------------
 # End-to-end: the tenant setting reaches client.query, safety caps intact
 # ---------------------------------------------------------------------------
 
@@ -146,10 +195,61 @@ class TestEndToEndInjection:
             )
 
         assert resp.status_code == 200, resp.text
-        settings_arg = mock_client.query.call_args.kwargs["settings"]
+        call = mock_client.query.call_args
+        # The RLS identity settings now travel in the SQL body's SETTINGS clause as
+        # typed param_* binds (CHProxy strips the settings= channel), NOT in
+        # settings=.  The safety caps still ride settings=.
+        sent_sql = call.args[0]
+        assert "SETTINGS" in sent_sql
+        assert "paycom_client_code = {rls_paycom_client_code:String}" in sent_sql
+        assert "paycom_authenticated_user = {rls_paycom_authenticated_user:String}" in sent_sql
+
+        params = call.kwargs["parameters"]
+        assert params["rls_paycom_client_code"] == "CLIENT_B"
+        assert params["rls_paycom_authenticated_user"] == "JTI-BOB"
+
+        settings_arg = call.kwargs["settings"]
+        assert settings_arg["readonly"] == 1  # safety cap still on the settings= channel
+        # The identity values must NOT leak onto the stripped settings= channel.
+        assert "paycom_client_code" not in settings_arg
+        assert "paycom_authenticated_user" not in settings_arg
+
+    def test_query_legacy_transport_uses_settings_channel(self):
+        # With CLICKHOUSE_RLS_VIA_SQL_SETTINGS=false (legacy, direct ClickHouse),
+        # the identity values ride the settings= channel alongside the safety caps,
+        # and the SQL body carries no appended SETTINGS clause.
+        result = MagicMock()
+        result.column_names = ["x"]
+        result.result_rows = [[1]]
+        mock_client = MagicMock()
+        mock_client.query.return_value = result
+        mock_client.ping.return_value = True
+
+        with patch.dict(os.environ, {"CLICKHOUSE_RLS_VIA_SQL_SETTINGS": "false"}):
+            get_settings.cache_clear()
+            try:
+                with patch("app.clickhouse_client.get_client", return_value=mock_client):
+                    from app.main import app
+
+                    client = TestClient(app, raise_server_exceptions=False)
+                    resp = client.post(
+                        "/query",
+                        headers={
+                            "Authorization": f"Bearer {make_jwt(client_code='CLIENT_B', jti='JTI-BOB')}"
+                        },
+                        json={"sql": "SELECT 1"},
+                    )
+            finally:
+                # env restored on exit; rebuild a clean (default) settings for later tests.
+                get_settings.cache_clear()
+
+        assert resp.status_code == 200, resp.text
+        call = mock_client.query.call_args
+        settings_arg = call.kwargs["settings"]
         assert settings_arg["paycom_client_code"] == "CLIENT_B"
         assert settings_arg["paycom_authenticated_user"] == "JTI-BOB"
         assert settings_arg["readonly"] == 1  # safety cap intact alongside tenant
+        assert "SETTINGS" not in call.args[0]  # nothing appended to the SQL body
 
 
 # ---------------------------------------------------------------------------
