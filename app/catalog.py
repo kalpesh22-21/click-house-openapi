@@ -62,12 +62,15 @@ def _build_catalog() -> dict[str, dict[str, str]]:
     else:
         if not allowed:
             return {}
-        # Build a parameterised IN-list using ClickHouse {param:Array(String)} syntax.
-        # execute_query passes parameters as bind parameters so this is injection-safe.
+        # Build a parameterised IN-list using clickhouse-connect client-side
+        # %(name)s binding (renders the list as a ('a','b') tuple literal in the
+        # SQL body). execute_query passes parameters as bind parameters so this is
+        # injection-safe. Client-side (not {param:Array(String)}) so it composes
+        # with the client-side RLS SETTINGS clause execute_query appends.
         sql = (
             "SELECT database, table, name, type "
             "FROM system.columns "
-            "WHERE database IN {dbs:Array(String)} "
+            "WHERE database IN %(dbs)s "
             "ORDER BY database, table, position"
         )
         _, rows = execute_query(sql, settings, parameters={"dbs": allowed})

@@ -137,15 +137,19 @@ class TestAppendTenantSettingsClause:
         assert sql == "SELECT 1"
         assert out is params
 
-    def test_appends_settings_clause_with_typed_binds(self):
+    def test_appends_settings_clause_with_client_side_binds(self):
         sql, params = _append_tenant_settings_clause(
             "SELECT 1 LIMIT 1000",
             None,
             {"paycom_client_code": "CLIENT_B", "paycom_authenticated_user": "JTI-BOB"},
         )
         assert sql.startswith("SELECT 1 LIMIT 1000\nSETTINGS ")
-        assert "paycom_client_code = {rls_paycom_client_code:String}" in sql
-        assert "paycom_authenticated_user = {rls_paycom_authenticated_user:String}" in sql
+        # Client-side %(name)s placeholders (rendered into the SQL body by
+        # clickhouse-connect) — NOT server-side {name:Type}, which ClickHouse 25.3
+        # rejects inside a SETTINGS clause and which would disable client-side
+        # substitution for the rest of the query.
+        assert "paycom_client_code = %(rls_paycom_client_code)s" in sql
+        assert "paycom_authenticated_user = %(rls_paycom_authenticated_user)s" in sql
         assert params == {
             "rls_paycom_client_code": "CLIENT_B",
             "rls_paycom_authenticated_user": "JTI-BOB",
@@ -197,12 +201,12 @@ class TestEndToEndInjection:
         assert resp.status_code == 200, resp.text
         call = mock_client.query.call_args
         # The RLS identity settings now travel in the SQL body's SETTINGS clause as
-        # typed param_* binds (CHProxy strips the settings= channel), NOT in
-        # settings=.  The safety caps still ride settings=.
+        # client-side %(name)s binds rendered into the body (CHProxy strips the
+        # settings= channel), NOT in settings=.  The safety caps still ride settings=.
         sent_sql = call.args[0]
         assert "SETTINGS" in sent_sql
-        assert "paycom_client_code = {rls_paycom_client_code:String}" in sent_sql
-        assert "paycom_authenticated_user = {rls_paycom_authenticated_user:String}" in sent_sql
+        assert "paycom_client_code = %(rls_paycom_client_code)s" in sent_sql
+        assert "paycom_authenticated_user = %(rls_paycom_authenticated_user)s" in sent_sql
 
         params = call.kwargs["parameters"]
         assert params["rls_paycom_client_code"] == "CLIENT_B"

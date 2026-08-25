@@ -352,7 +352,7 @@ def list_tables(
     sql = (
         "SELECT database, name, engine "
         "FROM system.tables "
-        "WHERE database = {db:String} "
+        "WHERE database = %(db)s "
         "ORDER BY name"
     )
     _, rows = _execute(sql, settings, parameters={"db": database})
@@ -534,7 +534,7 @@ def get_table_schema(
     sql = (
         "SELECT name, type, comment "
         "FROM system.columns "
-        "WHERE database = {db:String} AND table = {tbl:String} "
+        "WHERE database = %(db)s AND table = %(tbl)s "
         "ORDER BY position"
     )
     _, rows = _execute(sql, settings, parameters={"db": database, "tbl": table})
@@ -646,7 +646,7 @@ def sample_rows(
         intro_sql = (
             "SELECT name "
             "FROM system.columns "
-            "WHERE database = {db:String} AND table = {tbl:String} "
+            "WHERE database = %(db)s AND table = %(tbl)s "
             "ORDER BY position"
         )
         _, col_rows = _execute(

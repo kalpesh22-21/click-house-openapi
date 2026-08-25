@@ -244,9 +244,15 @@ def _append_tenant_settings_clause(
     (and proc-center / authenticated-user), so those values MUST reach ClickHouse
     or every policy evaluates against an empty setting and the query returns no
     rows (or errors).  We therefore move them out of the stripped ``settings=``
-    channel and into the SETTINGS clause of the SQL body, binding each value as a
-    typed ``{name:String}`` query parameter — transported as a CHProxy-preserved
-    ``param_*`` — rather than concatenating raw values into SQL.
+    channel and into the SETTINGS clause of the SQL body, binding each value with
+    a clickhouse-connect CLIENT-SIDE ``%(name)s`` placeholder — the value is
+    rendered into the SQL POST body as an escaped literal before the request
+    leaves the client — rather than concatenating raw values into SQL.  Server-side
+    ``{name:Type}`` binds are NOT used here: ClickHouse 25.3 rejects a server-side
+    placeholder inside a SETTINGS clause, and clickhouse-connect binds a query in a
+    SINGLE mode — any ``{name:Type}`` in the query flips the whole statement to
+    server-side binding and leaves every ``%(name)s`` untouched — so a query that
+    carries this clause must be client-side throughout (all callers bind that way).
 
     Only the CUSTOM ``paycom_*`` settings travel here: ClickHouse exempts custom
     settings (under ``<custom_settings_prefixes>``) from the readonly constraint,
@@ -272,7 +278,7 @@ def _append_tenant_settings_clause(
         return sql, parameters
 
     # Copy so we never mutate a caller-owned parameters dict (e.g. a schema route
-    # binding {dbs:Array(String)}); the RLS binds live alongside those.
+    # binding %(dbs)s); the RLS binds live alongside those.
     merged: dict[str, Any] = dict(parameters or {})
     assignments: list[str] = []
     for ch_key, value in tenant.items():
@@ -292,7 +298,7 @@ def _append_tenant_settings_clause(
         # own parameter (schema routes use plain names like 'dbs' / 'table').
         param_name = f"rls_{ch_key}"
         merged[param_name] = value
-        assignments.append(f"{ch_key} = {{{param_name}:String}}")
+        assignments.append(f"{ch_key} = %({param_name})s")
 
     clause = "SETTINGS " + ", ".join(assignments)
     return f"{sql}\n{clause}", merged
@@ -310,8 +316,13 @@ def execute_query(
                     through security.validate_and_sanitize() for user-submitted
                     queries.  Internal schema queries may be passed directly.
         settings:   Application settings; defaults to the cached singleton.
-        parameters: Optional bind parameters dict for {param:Type} placeholders
-                    (used by schema routes to safely bind database/table names).
+        parameters: Optional bind parameters dict for clickhouse-connect
+                    client-side %(name)s placeholders (used by schema routes to
+                    safely bind database/table names). Server-side {name:Type}
+                    binds are not used: this path appends a client-side RLS
+                    SETTINGS clause, and clickhouse-connect binds a query in a
+                    single mode, so a stray {name:Type} would disable client-side
+                    substitution and leave the %(name)s placeholders unrendered.
 
     Returns:
         A 2-tuple of (column_names, rows) where each row is a list of Python

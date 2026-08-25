@@ -313,8 +313,8 @@ def _freshness(jti: str, settings: Settings) -> tuple[bool, int]:
     n = int(settings.employee_access_refresh_seconds)
     sql = (
         "SELECT count() AS c, "
-        f"toInt64({{n:UInt32}}) - dateDiff('second', max(updated_at), now()) AS remaining "
-        f"FROM {_qualified_table(settings)} WHERE jti = {{jti:String}}"
+        "toInt64(%(n)s) - dateDiff('second', max(updated_at), now()) AS remaining "
+        f"FROM {_qualified_table(settings)} WHERE jti = %(jti)s"
     )
     try:
         result = _get_security_client(settings).query(
