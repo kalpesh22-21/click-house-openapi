@@ -383,6 +383,142 @@ class TestTablesRoute:
 
 
 # ===========================================================================
+# RESTRICT_TO_CATALOGUED_TABLES — only tables in the semantic catalog are exposed
+# ===========================================================================
+
+class TestCataloguedTableRestriction:
+    """When RESTRICT_TO_CATALOGUED_TABLES is on, only tables present in the
+    semantic catalog (the 'schema dictionary') may be listed/described/sampled.
+
+    The real catalog contains dbpcm_warehouse.employee (catalogued) and does NOT
+    contain dbpcm_warehouse.ghost_table (uncatalogued) — see
+    app/semantic_catalog/data/*.yaml.
+    """
+
+    _DB = "dbpcm_warehouse"
+    _CATALOGUED = "employee"
+    _UNCATALOGUED = "ghost_table"
+
+    @pytest.fixture(autouse=True)
+    def _enable_restriction(self):
+        os.environ["RESTRICT_TO_CATALOGUED_TABLES"] = "true"
+        get_settings.cache_clear()
+        yield
+        os.environ.pop("RESTRICT_TO_CATALOGUED_TABLES", None)
+        get_settings.cache_clear()
+
+    def test_list_tables_hides_uncatalogued(self, client, mock_schema_execute):
+        mock_schema_execute.return_value = (
+            ["database", "name", "engine"],
+            [
+                [self._DB, self._CATALOGUED, "MergeTree"],
+                [self._DB, self._UNCATALOGUED, "MergeTree"],
+            ],
+        )
+        resp = client.get("/tables", headers=AUTH, params={"database": self._DB})
+        assert resp.status_code == 200, resp.text
+        names = [t["name"] for t in resp.json()]
+        assert names == [self._CATALOGUED]
+
+    def test_schema_forbidden_for_uncatalogued(self, client, mock_schema_execute):
+        resp = client.get(
+            "/tables/schema",
+            headers=AUTH,
+            params={"database": self._DB, "table": self._UNCATALOGUED},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "TABLE_NOT_ALLOWED"
+
+    def test_sample_forbidden_for_uncatalogued(self, client, mock_schema_execute):
+        resp = client.get(
+            "/tables/sample",
+            headers=AUTH,
+            params={"database": self._DB, "table": self._UNCATALOGUED},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "TABLE_NOT_ALLOWED"
+
+    def test_schema_allowed_for_catalogued(self, client, mock_schema_execute):
+        mock_schema_execute.return_value = (
+            ["name", "type", "comment"],
+            [["employee_id", "UInt64", ""]],
+        )
+        resp = client.get(
+            "/tables/schema",
+            headers=AUTH,
+            params={"database": self._DB, "table": self._CATALOGUED},
+        )
+        assert resp.status_code == 200, resp.text
+
+    def test_uncatalogued_accessible_when_restriction_off(self, client, mock_schema_execute):
+        """Regression guard: with the flag OFF (default), uncatalogued tables are
+        still reachable — the feature must be strictly opt-in."""
+        os.environ["RESTRICT_TO_CATALOGUED_TABLES"] = "false"
+        get_settings.cache_clear()
+        mock_schema_execute.return_value = (
+            ["name", "type", "comment"],
+            [["id", "UInt64", ""]],
+        )
+        resp = client.get(
+            "/tables/schema",
+            headers=AUTH,
+            params={"database": self._DB, "table": self._UNCATALOGUED},
+        )
+        assert resp.status_code == 200, resp.text
+
+    # --- runQuery / explainQuery enforcement -------------------------------
+
+    def test_run_query_forbidden_for_uncatalogued(self, client, mock_query_execute):
+        resp = client.post(
+            "/query", headers=AUTH, json={"sql": "SELECT * FROM ghost_table"}
+        )
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["code"] == "TABLE_NOT_ALLOWED"
+        # Fail-closed BEFORE ClickHouse is ever hit.
+        mock_query_execute.assert_not_called()
+
+    def test_run_query_forbidden_for_uncatalogued_in_subquery(self, client, mock_query_execute):
+        """A nested/subquery reference to an uncatalogued table is still caught."""
+        resp = client.post(
+            "/query",
+            headers=AUTH,
+            json={"sql": "SELECT count() FROM (SELECT * FROM ghost2) t"},
+        )
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["code"] == "TABLE_NOT_ALLOWED"
+        mock_query_execute.assert_not_called()
+
+    def test_run_query_allowed_for_catalogued(self, client, mock_query_execute):
+        mock_query_execute.return_value = (["employee_id"], [["1"]])
+        resp = client.post(
+            "/query",
+            headers=AUTH,
+            json={"sql": "SELECT employee_id FROM dbpcm_warehouse.employee"},
+        )
+        assert resp.status_code == 200, resp.text
+        mock_query_execute.assert_called_once()
+
+    def test_explain_query_forbidden_for_uncatalogued(self, client, mock_query_execute):
+        resp = client.post(
+            "/query/explain", headers=AUTH, json={"sql": "SELECT * FROM ghost_table"}
+        )
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["code"] == "TABLE_NOT_ALLOWED"
+        mock_query_execute.assert_not_called()
+
+    def test_run_query_uncatalogued_allowed_when_restriction_off(self, client, mock_query_execute):
+        """Regression guard: runQuery is unaffected when the flag is OFF."""
+        os.environ["RESTRICT_TO_CATALOGUED_TABLES"] = "false"
+        get_settings.cache_clear()
+        mock_query_execute.return_value = (["id"], [["1"]])
+        resp = client.post(
+            "/query", headers=AUTH, json={"sql": "SELECT * FROM ghost_table"}
+        )
+        assert resp.status_code == 200, resp.text
+        mock_query_execute.assert_called_once()
+
+
+# ===========================================================================
 # /tables/schema — GET
 # ===========================================================================
 

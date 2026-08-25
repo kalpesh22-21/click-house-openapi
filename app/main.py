@@ -23,6 +23,7 @@ from app.errors import (
     DatabaseNotAllowedError,
     ParseFailedError,
     QueryValidationError,
+    TableNotAllowedError,
     TableNotFoundError,
 )
 from app.routers import health, query, schema
@@ -154,6 +155,7 @@ _DOMAIN_ERROR_STATUS: dict[type, int] = {
     ColumnScopeError: 403,
     ParseFailedError: 400,
     DatabaseNotAllowedError: 403,
+    TableNotAllowedError: 403,
     TableNotFoundError: 404,
     ClickHouseUnavailableError: 502,
     # EmployeeAccessError subclasses ClickHouseUnavailableError, but the handler

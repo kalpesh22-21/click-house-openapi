@@ -1397,3 +1397,99 @@ def reject_cartesian_joins(sql: str) -> None:
                 _table_display_name(earlier),
                 _table_display_name(source),
             )
+
+
+# ---------------------------------------------------------------------------
+# Base-table reference extraction (RESTRICT_TO_CATALOGUED_TABLES)
+# ---------------------------------------------------------------------------
+
+
+def extract_referenced_base_tables(
+    sql: str,
+    *,
+    default_db: str = _DEFAULT_DB,
+) -> frozenset[str]:
+    """Return the qualified ``database.table`` name of every PHYSICAL BASE TABLE
+    that *sql* reads — including tables nested inside subqueries, CTE bodies, and
+    join sequences.
+
+    This is the table-level analogue of the column-provenance USES set, but it is
+    DELIBERATELY independent of the catalog and of any scope: it answers only
+    "which physical base tables does this query touch?", so the caller can enforce
+    a table allowlist (RESTRICT_TO_CATALOGUED_TABLES) on EVERY transport —
+    including the scope-less REST/stdio path where ``extract_column_provenance`` is
+    never run.
+
+    What is EXCLUDED (never a governed base table):
+      - CTE references and subquery aliases (virtual tables) — resolved PER SCOPE
+        via ``_in_scope_cte_names`` so a CTE named ``x`` in one scope can never
+        exempt a real base table ``x`` referenced in an unrelated scope (the same
+        decoy-alias defense the cartesian guard uses).
+      - Table-valued functions / anonymous sources (``numbers(10)``,
+        ``generateRandom(...)``) — they parse as an ``exp.Table`` with an EMPTY
+        name and are dropped by ``_is_physical_base_table``.
+      - The scratch database — its tables are never catalogued and are governed by
+        per-session isolation (D64), not catalog membership; gating them here would
+        break scratch access. (The caller still runs the scratch-session gate.)
+
+    Unqualified tables are attributed to *default_db* (the warehouse convention the
+    column-provenance path also uses via ``_infer_default_db``), so
+    ``SELECT * FROM employee`` resolves to ``<default_db>.employee``.
+
+    Fail-closed (D63): raises :class:`ProvenanceExtractionError` on empty input, on
+    a parse failure, or on a blocked/stacked statement kind (DDL / write / multi-
+    statement).  An unparseable or non-SELECT statement must never be treated as
+    "reads no tables" — that would let it slip past the allowlist unchecked. A
+    metadata ``Command`` (SHOW) or ``Describe`` is NOT rejected here: it simply
+    yields the base tables it names (often none), matching the caller's existing
+    handling of metadata statements.
+    """
+    if not sql or not sql.strip():
+        raise ProvenanceExtractionError(
+            "Empty or whitespace-only SQL input — fail-closed (D63)."
+        )
+
+    try:
+        ast = sqlglot.parse_one(
+            sql,
+            dialect="clickhouse",
+            error_level=sqlglot.ErrorLevel.RAISE,
+        )
+    except Exception as exc:  # ParseError / TokenError / anything else
+        raise ProvenanceExtractionError(
+            f"sqlglot ClickHouse-dialect parse failed — fail-closed (D63): {exc}"
+        ) from exc
+
+    if ast is None:
+        raise ProvenanceExtractionError(
+            "sqlglot returned None for SQL input — fail-closed (D63)."
+        )
+
+    # Reject the same blocked statement kinds the column extractor rejects: DDL,
+    # writes, and stacked (multi-statement) input must never be silently reported
+    # as touching no tables.
+    if isinstance(ast, _BLOCKED_STATEMENT_KINDS):
+        raise ProvenanceExtractionError(
+            f"{type(ast).__name__} is not a valid runQuery target "
+            "(DDL, write, or stacked statements are blocked) — fail-closed (D63, D21)."
+        )
+
+    tables: set[str] = set()
+    for tbl_node in ast.find_all(exp.Table):
+        enclosing_select = tbl_node.find_ancestor(exp.Select)
+        cte_names = (
+            _in_scope_cte_names(enclosing_select)
+            if enclosing_select is not None
+            else set()
+        )
+        if not _is_physical_base_table(tbl_node, cte_names):
+            continue
+
+        db_node = tbl_node.args.get("db")
+        db_name = db_node.name if db_node is not None else default_db
+        if db_name == _SCRATCH_DB:
+            # Scratch tables are session-gated, not catalog-gated.
+            continue
+        tables.add(f"{db_name}.{tbl_node.name}")
+
+    return frozenset(tables)

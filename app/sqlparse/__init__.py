@@ -5,12 +5,14 @@ from app.sqlparse.provenance import (
     ProvenanceExtractionError,
     ScratchSessionError,
     extract_column_provenance,
+    extract_referenced_base_tables,
     reject_cartesian_joins,
     scratch_table_belongs_to_session,
 )
 
 __all__ = [
     "extract_column_provenance",
+    "extract_referenced_base_tables",
     "reject_cartesian_joins",
     "scratch_table_belongs_to_session",
     "CartesianJoinForbiddenError",

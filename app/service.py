@@ -38,6 +38,7 @@ from app.errors import (
     DatabaseNotAllowedError,
     ParseFailedError,
     QueryValidationError,
+    TableNotAllowedError,
     TableNotFoundError,
 )
 from app.principal import get_current_scope, get_current_session_id
@@ -53,6 +54,7 @@ from app.sqlparse import (
     ProvenanceExtractionError,
     ScratchSessionError,
     extract_column_provenance,
+    extract_referenced_base_tables,
     reject_cartesian_joins,
     scratch_table_belongs_to_session,
 )
@@ -81,6 +83,99 @@ def _check_database_allowed(database: str, settings: Settings) -> None:
                 f"Allowed databases: {', '.join(allowed)}"
             ),
             code="DATABASE_NOT_ALLOWED",
+        )
+
+
+def _is_table_catalogued(database: str, table: str) -> bool:
+    """Return True if ``database.table`` is present in the semantic catalog.
+
+    Case-sensitive, exact match — ClickHouse identifiers are case-sensitive
+    (matching the D70 convention used throughout the overlay), so ``Payroll``
+    and ``payroll`` are genuinely different tables and only an exact key hit
+    counts as catalogued.
+    """
+    return f"{database}.{table}" in get_semantic_catalog()
+
+
+def _check_table_allowed(database: str, table: str, settings: Settings) -> None:
+    """Raise TableNotAllowedError if catalogued-table enforcement rejects the table.
+
+    No-op unless ``RESTRICT_TO_CATALOGUED_TABLES`` is enabled.  When enabled, a
+    table is permitted only if it appears in the semantic catalog (the 'schema
+    dictionary').  The scratch database is EXEMPT: its tables are never
+    catalogued and are already governed by per-session isolation, so gating them
+    here would break scratch access entirely.  This is a strictly tighter filter
+    that composes with — it does not replace — the ALLOWED_DATABASES allowlist;
+    callers apply ``_check_database_allowed`` first.
+    """
+    if not settings.restrict_to_catalogued_tables:
+        return
+    if database == settings.scratch_database:
+        return
+    if not _is_table_catalogued(database, table):
+        raise TableNotAllowedError(
+            message=(
+                f"Access to table '{database}.{table}' is not permitted — it is "
+                "not in the catalog. Call listTables to see the tables available "
+                "to you."
+            ),
+            code="TABLE_NOT_ALLOWED",
+        )
+
+
+def _enforce_catalogued_tables(clean_sql: str, settings: Settings, caller: str) -> None:
+    """Reject a query that reads any uncatalogued base table (RESTRICT_TO_CATALOGUED_TABLES).
+
+    No-op unless the flag is on.  When on, EVERY physical base table the query
+    reads must be present in the semantic catalog (the 'schema dictionary'); the
+    scratch database is exempt (handled inside ``extract_referenced_base_tables``,
+    since scratch tables are session-gated, not catalog-gated).
+
+    Runs on EVERY transport — including the scope-less REST/stdio path where
+    column-provenance is never run — so an uncatalogued table can never be reached
+    via runQuery/explainQuery.  This composes with the metadata-endpoint filter
+    (`_check_table_allowed`): together they close both the discovery path
+    (listTables/getTableSchema/sampleRows) and the direct-query path.
+
+    Fail-closed (D63): an unparseable query raises PARSE_FAILED_CLOSED rather than
+    reaching ClickHouse, matching the column-provenance path — an unverifiable
+    query is never assumed to reference no tables.
+    """
+    if not settings.restrict_to_catalogued_tables:
+        return
+
+    try:
+        referenced = extract_referenced_base_tables(clean_sql)
+    except ProvenanceExtractionError as exc:
+        logger.error(
+            "%s: base-table extraction failed code=PARSE_FAILED_CLOSED", caller
+        )
+        raise ParseFailedError(
+            message=(
+                "This query could not be parsed to verify its table references. "
+                "Simplify or restructure the SQL so it parses — EXPLAIN is subject "
+                "to the same verification and will not bypass it."
+            ),
+            code="PARSE_FAILED_CLOSED",
+        ) from exc
+
+    catalog = get_semantic_catalog()
+    uncatalogued = sorted(t for t in referenced if t not in catalog)
+    if uncatalogued:
+        # Table NAMES are catalog metadata (not PII / cell values, D25), so naming
+        # the offending tables is safe and lets the model self-correct.
+        logger.warning(
+            "%s: uncatalogued table reference count=%d code=TABLE_NOT_ALLOWED",
+            caller,
+            len(uncatalogued),
+        )
+        raise TableNotAllowedError(
+            message=(
+                "This query references table(s) that are not in the catalog: "
+                f"{', '.join(uncatalogued)}. Only catalogued tables may be "
+                "queried — call listTables to see the tables available to you."
+            ),
+            code="TABLE_NOT_ALLOWED",
         )
 
 
@@ -242,6 +337,10 @@ def list_tables(
     is EMPTY — a session-less caller can never prove ownership, so nothing leaks.
     Non-scratch databases are unaffected (full list).
 
+    Catalogued-table enforcement (RESTRICT_TO_CATALOGUED_TABLES): when enabled,
+    non-scratch results are additionally narrowed to tables present in the
+    semantic catalog, mirroring how list_databases filters against the allowlist.
+
     Raises:
         DatabaseNotAllowedError: if *database* is not in the allowlist.
     """
@@ -272,6 +371,15 @@ def list_tables(
         tables = [
             t for t in tables
             if scratch_table_belongs_to_session(t["name"], session_id)
+        ]
+    elif settings.restrict_to_catalogued_tables:
+        # Catalogued-table enforcement: hide any table that is not in the semantic
+        # catalog, mirroring how list_databases filters against the allowlist. The
+        # scratch branch above already returned its own (session-gated, never
+        # catalogued) listing, so this only narrows real warehouse databases.
+        tables = [
+            t for t in tables
+            if _is_table_catalogued(t["database"], t["name"])
         ]
 
     return tables
@@ -386,6 +494,9 @@ def get_table_schema(
 
     Raises:
         DatabaseNotAllowedError: if *database* is not in the allowlist.
+        TableNotAllowedError:    TABLE_NOT_ALLOWED if RESTRICT_TO_CATALOGUED_TABLES
+                                  is on and *database*.*table* is not in the
+                                  semantic catalog (scratch db exempt).
         ColumnScopeError:        SCRATCH_SESSION_VIOLATION if *database* is the
                                   scratch db and *table* does not belong to the
                                   current session (or no session is bound).
@@ -401,6 +512,7 @@ def get_table_schema(
     columns_filter = _validate_columns_filter(columns)
 
     _check_database_allowed(database, settings)
+    _check_table_allowed(database, table, settings)
 
     if database == settings.scratch_database:
         # Session-gate the scratch database (D64): only the owning session may read
@@ -493,6 +605,9 @@ def sample_rows(
 
     Raises:
         DatabaseNotAllowedError: if *database* is not in the allowlist.
+        TableNotAllowedError:    TABLE_NOT_ALLOWED if RESTRICT_TO_CATALOGUED_TABLES
+                                  is on and *database*.*table* is not in the
+                                  semantic catalog (scratch db exempt).
         TableNotFoundError:      if the table has no columns (does not exist).
         ColumnScopeError:        if any visible column of the table is outside
                                   scope (COLUMN_SCOPE_VIOLATION) or the table
@@ -505,6 +620,7 @@ def sample_rows(
         settings = get_settings()
 
     _check_database_allowed(database, settings)
+    _check_table_allowed(database, table, settings)
 
     # Cap at 50 regardless of caller input.
     effective_limit = max(1, min(limit, 50))
@@ -674,7 +790,9 @@ def _enforce_query_guardrails(
     Raises the identical exception types/codes the inline run_query block raised:
     CARTESIAN_JOIN_FORBIDDEN, SCRATCH_SESSION_VIOLATION, PARSE_FAILED_CLOSED,
     and COLUMN_SCOPE_VIOLATION — plus QueryValidationError/DISALLOWED_STATEMENT_TYPE
-    from the statement-kind gate. Returns None when the query is permitted.
+    from the statement-kind gate, and TABLE_NOT_ALLOWED from the catalogued-table
+    guardrail (when RESTRICT_TO_CATALOGUED_TABLES is on). Returns None when the
+    query is permitted.
     """
     # ---------------------------------------------------------------------------
     # Cartesian-join guardrail (applies to EVERY caller — scoped HTTP/JWT AND the
@@ -699,6 +817,14 @@ def _enforce_query_guardrails(
             message=exc.message,
             code="CARTESIAN_JOIN_FORBIDDEN",
         ) from exc
+
+    # ---------------------------------------------------------------------------
+    # Catalogued-table enforcement (RESTRICT_TO_CATALOGUED_TABLES) — like the
+    # cartesian guardrail, this runs UNCONDITIONALLY (on the flag), independent of
+    # scope, so an uncatalogued table cannot be read via runQuery/explainQuery on
+    # any transport. No-op when the flag is off.
+    # ---------------------------------------------------------------------------
+    _enforce_catalogued_tables(clean_sql, settings, caller)
 
     # ---------------------------------------------------------------------------
     # Column-scope and scratch-isolation enforcement (D57, D63, D64, ADR-0002/H3)
@@ -833,6 +959,9 @@ def run_query(
         QueryValidationError:    if SQL fails the security guardrails.
         CartesianJoinError:      if the query cross-joins two physical base tables
                                   without a join condition (CARTESIAN_JOIN_FORBIDDEN).
+        TableNotAllowedError:    TABLE_NOT_ALLOWED if RESTRICT_TO_CATALOGUED_TABLES
+                                  is on and the query reads a table not in the
+                                  semantic catalog (scratch db exempt).
         ColumnScopeError:        if the query references a scratch table owned by
                                   another session (SCRATCH_SESSION_VIOLATION) or a
                                   column outside the caller's scope
@@ -893,6 +1022,9 @@ def explain_query(
         QueryValidationError:    if the inner SQL fails the security guardrails.
         CartesianJoinError:      if the query cross-joins two physical base tables
                                   without a join condition (CARTESIAN_JOIN_FORBIDDEN).
+        TableNotAllowedError:    TABLE_NOT_ALLOWED if RESTRICT_TO_CATALOGUED_TABLES
+                                  is on and the query reads a table not in the
+                                  semantic catalog (scratch db exempt).
         ColumnScopeError:        if the query references a scratch table owned by
                                   another session (SCRATCH_SESSION_VIOLATION) or a
                                   column outside the caller's scope

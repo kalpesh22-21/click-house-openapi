@@ -207,6 +207,20 @@ class Settings(BaseSettings):
             "'*' permits all databases."
         ),
     )
+    restrict_to_catalogued_tables: bool = Field(
+        False,
+        description=(
+            "When true, only tables present in the semantic catalog (the "
+            "'schema dictionary' under app/semantic_catalog/data/*.yaml) may be "
+            "listed, described, or sampled. Uncatalogued tables are hidden from "
+            "listTables and rejected by getTableSchema / sampleRows with "
+            "TABLE_NOT_ALLOWED. This is a tighter filter than ALLOWED_DATABASES "
+            "(a whole-database allowlist); the two compose (a table must satisfy "
+            "both). The scratch database is exempt — its tables are never "
+            "catalogued and remain governed by per-session isolation. Defaults to "
+            "false to preserve existing behaviour."
+        ),
+    )
 
     # --- Server ---
     app_port: int = Field(8000, description="Port uvicorn listens on")

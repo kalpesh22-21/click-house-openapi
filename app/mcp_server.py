@@ -82,6 +82,7 @@ from app.errors import (
     DatabaseNotAllowedError,
     ParseFailedError,
     QueryValidationError,
+    TableNotAllowedError,
     TableNotFoundError,
 )
 from app.semantic_catalog.export import build_catalog_export
@@ -158,6 +159,11 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
             f"[{exc.code}] {exc.message}. "
             "Call listDatabases to see which databases are available."
         )
+    if isinstance(exc, TableNotAllowedError):
+        # The message already names the table and points at listTables — forward
+        # it verbatim (an author-controlled string; the table name is catalog
+        # metadata, not PII, per D25).
+        return ToolError(f"[{exc.code}] {exc.message}")
     if isinstance(exc, TableNotFoundError):
         return ToolError(
             f"[{exc.code}] {exc.message}. "

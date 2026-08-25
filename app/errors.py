@@ -47,6 +47,24 @@ class DatabaseNotAllowedError(ClickHouseAPIError):
     """
 
 
+class TableNotAllowedError(ClickHouseAPIError):
+    """Raised when the requested table is not in the semantic catalog allowlist.
+
+    Only fires when RESTRICT_TO_CATALOGUED_TABLES is enabled: a table that is not
+    present in the semantic catalog (the 'schema dictionary') is not permitted to
+    be described or sampled, and is hidden from listTables.  The scratch database
+    is exempt (its tables are never catalogued and are governed by per-session
+    isolation instead).
+
+    Distinct from TableNotFoundError: the table may well exist in ClickHouse — it
+    is simply not exposed through this API because it is uncatalogued.
+
+    Code: TABLE_NOT_ALLOWED
+
+    Maps to HTTP 403 in the REST layer.
+    """
+
+
 class TableNotFoundError(ClickHouseAPIError):
     """Raised when the requested table has no columns (i.e. does not exist).
 
