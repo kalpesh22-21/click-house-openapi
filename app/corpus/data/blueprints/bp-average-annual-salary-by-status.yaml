@@ -1,4 +1,4 @@
-id: bp::sha256:1b72b2afce35954f816dec028fdc1963baafb61bb1a9fa24fa64032f0e748c22
+id: bp-average-annual-salary-by-status
 intent: Calculate the average annual salary per employee filtered by employee status.
 slots_summary: employee_status
 status: validated

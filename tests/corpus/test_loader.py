@@ -24,7 +24,10 @@ def _reset_cache():
 # was ten; it grew to eleven when `bp-employee-check-detail-for-period` was extracted from
 # `bp-compare-employee-check-detail-two-periods`, whose nodes 0 and 1 were identical
 # apart from the pay-period slot and now REFERENCE it (`composes[].ref`, resolved and
-# inlined by the consumer's corpus loader at load time).
+# inlined by the consumer's corpus loader at load time). It grew to twelve when
+# `bp-average-annual-salary-by-status` was added (d433915) — originally committed with a
+# runtime-shaped `bp::sha256:` id and slugified filename, since normalized to the seed
+# `bp-<slug>` convention and registered here.
 _BLUEPRINT_IDS = {
     "bp-overtime-by-department",
     "bp-active-headcount-by-department",
@@ -37,6 +40,7 @@ _BLUEPRINT_IDS = {
     "bp-hires-projection",
     "bp-compare-employee-check-detail-two-periods",
     "bp-employee-check-detail-for-period",
+    "bp-average-annual-salary-by-status",
 }
 _KNOWLEDGE_IDS = {
     "kn-overtime-multiplier",

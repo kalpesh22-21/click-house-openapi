@@ -1,4 +1,5 @@
 e8b36d127e2377c00e27f02137379fe3b59f6ba2aedb6ddfbcc98b367b75bd27  bp-active-headcount-by-department.yaml
+79361404bcf05f1c630663314fe70f6318b73fd14fe15fdff5821c38759ee5bc  bp-average-annual-salary-by-status.yaml
 2ab4c0f7c56ee34f65b9452861b2efa6272774a3d375f7f72c225228939afa16  bp-average-salary-by-department.yaml
 396a98ff3f3c4275a4197c093c5f0d6d2606aea7553e47af288864921c1685ac  bp-compare-employee-check-detail-two-periods.yaml
 3210b3370e15c13901a6d0ec780fc31ea5dbaed695a4d151ff74b02edbb80871  bp-departments-above-company-average-salary.yaml
@@ -9,4 +10,3 @@ e1a707a380fd0a0635eea07810a5e2c08eaeeb6b71b7eefff36c38d5408d42af  bp-hires-per-m
 9d43bc12f8f32cffa1ecae85b4bcde60864a0454245cec17731be1f9260b8e92  bp-hires-projection.yaml
 5727f122c6956494939af4db8745158b91dae8974c76525fb330763d2bf08fb4  bp-overtime-by-department.yaml
 2ec97879c7c7464b9a738819246a3401779d73e13716d0aff5b754740a6d2dfa  bp-total-earnings-by-department.yaml
-f14d5037a434c152d937d5bf0c7a41ff9cb3d7efd06f7b8dbbb7bd7f7f7ce6ce  calculate-the-average-annual-salary-per-employee-filtered-by-employee-status.yaml
