@@ -383,7 +383,9 @@ def run_query(
         "runQuery — it is NOT an escape hatch: a query that fails those gates (column-scope, "
         "scratch-session, or provenance-parse) is rejected here too, so do not retry a "
         "gate-rejected query through explainQuery. "
-        "EXPLAIN is fast and cheap — it does not read actual data rows."
+        "EXPLAIN is fast and cheap — it does not read actual data rows. "
+        "THE WHOLE PLAN ARRIVES AS ONE ROW: rows[0][0] is the plan tree as indented, "
+        "newline-separated text, so row_count is 1 however many lines the plan has."
     ),
 )
 def explain_query(

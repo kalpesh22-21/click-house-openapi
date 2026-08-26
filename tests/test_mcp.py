@@ -343,10 +343,78 @@ class TestServiceExplainQuery:
             service.explain_query("INSERT INTO t VALUES (1)")
         mock_execute.assert_not_called()
 
-    def test_explain_truncated_always_false(self, mock_execute):
+    def test_explain_collapses_the_plan_to_one_row(self, mock_execute):
+        """ClickHouse prints a plan ONE ROW PER LINE.  The service returns it as one row
+        of newline-joined text: the plan is a tree, row framing describes nothing about
+        it, and a consumer keeping the first N rows would drop the leaves — the lines
+        that name the tables actually scanned."""
+        mock_execute.return_value = (
+            ["explain"],
+            [["Expression"], ["  Aggregating"], ["    ReadFromMergeTree (db.t)"]],
+        )
+        result = service.explain_query("SELECT 1")
+        assert result["row_count"] == 1
+        assert result["rows"] == [["Expression\n  Aggregating\n    ReadFromMergeTree (db.t)"]]
+        assert result["truncated"] is False
+
+    def test_explain_truncated_is_false_for_a_plan_that_fits(self, mock_execute):
         mock_execute.return_value = (["explain"], [["step1"], ["step2"]])
         result = service.explain_query("SELECT 1")
         assert result["truncated"] is False
+
+
+class TestCollapseExplainPlan:
+    """The collapse itself.  Unit-level because the caps are the part that has to be
+    right and driving them through `explain_query` needs a 60-line mock each time."""
+
+    def test_a_plan_that_fits_is_joined_verbatim(self):
+        rows = [["a"], ["  b"], ["    c"]]
+        columns, out, truncated = service._collapse_explain_plan(["explain"], rows)
+        assert columns == ["explain"]
+        assert out == [["a\n  b\n    c"]]
+        assert truncated is False
+
+    def test_an_over_long_plan_keeps_its_head_AND_its_tail(self):
+        """HEAD AND TAIL, never head alone.  `ReadFromMergeTree (db.table)` is the last
+        line of the plan and the only one an agent can act on, so a head-only cap would
+        drop precisely the information the call was made for."""
+        rows = [[f"line {i}"] for i in range(service.EXPLAIN_MAX_PLAN_LINES + 25)]
+        _cols, out, truncated = service._collapse_explain_plan(["explain"], rows)
+        plan = out[0][0]
+        assert truncated is True
+        assert plan.startswith("line 0")
+        assert plan.endswith(f"line {service.EXPLAIN_MAX_PLAN_LINES + 24}")
+        assert "25 plan line(s) elided" in plan
+        # Still one row, and the elision marker is the only line that is not a plan line.
+        assert len(out) == 1
+        assert len(plan.splitlines()) == service.EXPLAIN_MAX_PLAN_LINES + 1
+
+    def test_an_over_long_LINE_is_capped_and_reported(self):
+        """A single huge line is an `Expression` node listing every column it computes;
+        its tail is the least informative text in the plan.  Capping it must still set
+        `truncated`, because a silently shortened plan is the failure the old
+        unconditional `truncated=False` was."""
+        rows = [["x" * (service.EXPLAIN_MAX_PLAN_LINE_CHARS + 50)], ["  ReadFromMergeTree (db.t)"]]
+        _cols, out, truncated = service._collapse_explain_plan(["explain"], rows)
+        plan = out[0][0]
+        assert truncated is True
+        assert "[line truncated]" in plan
+        assert "ReadFromMergeTree (db.t)" in plan, "the cap must not touch other lines"
+
+    def test_an_unrecognised_shape_is_returned_untouched(self):
+        """Fail-soft: only the single-column shape ClickHouse produces for `EXPLAIN` is
+        collapsed.  A future EXPLAIN variant or a driver change degrades to the old
+        behaviour rather than being mangled into one cell."""
+        columns, out, truncated = service._collapse_explain_plan(
+            ["explain", "extra"], [["a", 1], ["b", 2]]
+        )
+        assert columns == ["explain", "extra"]
+        assert out == [["a", 1], ["b", 2]]
+        assert truncated is False
+
+    def test_an_empty_plan_is_returned_untouched(self):
+        columns, out, truncated = service._collapse_explain_plan(["explain"], [])
+        assert (columns, out, truncated) == (["explain"], [], False)
 
 
 # ===========================================================================

@@ -91,7 +91,10 @@ def run_query(
         "Use this to validate your SQL syntax and check the query plan BEFORE calling runQuery, "
         "especially for complex queries or when runQuery returns an error. "
         "If EXPLAIN succeeds, the query is syntactically valid and safe to run. "
-        "EXPLAIN does not read actual data rows, so it is fast and cheap."
+        "EXPLAIN does not read actual data rows, so it is fast and cheap. "
+        "The whole plan is returned as ONE row — rows[0][0] holds the plan tree as "
+        "indented, newline-separated text — so row_count is 1 for any plan, and "
+        "truncated is true only when a very long plan was elided."
     ),
     dependencies=[Depends(require_principal)],
 )

@@ -276,6 +276,71 @@ def _forbidden_out_of_scope_columns(
     return forbidden
 
 
+# --- EXPLAIN plan collapse -------------------------------------------------
+#
+# ClickHouse returns a plan as ONE ROW PER LINE of a single `explain` column, so a
+# three-table join arrives as ~17 rows and a big query as many more. That is a bad
+# shape for an LLM caller in two distinct ways, and only the first is about size:
+#
+#   1. ROW FRAMING IS PURE OVERHEAD. The plan is a TREE serialized as indented text,
+#      never a table. Every line pays for `["`, `"],` and the escaping of its own
+#      indentation, buying nothing — the newline it replaces said the same thing.
+#
+#   2. ROW-WISE TRUNCATION DECAPITATES THE PLAN. Any consumer that keeps the first N
+#      rows (the agent runtime re-truncates previews to `PREVIEW_ROW_COUNT`) keeps the
+#      TOP of the tree — `Expression`, `Limit`, `Sorting` — and drops the BOTTOM, where
+#      `ReadFromMergeTree (db.table)` says which table is actually scanned. The one line
+#      worth reading is the first one lost.
+#
+# So the plan collapses to a SINGLE ROW of newline-joined text. It is LOSSLESS at the
+# sizes that occur in practice: every line survives, in order, with its indentation, and
+# the tree reads exactly as ClickHouse printed it. Callers that scan the plan for a
+# substring (`"ReadFromMergeTree" in ...`) are unaffected; only the row framing changes.
+#
+# THE CAPS ARE HONEST, which the previous `truncated_override=False` was not: a plan
+# longer than the line budget keeps its HEAD AND ITS TAIL around an explicit elision
+# marker — never the head alone, for reason (2) — and reports `truncated: true`.
+EXPLAIN_MAX_PLAN_LINES = 60
+EXPLAIN_MAX_PLAN_LINE_CHARS = 300
+_PLAN_ELISION = "... [{n} plan line(s) elided] ..."
+_LINE_ELISION = " ...[line truncated]"
+
+
+def _collapse_explain_plan(
+    columns: list[str],
+    rows: list[list[Any]],
+    max_lines: int = EXPLAIN_MAX_PLAN_LINES,
+    max_line_chars: int = EXPLAIN_MAX_PLAN_LINE_CHARS,
+) -> tuple[list[str], list[list[Any]], bool]:
+    """Collapse a single-column EXPLAIN plan into one row of newline-joined text.
+
+    Returns ``(columns, rows, truncated)``.  A result that is not the single-column
+    shape ClickHouse produces for ``EXPLAIN`` is returned UNTOUCHED — this helper
+    never reshapes something it does not recognise, so a future ``EXPLAIN PIPELINE``
+    or a driver change degrades to the old behaviour instead of mangling the output.
+    """
+    if len(columns) != 1 or not rows:
+        return columns, rows, False
+    lines = ["" if row[0] is None else str(row[0]) for row in rows if row]
+    truncated = False
+    if any(len(line) > max_line_chars for line in lines):
+        # A single over-long line is an `Expression` node listing every column it
+        # computes; its TAIL is the least informative text in the whole plan.
+        lines = [
+            line if len(line) <= max_line_chars else line[:max_line_chars] + _LINE_ELISION
+            for line in lines
+        ]
+        truncated = True
+    if len(lines) > max_lines:
+        # HEAD AND TAIL, never head alone: the leaves name the tables being read.
+        head = max(1, max_lines * 2 // 3)
+        tail = max_lines - head
+        elided = len(lines) - head - tail
+        lines = lines[:head] + [_PLAN_ELISION.format(n=elided)] + lines[len(lines) - tail :]
+        truncated = True
+    return columns, [["\n".join(lines)]], truncated
+
+
 def _compact_result(
     columns: list[str],
     rows: list[list[Any]],
@@ -1009,14 +1074,22 @@ def explain_query(
 ) -> dict[str, Any]:
     """Wrap *sql* in EXPLAIN and return the query plan.
 
-    The inner SQL is still validated by the guardrails.  truncated is always
-    False because EXPLAIN output is tiny.
+    The inner SQL is still validated by the guardrails.
+
+    THE PLAN COMES BACK AS ONE ROW, not one row per line: ClickHouse prints a tree
+    as indented text and row framing adds nothing to it, while row-wise truncation
+    downstream would drop the leaves that name the scanned tables.  See
+    ``_collapse_explain_plan``.  ``truncated`` is now REAL — it is true only when the
+    plan itself was elided against the line budget, which is why this no longer
+    passes ``truncated_override=False`` (a plan capped at MAX_RESPONSE_ROWS used to
+    report ``truncated: false`` regardless).
 
     explain_query applies the SAME scope/session/scratch guardrails as run_query
     BEFORE wrapping the SQL in EXPLAIN, so it is NOT an escape hatch: a query that
     fails those gates is rejected here too, without a plan ever being built.
 
-    Returns the compact {columns, rows, row_count, truncated=False} shape.
+    Returns the compact {columns, rows, row_count, truncated} shape, with the whole
+    plan in ``rows[0][0]`` and ``row_count == 1``.
 
     Raises:
         QueryValidationError:    if the inner SQL fails the security guardrails.
@@ -1054,5 +1127,8 @@ def explain_query(
 
     explain_sql = f"EXPLAIN {inner_sql}"
     columns, rows = _execute(explain_sql, settings)
+    columns, rows, plan_truncated = _collapse_explain_plan(columns, rows)
 
-    return _compact_result(columns, rows, settings.max_response_rows, truncated_override=False)
+    return _compact_result(
+        columns, rows, settings.max_response_rows, truncated_override=plan_truncated
+    )

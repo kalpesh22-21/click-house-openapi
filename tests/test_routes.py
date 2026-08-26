@@ -17,7 +17,8 @@ Tests assert:
   - /query rejects bad SQL with 400 BEFORE calling execute_query.
   - /query passes guardrail-approved SQL down to the mocked client.
   - /query applies LIMIT and returns the correct compact response shape.
-  - /query/explain wraps SQL in EXPLAIN and calls execute_query.
+  - /query/explain wraps SQL in EXPLAIN and calls execute_query, and returns the
+    whole plan as ONE row of newline-joined text.
   - Schema routes (/databases, /tables, /tables/schema) require auth.
   - /health requires no auth and returns correct shape.
   - Truncation behaviour: truncated=True when rows exceed max_response_rows.
@@ -32,6 +33,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
+from app.service import EXPLAIN_MAX_PLAN_LINES
 from tests.jwt_helpers import make_jwt
 
 # ---------------------------------------------------------------------------
@@ -293,11 +295,46 @@ class TestExplainRoute:
         client.post("/query/explain", headers=AUTH, json={"sql": "INSERT INTO t VALUES (1)"})
         mock_query_execute.assert_not_called()
 
-    def test_explain_truncated_always_false(self, client, mock_query_execute):
-        """EXPLAIN response always has truncated=False."""
+    def test_explain_returns_the_plan_as_one_row(self, client, mock_query_execute):
+        """ClickHouse prints a plan one row per LINE; the response carries it as ONE row
+        of newline-joined text.  Row framing describes nothing about a tree, and any
+        consumer that keeps the first N rows would drop the leaves — which are the lines
+        naming the tables actually scanned."""
+        mock_query_execute.return_value = (
+            ["explain"],
+            [["Expression"], ["  Aggregating"], ["    ReadFromMergeTree (db.t)"]],
+        )
+        resp = client.post("/query/explain", headers=AUTH, json={"sql": "SELECT 1"})
+        body = resp.json()
+        assert body["row_count"] == 1
+        assert body["rows"] == [["Expression\n  Aggregating\n    ReadFromMergeTree (db.t)"]]
+        assert body["truncated"] is False
+
+    def test_explain_truncated_is_false_for_a_plan_that_fits(self, client, mock_query_execute):
+        """`truncated` is now a REAL answer, not the unconditional False it used to be —
+        so a short plan must still report False."""
         mock_query_execute.return_value = (["explain"], [["step1"], ["step2"]])
         resp = client.post("/query/explain", headers=AUTH, json={"sql": "SELECT 1"})
         assert resp.json()["truncated"] is False
+
+    def test_explain_truncated_is_true_when_the_plan_is_elided(
+        self, client, mock_query_execute
+    ):
+        """REGRESSION on the old `truncated_override=False`: a plan capped server-side
+        used to be reported as complete, which is the one thing a caller cannot detect
+        for itself."""
+        mock_query_execute.return_value = (
+            ["explain"],
+            [[f"line {i}"] for i in range(EXPLAIN_MAX_PLAN_LINES + 25)],
+        )
+        resp = client.post("/query/explain", headers=AUTH, json={"sql": "SELECT 1"})
+        body = resp.json()
+        assert body["truncated"] is True
+        plan = body["rows"][0][0]
+        assert "elided" in plan
+        # HEAD AND TAIL — the last line is what names the scanned table.
+        assert plan.startswith("line 0")
+        assert plan.endswith(f"line {EXPLAIN_MAX_PLAN_LINES + 24}")
 
     def test_explain_requires_auth(self, client, mock_query_execute):
         resp = client.post("/query/explain", json={"sql": "SELECT 1"})
