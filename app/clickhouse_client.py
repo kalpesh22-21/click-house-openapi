@@ -304,6 +304,37 @@ def _append_tenant_settings_clause(
     return f"{sql}\n{clause}", merged
 
 
+def _escape_literal_percent(sql: str, parameters: dict[str, Any]) -> str:
+    """Double every literal ``%`` so client-side substitution treats it as data.
+
+    WHY: clickhouse-connect performs client-side binding by running Python printf
+    formatting — ``query % {name: literal, ...}`` (see
+    ``clickhouse_connect.driver.binding.finalize_query``) — whenever *parameters*
+    is non-empty and the query has no server-side ``{name:Type}`` markers.  In that
+    mode EVERY ``%`` in the SQL is a format directive, so a bare ``%`` that is not a
+    ``%(name)s`` placeholder (the wildcard in ``LIKE '654%'`` is the common case)
+    raises ``ValueError: unsupported format character``.  Appending the client-side
+    RLS SETTINGS clause is exactly what makes *parameters* non-empty for an
+    otherwise parameter-free user query, so a perfectly valid ``LIKE '%'`` query
+    started failing once the RLS binds rode along.
+
+    Fix: escape each literal ``%`` to ``%%`` so printf renders it back to a single
+    ``%`` in the SQL that reaches ClickHouse.  Only ``%(<name>)s`` sequences whose
+    *name* is an ACTUAL key in *parameters* are preserved — every other ``%`` is
+    escaped, so a stray ``%(foo)s`` inside a user string literal is treated as data
+    (rendered literally), never as an unbound placeholder.
+
+    MUST be called only when *parameters* is truthy: when it is empty
+    clickhouse-connect sends the query verbatim (no printf pass), so escaping there
+    would leak a literal ``%%`` into ClickHouse.  ``execute_query`` gates the call
+    accordingly.
+    """
+    # Double any '%' that does NOT begin a %(<known-key>)s placeholder.
+    known = "|".join(re.escape(k) for k in parameters)
+    pattern = re.compile(rf"%(?!\((?:{known})\)s)")
+    return pattern.sub("%%", sql)
+
+
 def execute_query(
     sql: str,
     settings: Settings | None = None,
@@ -360,6 +391,13 @@ def execute_query(
         ch_settings = readonly_settings(settings)
     else:
         ch_settings = {**tenant, **readonly_settings(settings)}
+
+    # When parameters is non-empty, clickhouse-connect runs printf-style client-side
+    # substitution over the whole query, so any literal '%' (e.g. LIKE '654%') must
+    # be escaped to '%%' or it is misread as a format directive. Gate on truthiness:
+    # with no parameters the query is sent verbatim and escaping would leak '%%'.
+    if parameters:
+        sql = _escape_literal_percent(sql, parameters)
 
     try:
         result = client.query(sql, parameters=parameters, settings=ch_settings)

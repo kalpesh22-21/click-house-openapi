@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from app.clickhouse_client import (
     _append_tenant_settings_clause,
+    _escape_literal_percent,
     readonly_settings,
     tenant_settings,
 )
@@ -169,6 +170,60 @@ class TestAppendTenantSettingsClause:
         with pytest.raises(HTTPException) as exc:
             _append_tenant_settings_clause("SELECT 1", None, {"paycom bad": "x"})
         assert exc.value.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# Literal '%' escaping — client-side substitution runs printf `query % params`,
+# so a bare '%' (LIKE '654%') must be doubled while real %(name)s placeholders
+# survive.  Rendered through the REAL clickhouse-connect binder to prove no
+# ValueError and correct output.
+# ---------------------------------------------------------------------------
+
+class TestEscapeLiteralPercent:
+
+    @staticmethod
+    def _render(sql: str, params: dict) -> str:
+        from clickhouse_connect.driver.binding import bind_query
+
+        escaped = _escape_literal_percent(sql, params) if params else sql
+        rendered, _ = bind_query(escaped, params)
+        return rendered
+
+    def test_like_wildcard_survives_with_rls_binds(self):
+        # The regression: a LIKE '%' user query + appended client-side RLS clause.
+        sql = (
+            "SELECT count() FROM t WHERE a LIKE '654%' OR b LIKE '654%'\n"
+            "SETTINGS paycom_client_code = %(rls_paycom_client_code)s"
+        )
+        out = self._render(sql, {"rls_paycom_client_code": "10R37"})
+        assert "LIKE '654%'" in out  # single '%' reaches ClickHouse
+        assert "paycom_client_code = '10R37'" in out
+
+    def test_real_placeholder_still_binds(self):
+        sql = (
+            "SELECT database FROM system.columns WHERE database IN %(dbs)s\n"
+            "SETTINGS paycom_client_code = %(rls_paycom_client_code)s"
+        )
+        out = self._render(
+            sql, {"dbs": ["a", "b"], "rls_paycom_client_code": "10R37"}
+        )
+        assert "IN ['a', 'b']" in out
+        assert "paycom_client_code = '10R37'" in out
+
+    def test_stray_placeholder_in_string_literal_is_data(self):
+        # A '%(foo)s'-looking sequence inside a user string literal is NOT a known
+        # key, so it is escaped and rendered literally rather than raising KeyError.
+        sql = "SELECT 1 WHERE s = 'weird %(foo)s and 50% off'"
+        out = self._render(sql, {"rls_x": "v"} | {})  # non-empty params → escape runs
+        # No exception, and both the fake placeholder and bare '%' survive as data.
+        escaped = _escape_literal_percent(sql, {"rls_x": "v"})
+        assert escaped == "SELECT 1 WHERE s = 'weird %%(foo)s and 50%% off'"
+
+    def test_empty_params_escapes_everything_hence_caller_gates(self):
+        # With no keys to preserve, EVERY '%' is doubled — which is precisely why
+        # execute_query only calls this when parameters is non-empty (otherwise the
+        # query is sent verbatim and a doubled '%%' would leak to ClickHouse).
+        assert _escape_literal_percent("a LIKE '%'", {}) == "a LIKE '%%'"
 
 
 # ---------------------------------------------------------------------------
