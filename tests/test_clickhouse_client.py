@@ -40,6 +40,34 @@ def test_build_client_disables_session_id_for_thread_safety():
     )
 
 
+def test_build_client_sets_max_connection_age_from_config():
+    """_build_client must apply the configured max_connection_age global.
+
+    STALE-SOCKET REGRESSION GUARD: behind CHProxy/an LB, a pooled connection that
+    outlives the proxy's idle timeout goes stale and the next request hits
+    RemoteDisconnected. clickhouse-connect's own default (600s) is longer than a
+    typical proxy idle timeout, so we drive the process-global `max_connection_age`
+    from config to rotate connections before the proxy kills them. If someone drops
+    this call, the stale-socket window silently reopens.
+    """
+    settings = _settings()
+    settings.clickhouse_max_connection_age = 45
+
+    with patch("app.clickhouse_client.clickhouse_connect.get_client") as mock_get, patch(
+        "app.clickhouse_client.cc_common.set_setting"
+    ) as mock_set:
+        mock_get.return_value = MagicMock()
+        _build_client(settings)
+
+    assert ("max_connection_age", 45) in [
+        c.args for c in mock_set.call_args_list
+    ], (
+        "clickhouse-connect max_connection_age must be set from "
+        "settings.clickhouse_max_connection_age so pooled sockets rotate before a "
+        "proxy/LB idle-timeout can make them stale."
+    )
+
+
 # ---------------------------------------------------------------------------
 # ping() stale-socket resilience
 # ---------------------------------------------------------------------------

@@ -529,7 +529,16 @@ class JWTAuthMiddleware:
     # The service-key bypass is strictly limited to this set.
     _EXPORT_PATHS = ("/catalog/export", "/blueprints/export", "/knowledge/export")
 
-    def __init__(self, app, settings, public_paths: tuple[str, ...] = ("/health",)) -> None:
+    def __init__(
+        self,
+        app,
+        settings,
+        # All three health routes are unauthenticated so k8s probes (and manual
+        # checks) reach them without a token: /health/live (liveness),
+        # /health/ready (readiness), and the legacy combined /health. Matching is
+        # exact (see __call__), so each split path must be listed explicitly.
+        public_paths: tuple[str, ...] = ("/health", "/health/live", "/health/ready"),
+    ) -> None:
         self.app = app
         self.settings = settings
         self._public_paths = frozenset(p.rstrip("/") or "/" for p in public_paths)
@@ -686,25 +695,96 @@ class JWTAuthMiddleware:
 
 
 # ---------------------------------------------------------------------------
-# Health endpoint (HTTP transport only)
+# Health endpoints (HTTP transport only)
 # ---------------------------------------------------------------------------
+# Split by concern so a slow or unreachable ClickHouse can NEVER cycle the MCP
+# pod and hard-drop live MCP client connections:
+#
+#   /health/live   liveness  — process-alive ONLY, no ClickHouse I/O. A ClickHouse
+#                              blip must not restart the server, because a restart
+#                              hard-drops every in-flight MCP stream on the pod.
+#   /health/ready  readiness — reports ClickHouse reachability; an unreachable
+#                              backend makes the pod NotReady (pulled from the
+#                              Service) but does NOT restart it. Existing streams
+#                              on the pod survive; only new routing stops.
+#   /health        legacy    — full status, always 200, kept for manual checks /
+#                              REST parity with app/routers/health.py.
+#
+# CRITICAL (why this ever mattered): the ClickHouse ping is BLOCKING (sync
+# urllib3). These routes run on the uvicorn event loop, so calling ping() inline
+# freezes the loop for the whole round-trip — stalling every concurrent MCP
+# request on the pod and, when ClickHouse is slow (e.g. behind CHProxy with a
+# stale pooled socket forcing a TLS reconnect), blowing past the probe
+# timeoutSeconds so k8s marks the pod NotReady / restarts it and clients see a
+# disconnect. We therefore run ping() in a worker thread AND cap it with a cancel
+# scope so the route always answers well inside the probe timeout.
 
-@mcp.custom_route("/health", methods=["GET"])
-async def health_check(request: Request) -> JSONResponse:
-    """Lightweight health endpoint for Kubernetes liveness/readiness probes.
+# Upper bound on the readiness ping before we report "error". Kept below the
+# readiness probe's timeoutSeconds (3s) so the HTTP response always beats the
+# probe deadline even when the backend is hung.
+_HEALTH_PING_TIMEOUT_S = 2.0
 
-    Does NOT require authentication.  Returns 200 with ClickHouse reachability
-    status.
+
+async def _clickhouse_ok() -> bool:
+    """Return ClickHouse reachability without ever blocking the event loop.
+
+    ping() is synchronous blocking I/O, so it runs in a worker thread. A cancel
+    scope caps the wait at ``_HEALTH_PING_TIMEOUT_S``: if the backend is hung
+    (e.g. a blackholed keep-alive socket behind CHProxy), the scope fires, we
+    report False, and the orphaned worker thread is abandoned to unwind on its
+    own socket timeout (``abandon_on_cancel=True``) instead of holding up the
+    probe response.
     """
     from app.clickhouse_client import ping
 
-    # Call ping() with NO arguments so it reuses the process-wide cached
-    # singleton client. Passing an explicit settings routes through
-    # get_client(settings) -> _build_client, which constructs (and logs) a
-    # brand-new client on every probe — liveness/readiness probes run every
-    # few seconds, so that churns connections continuously. (Mirrors the REST
-    # /health route in app/routers/health.py.)
-    ch_ok = ping()
+    ok = False
+    with anyio.move_on_after(_HEALTH_PING_TIMEOUT_S):
+        # ping() takes NO arguments so it reuses the process-wide cached singleton
+        # client; passing settings would rebuild (and re-log) a client per probe.
+        ok = await anyio.to_thread.run_sync(ping, abandon_on_cancel=True)
+    return ok
+
+
+@mcp.custom_route("/health/live", methods=["GET"])
+async def health_live(request: Request) -> JSONResponse:
+    """Liveness: the process is up and serving. Deliberately no ClickHouse check —
+    a backend outage must never restart the MCP server."""
+    return JSONResponse({"status": "ok", "transport": "http"})
+
+
+@mcp.custom_route("/health/ready", methods=["GET"])
+async def health_ready(request: Request) -> JSONResponse:
+    """Readiness: report ClickHouse reachability; 503 when the backend is down.
+
+    A 503 makes k8s pull this pod from the Service until ClickHouse recovers,
+    WITHOUT restarting it, so in-flight MCP streams are not hard-dropped.
+    """
+    ch_ok = await _clickhouse_ok()
+    return JSONResponse(
+        {
+            "status": "ok" if ch_ok else "unavailable",
+            "clickhouse": "ok" if ch_ok else "error",
+            "transport": "http",
+            # Advertise the scratch-write side-channel contract version so a
+            # runtime can assert the capability at startup (contract §Q6).
+            "scratch_api": "v1",
+        },
+        status_code=200 if ch_ok else 503,
+    )
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request) -> JSONResponse:
+    """Legacy combined health endpoint (manual checks / REST parity).
+
+    Always 200 with ClickHouse status in the body, for backward compatibility
+    with anything still probing /health. Kubernetes liveness/readiness now use the
+    split /health/live and /health/ready routes above. Like those, the ClickHouse
+    ping runs off the event loop so this never blocks the MCP server.
+
+    Does NOT require authentication.
+    """
+    ch_ok = await _clickhouse_ok()
     return JSONResponse(
         {
             "status": "ok",

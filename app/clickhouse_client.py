@@ -69,11 +69,29 @@ def _redact_connection_details(msg: str, settings: Settings) -> str:
 def _build_client(settings: Settings) -> Client:
     """Construct a fresh clickhouse-connect Client from *settings* (no caching)."""
     logger.info(
-        "Creating ClickHouse client: host=%s port=%s secure=%s user=%s",
+        "Creating ClickHouse client: host=%s port=%s secure=%s user=%s max_conn_age=%s",
         settings.clickhouse_host,
         settings.clickhouse_port,
         settings.clickhouse_secure,
         settings.clickhouse_user,
+        settings.clickhouse_max_connection_age,
+    )
+
+    # Proactively rotate pooled connections before an intermediary can kill them.
+    # STALE-SOCKET DISCONNECTS BEHIND A PROXY: our multi-node cluster sits behind
+    # CHProxy / an LB that closes idle upstream connections on its own timeout. The
+    # singleton keeps a urllib3 keep-alive pool; a pooled socket that outlives the
+    # proxy's idle timeout is silently dropped, and the next request reusing it hits
+    # RemoteDisconnected / ConnectionReset (a 502 on the query path, a slow retrying
+    # ping on the health path). clickhouse-connect rotates connections older than
+    # `max_connection_age` (its own default is 600s — LONGER than a typical proxy
+    # idle timeout, so the default leaves a wide stale window). This is a
+    # process-GLOBAL common setting read dynamically by the pool manager on every
+    # request, so setting it here (before/at client construction) governs the whole
+    # pool; we drive it from config so it can be tuned below the deployment's actual
+    # CHProxy/LB idle timeout. 0 disables rotation.
+    cc_common.set_setting(
+        "max_connection_age", settings.clickhouse_max_connection_age
     )
 
     return clickhouse_connect.get_client(

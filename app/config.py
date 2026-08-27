@@ -91,6 +91,31 @@ class Settings(BaseSettings):
     clickhouse_database: str = Field("default", description="Default database")
     clickhouse_secure: bool = Field(True, description="Use TLS for ClickHouse connection")
 
+    # Max age (seconds) of a pooled HTTP connection before clickhouse-connect
+    # proactively closes and re-establishes it. This is the process-global
+    # `max_connection_age` common setting (applied in clickhouse_client._build_client).
+    #
+    # WHY THIS MATTERS BEHIND A PROXY: our multi-node cluster sits behind CHProxy /
+    # a load balancer that closes idle upstream connections on ITS OWN timeout. The
+    # singleton client keeps a urllib3 keep-alive pool; if a pooled socket outlives
+    # the proxy's idle timeout, the proxy silently drops it and our NEXT request
+    # reuses a dead socket -> RemoteDisconnected / ConnectionReset (surfaces as a
+    # 502 on the query path). clickhouse-connect's own default here is 600s (10 min),
+    # which is LONGER than a typical proxy idle timeout (nginx default 60s), so the
+    # default leaves a wide stale-socket window. Set this BELOW your CHProxy/LB idle
+    # timeout so the client rotates the connection before the proxy can kill it.
+    # 0 disables rotation (falls back to never-expire); the safe default (45s) sits
+    # under a 60s idle timeout.
+    clickhouse_max_connection_age: int = Field(
+        45,
+        ge=0,
+        description=(
+            "Seconds before a pooled ClickHouse connection is proactively rotated. "
+            "Set below the CHProxy/LB idle timeout to avoid stale-socket disconnects. "
+            "0 disables rotation."
+        ),
+    )
+
     # --- API authentication (external JWT / OIDC) ---
     # Callers present a signed JWT as a Bearer token.  We always verify the
     # signature (against the IdP's JWKS or a static public key) and expiry, then

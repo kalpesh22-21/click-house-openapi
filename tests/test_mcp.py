@@ -1156,3 +1156,113 @@ class TestProtectedResourceMetadata:
             ):
                 os.environ.pop(k, None)
             get_settings.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# MCP /health, /health/live, /health/ready endpoints
+# ---------------------------------------------------------------------------
+# These guard the fix for MCP client disconnects: the ClickHouse ping is blocking
+# sync I/O, so it MUST run off the event loop (threadpool) and be time-bounded, and
+# liveness MUST NOT depend on ClickHouse (a backend blip must never restart the pod
+# and hard-drop live MCP streams).
+class TestMcpHealthEndpoints:
+    class _Req:
+        """Minimal stand-in for a Starlette Request (handlers ignore it)."""
+
+    def _run(self, coro_fn):
+        import anyio
+
+        result = {}
+
+        async def driver():
+            result["resp"] = await coro_fn()
+
+        anyio.run(driver)
+        return result["resp"]
+
+    def test_live_is_200_and_never_touches_clickhouse(self):
+        """Liveness must be ClickHouse-independent: even if ping() would explode,
+        /health/live still answers 200 (it must never restart the pod)."""
+        import json
+
+        from app import mcp_server
+
+        def _boom():
+            raise AssertionError("liveness must not call ClickHouse ping()")
+
+        with patch("app.clickhouse_client.ping", side_effect=_boom):
+            resp = self._run(lambda: mcp_server.health_live(self._Req()))
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["status"] == "ok"
+        assert "clickhouse" not in body  # liveness reports no backend state
+
+    def test_ready_200_when_clickhouse_ok(self):
+        import json
+
+        from app import mcp_server
+
+        with patch("app.clickhouse_client.ping", return_value=True):
+            resp = self._run(lambda: mcp_server.health_ready(self._Req()))
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["clickhouse"] == "ok"
+        assert body["status"] == "ok"
+
+    def test_ready_503_when_clickhouse_down(self):
+        """Readiness fails (503) on an unreachable backend so k8s pulls the pod
+        from the Service — WITHOUT restarting it."""
+        import json
+
+        from app import mcp_server
+
+        with patch("app.clickhouse_client.ping", return_value=False):
+            resp = self._run(lambda: mcp_server.health_ready(self._Req()))
+        assert resp.status_code == 503
+        body = json.loads(resp.body)
+        assert body["clickhouse"] == "error"
+        assert body["status"] == "unavailable"
+
+    def test_ready_bounded_when_ping_hangs(self):
+        """A hung ping() must not stall the route past the bounded timeout: the
+        cancel scope fires, we report error, and the response still returns fast."""
+        import json
+        import time
+
+        from app import mcp_server
+
+        def _hang():
+            time.sleep(5)  # far longer than the patched bound below
+            return True
+
+        with patch.object(mcp_server, "_HEALTH_PING_TIMEOUT_S", 0.2):
+            with patch("app.clickhouse_client.ping", side_effect=_hang):
+                start = time.monotonic()
+                resp = self._run(lambda: mcp_server.health_ready(self._Req()))
+                elapsed = time.monotonic() - start
+        assert resp.status_code == 503
+        assert json.loads(resp.body)["clickhouse"] == "error"
+        assert elapsed < 2.0, f"readiness route blocked for {elapsed:.2f}s (must be bounded)"
+
+    def test_legacy_health_always_200(self):
+        """Legacy /health stays 200 even when ClickHouse is down (backward compat);
+        status lives in the body only."""
+        import json
+
+        from app import mcp_server
+
+        for ping_ret, expected in ((True, "ok"), (False, "error")):
+            with patch("app.clickhouse_client.ping", return_value=ping_ret):
+                resp = self._run(lambda: mcp_server.health_check(self._Req()))
+            assert resp.status_code == 200
+            assert json.loads(resp.body)["clickhouse"] == expected
+
+    def test_split_health_paths_are_public(self):
+        """/health/live and /health/ready must be in the default no-auth allowlist
+        so k8s probes reach them without a token."""
+        from app.mcp_server import JWTAuthMiddleware
+
+        mw = JWTAuthMiddleware(lambda *a: None, settings=get_settings())
+        assert "/health/live" in mw._public_paths
+        assert "/health/ready" in mw._public_paths
+        assert "/health" in mw._public_paths

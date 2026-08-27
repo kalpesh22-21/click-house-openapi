@@ -151,6 +151,13 @@ config:
   DEFAULT_LIMIT: "10000"
   MAX_RESPONSE_ROWS: "10000"
 
+  # Rotate a pooled ClickHouse connection after this many seconds so it can't
+  # outlive the CHProxy/LB idle timeout and go stale (stale socket -> the next
+  # request hits RemoteDisconnected). Set BELOW your proxy's idle timeout;
+  # clickhouse-connect's own default (600s) is too long for most proxies. 0
+  # disables rotation.
+  CLICKHOUSE_MAX_CONNECTION_AGE: "45"
+
   # Schema access control
   ALLOWED_DATABASES: "*"
 
