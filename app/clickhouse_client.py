@@ -23,6 +23,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import ClickHouseError, DatabaseError
 from fastapi import HTTPException
 
+from app.ch_errors import rewrite_clickhouse_error
 from app.config import Settings, get_settings
 from app.principal import get_current_principal
 
@@ -430,13 +431,13 @@ def execute_query(
             settings.clickhouse_database,
             exc,
         )
-        # Forward only the ClickHouse error message to the caller for
-        # LLM self-correction.  The str() of a DatabaseError typically contains
-        # the SQL error text without connection details, but we explicitly strip
-        # any "host:port" patterns that may appear in the exception string to
-        # avoid leaking infrastructure details.
+        # Forward a compacted ClickHouse error to the caller for LLM
+        # self-correction: rewrite_clickhouse_error drops the echoed query and
+        # version/URL noise and appends a code-specific fix hint (see
+        # app/ch_errors.py).  Redaction still runs afterwards so any host:port,
+        # user, or password fragment that survives the rewrite is masked.
         raw_msg = str(exc)
-        safe_msg = _redact_connection_details(raw_msg, settings)
+        safe_msg = _redact_connection_details(rewrite_clickhouse_error(raw_msg), settings)
         raise HTTPException(
             status_code=400,
             detail={

@@ -170,10 +170,13 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
             "Call listTables to verify the table name."
         )
     if isinstance(exc, ClickHouseQueryError):
-        return ToolError(
-            f"[{exc.code}] ClickHouse query error: {exc.message}. "
-            "Call explainQuery to diagnose the SQL."
-        )
+        # exc.message is already "ClickHouse query error: <NAME (code N)>: <sentence>.
+        # Hint: <fix>" from execute_query (via app/ch_errors.py).  Do NOT point the
+        # model at explainQuery here: EXPLAIN runs the same analyzer, so a syntax /
+        # NOT_AN_AGGREGATE / UNKNOWN_IDENTIFIER error reproduces identically there
+        # and the old advice sent models into a runQuery→explainQuery→runQuery loop.
+        retry = "Apply the hint, then retry." if "Hint:" in exc.message else "Fix the SQL, then retry."
+        return ToolError(f"[{exc.code}] {exc.message} {retry}")
     if isinstance(exc, ClickHouseUnavailableError):
         return ToolError(
             f"[{exc.code}] {exc.message}. "

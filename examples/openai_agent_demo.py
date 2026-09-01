@@ -110,8 +110,8 @@ Rules:
 - If runQuery returns truncated=true, rewrite with a narrower WHERE clause or
   smaller LIMIT.
 - If a tool call returns an error, read the error message carefully — it
-  contains actionable instructions (e.g. "call listDatabases", "call
-  explainQuery to diagnose").
+  contains actionable instructions (e.g. "call listDatabases", or a
+  "Hint:" naming the SQL fix to apply before retrying).
 - Present results clearly with column headers and formatted numbers.
 """.strip()
 
