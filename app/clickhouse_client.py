@@ -164,6 +164,7 @@ def readonly_settings(settings: Settings) -> dict[str, Any]:
         "readonly": settings.clickhouse_readonly,
         "max_execution_time": settings.max_execution_time,
         "max_result_rows": settings.max_result_rows,
+        "max_result_bytes": settings.max_result_bytes,
         "result_overflow_mode": "throw",
         "max_rows_to_read": settings.max_rows_to_read,
         # Pin ALIAS-FIRST name resolution (this is ClickHouse's default, 0).

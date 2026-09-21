@@ -52,6 +52,10 @@ _MAX_BODY = 500
 # goal is a first-retry fix, not a tutorial.  Names come from
 # src/Common/ErrorCodes.cpp in the ClickHouse repo.
 _HINTS: dict[str, str] = {
+    "TOO_MANY_ROWS_OR_BYTES": (
+        "The result exceeds the configured row or byte limit. Narrow the requested scope "
+        "or aggregate the data; do not silently remove requested records with an arbitrary LIMIT."
+    ),
     "NOT_AN_AGGREGATE": (
         "Every non-aggregated SELECT expression must be built from a GROUP BY key: "
         "either GROUP BY the SELECT alias, or apply exactly the same expression in "

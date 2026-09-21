@@ -51,6 +51,7 @@ _RESERVED_SETTING_KEYS = frozenset(
         "readonly",
         "max_execution_time",
         "max_result_rows",
+        "max_result_bytes",
         "max_rows_to_read",
         "result_overflow_mode",
     }
@@ -167,7 +168,11 @@ class Settings(BaseSettings):
     )
     # --- Query safety limits ---
     max_execution_time: int = Field(30, description="Max query wall-clock time in seconds")
-    max_result_rows: int = Field(10_000, description="ClickHouse-side hard cap on result rows")
+    max_result_rows: int = Field(10_000, ge=1, description="ClickHouse-side hard cap on result rows")
+    max_result_bytes: int = Field(
+        4 * 1024 * 1024, ge=1,
+        description="ClickHouse-side result byte limit; overflow throws an error",
+    )
     max_rows_to_read: int = Field(100_000_000, description="ClickHouse-side max rows scanned")
     default_limit: int = Field(1_000, description="LIMIT injected when query has none")
     max_response_rows: int = Field(1_000, description="Max rows returned in API response")
