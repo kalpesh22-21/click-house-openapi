@@ -72,6 +72,7 @@ import sqlglot
 import sqlglot.expressions as exp
 from sqlglot.optimizer.qualify_columns import qualify_columns
 from sqlglot.optimizer.qualify_tables import qualify_tables
+from sqlglot.optimizer.scope import traverse_scope
 
 # ---------------------------------------------------------------------------
 # Public exception hierarchy
@@ -87,6 +88,81 @@ class ProvenanceExtractionError(Exception):
       - D48/dedup         -> skip hard key, fall to soft embedding
       - D35/template      -> fail-to-review
     """
+
+
+class InvalidColumnReferenceError(ProvenanceExtractionError):
+    """A referenced column is absent from known physical source metadata."""
+
+    def __init__(self, column: str, tables: list[str]) -> None:
+        self.column = column
+        self.tables = tuple(sorted(tables))
+        super().__init__(
+            f"Column '{column}' is not present in the physical catalog for "
+            f"{', '.join(self.tables)}. Check getTableSchema and use an available "
+            "column; if semantic rules reference this column, report a catalog/schema "
+            "mismatch. Restructuring the SQL will not add the missing column."
+        )
+
+
+def _diagnose_missing_column(
+    sql: str, catalog_schema: dict[str, dict[str, str]],
+) -> InvalidColumnReferenceError | None:
+    """Best-effort classification only AFTER extraction has failed.
+
+    Resolve sources per scope, never through the extractor's global alias map.
+    Leave virtual, correlated, scratch, and ambiguous failures unclassified.
+    """
+    ast = qualify_tables(
+        sqlglot.parse_one(sql, dialect="clickhouse", error_level=sqlglot.ErrorLevel.RAISE),
+        db=_infer_default_db(catalog_schema),
+    )
+    try:
+        ast = qualify_columns(ast, _build_nested_schema(catalog_schema), dialect="clickhouse")
+    except sqlglot.errors.OptimizeError:
+        pass  # Explicit missing columns can abort qualification mid-pass.
+    for scope in traverse_scope(ast):
+        if scope.can_be_correlated:
+            continue
+        sources = {}
+        for alias, source in scope.sources.items():
+            if isinstance(source, exp.Table):
+                key = f"{source.db}.{source.name}"
+                if key in catalog_schema:
+                    sources[alias] = key
+        for col in scope.columns:
+            if col.is_star or col.find_ancestor(exp.Lambda):
+                continue
+            if col.table:
+                key = sources.get(col.table)
+                if key and col.name not in catalog_schema[key]:
+                    return InvalidColumnReferenceError(col.name, [key])
+            elif sources and len(sources) == len(scope.sources):
+                if _is_output_alias_reference(col):
+                    continue
+                if not any(col.name in catalog_schema[key] for key in sources.values()):
+                    return InvalidColumnReferenceError(col.name, list(set(sources.values())))
+    return None
+
+
+def extract_column_provenance(
+    sql: str,
+    catalog_schema: dict[str, dict[str, str]],
+    *,
+    session_id: str | None = None,
+) -> frozenset[tuple[str, str]]:
+    """Extract provenance; distinguish proven missing columns from extraction failures."""
+    try:
+        return _extract_column_provenance(sql, catalog_schema, session_id=session_id)
+    except ScratchSessionError:
+        raise
+    except ProvenanceExtractionError as exc:
+        try:
+            diagnostic = _diagnose_missing_column(sql, catalog_schema)
+        except Exception:  # noqa: BLE001 — classification must preserve the original rejection
+            diagnostic = None  # Diagnostics must never weaken the original rejection.
+        if diagnostic is not None:
+            raise diagnostic from exc
+        raise
 
 
 class ScratchSessionError(ProvenanceExtractionError):
@@ -695,7 +771,7 @@ def _check_lambda_body_coverage(
 # ---------------------------------------------------------------------------
 
 
-def extract_column_provenance(
+def _extract_column_provenance(
     sql: str,
     catalog_schema: dict[str, dict[str, str]],
     *,

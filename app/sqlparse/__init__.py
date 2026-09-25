@@ -2,6 +2,7 @@
 
 from app.sqlparse.provenance import (
     CartesianJoinForbiddenError,
+    InvalidColumnReferenceError,
     ProvenanceExtractionError,
     ScratchSessionError,
     extract_column_provenance,
@@ -17,5 +18,6 @@ __all__ = [
     "scratch_table_belongs_to_session",
     "CartesianJoinForbiddenError",
     "ProvenanceExtractionError",
+    "InvalidColumnReferenceError",
     "ScratchSessionError",
 ]

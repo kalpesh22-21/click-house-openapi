@@ -143,6 +143,8 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
     model can self-correct (e.g. fix bad SQL, choose an allowed database).
     """
     if isinstance(exc, QueryValidationError):
+        if exc.code == "INVALID_COLUMN_REFERENCE":
+            return ToolError(f"[{exc.code}] {exc.message}")
         return ToolError(
             f"[{exc.code}] SQL validation failed: {exc.message}. "
             "Fix the SQL and try again (explainQuery runs the same validation, so "

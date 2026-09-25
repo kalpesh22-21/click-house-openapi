@@ -100,8 +100,8 @@ class ColumnScopeError(ClickHouseAPIError):
 class ParseFailedError(ClickHouseAPIError):
     """Raised when column provenance cannot be extracted from the SQL (D63 fail-closed).
 
-    The query is rejected without execution.  The caller should use explainQuery
-    to diagnose whether the SQL is valid, then reformulate if needed.
+    The query is rejected without execution. explainQuery enforces the same
+    verification and cannot bypass this failure.
 
     Code: PARSE_FAILED_CLOSED
 

@@ -51,6 +51,7 @@ from app.semantic_catalog import (
 )
 from app.sqlparse import (
     CartesianJoinForbiddenError,
+    InvalidColumnReferenceError,
     ProvenanceExtractionError,
     ScratchSessionError,
     extract_column_provenance,
@@ -957,6 +958,10 @@ def _enforce_query_guardrails(
             raise ColumnScopeError(
                 message="Query accesses a scratch table that does not belong to this session.",
                 code="SCRATCH_SESSION_VIOLATION",
+            ) from exc
+        except InvalidColumnReferenceError as exc:
+            raise QueryValidationError(
+                message=str(exc), code="INVALID_COLUMN_REFERENCE",
             ) from exc
         except ProvenanceExtractionError as exc:
             # Parse/qualify failed — fail-closed (D63): never execute.
