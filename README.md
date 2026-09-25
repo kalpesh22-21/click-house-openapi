@@ -16,7 +16,7 @@ ChatGPT GPT Action               MCP Client (Claude Desktop / Claude Code)
       ▼                                 ▼
 ClickHouse Query API  (this service — same Docker image, same guardrails)
   • SQL guardrails (allowlist, denylist, LIMIT injection)  ← app/service.py
-  • Read-only ClickHouse session settings (readonly=1, execution caps)
+  • Read-only ClickHouse session settings (readonly=2, execution caps)
   • Bearer auth (constant-time comparison)
       │
       ▼
@@ -66,7 +66,7 @@ Both REST and MCP transports share the **same** guardrail code path in `app/serv
 - SQL allowlist (`SELECT`, `WITH`, `EXPLAIN`, `SHOW`, `DESCRIBE`, `DESC` only)
 - SQL denylist (blocks `INSERT`, `DROP`, `ALTER`, `CREATE`, `SET`, external table functions `url()`, `s3()`, `file()`, `remote()`, etc.)
 - Auto-`LIMIT` injection
-- `readonly=1` + execution time + row caps applied on every ClickHouse call
+- `readonly=2` + execution time + row caps applied on every ClickHouse call
 - `ALLOWED_DATABASES` allowlist enforced on every schema operation
 
 MCP guardrail rejections are returned as tool errors with descriptive messages so the model can self-correct.
@@ -380,7 +380,7 @@ The API enforces defense-in-depth against LLM-generated SQL — identically acro
 3. **Denylist** — blocks `INSERT`, `ALTER`, `DROP`, `CREATE`, `TRUNCATE`, `RENAME`, `ATTACH`, `DETACH`, `OPTIMIZE`, `GRANT`, `REVOKE`, `SET`, `KILL`, `SYSTEM`, `DELETE`, `UPDATE`, `INTO OUTFILE`, `FORMAT`.
 4. **Table-function denylist** — blocks exfiltration via `url()`, `file()`, `remote()`, `s3()`, `gcs()`, `mysql()`, `postgresql()`, `executable()`, and 15 more.
 5. **Auto-LIMIT** — queries without a LIMIT clause get one injected automatically.
-6. **ClickHouse session settings** — every query runs with `readonly=1`, `max_execution_time`, `max_result_rows`, `result_overflow_mode='throw'`, `max_rows_to_read`.
+6. **ClickHouse session settings** — every query runs with `readonly=2`, `max_execution_time`, `max_result_rows`, `result_overflow_mode='throw'`, `max_rows_to_read`. Level 2 remains read-only while allowing the trusted tenant and safety settings attached by the service.
 7. **ALLOWED_DATABASES allowlist** — configurable per-deployment; enforced on every schema and sample operation.
 
 ## Testing

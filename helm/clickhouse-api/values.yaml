@@ -174,9 +174,9 @@ config:
   # --- Per-tenant row isolation ---
   CLICKHOUSE_TENANT_SETTINGS: '{"SQL_tenant": "user_name"}'
   CLICKHOUSE_CUSTOM_SETTINGS_PREFIX: "SQL_"
-  # readonly=1 works with the tenant custom setting. The ClickHouse server must
-  # register the prefix: <custom_settings_prefixes>SQL_</custom_settings_prefixes>.
-  CLICKHOUSE_READONLY: "1"
+  # readonly=2 forbids writes while permitting the tenant and safety settings.
+  # Register the prefix: <custom_settings_prefixes>SQL_</custom_settings_prefixes>.
+  CLICKHOUSE_READONLY: "2"
 
   # Server
   APP_PORT: "8000"

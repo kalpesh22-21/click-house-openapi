@@ -176,14 +176,13 @@ class Settings(BaseSettings):
     max_rows_to_read: int = Field(100_000_000, description="ClickHouse-side max rows scanned")
     default_limit: int = Field(1_000, description="LIMIT injected when query has none")
     max_response_rows: int = Field(1_000, description="Max rows returned in API response")
-    # readonly mode applied on every query.  1 = no writes AND no settings changes
-    # (the safe default).  GOTCHA: ClickHouse may refuse a custom per-tenant
-    # setting alongside readonly=1 ("Cannot modify setting in readonly mode").  If
-    # the deploy spike shows that, set CLICKHOUSE_READONLY=2 (no writes, but
-    # settings changes allowed) — the safety caps below are still enforced because
-    # we always send them ourselves.  Only 1 or 2 are accepted.
+    # readonly mode applied on every query.  Level 2 still forbids writes, while
+    # permitting the trusted per-query settings this service must attach for tenant
+    # RLS and safety caps.  Level 1 cannot be the default: ClickHouse 24.8 rejects
+    # paycom_* settings with READONLY before the row policy can evaluate them.
+    # Only 1 or 2 are accepted for deployments with an explicit reason to override.
     clickhouse_readonly: int = Field(
-        1, ge=1, le=2, description="ClickHouse readonly level applied to every query (1 or 2)."
+        2, ge=1, le=2, description="ClickHouse readonly level applied to every query (1 or 2)."
     )
     # When true, sets the ClickHouse `final=1` session setting on every query so
     # ReplacingMergeTree/CollapsingMergeTree tables return their collapsed (latest)

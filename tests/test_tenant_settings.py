@@ -96,7 +96,7 @@ class TestSafetyCapsWinMerge:
         with patch.dict(os.environ, {"CLICKHOUSE_READONLY": "2"}):
             get_settings.cache_clear()
             assert readonly_settings(get_settings())["readonly"] == 2
-        # env restored; rebuild a clean (readonly=1) settings for later tests.
+        # env restored; rebuild clean default settings for later tests.
         get_settings.cache_clear()
 
     def test_final_applied_by_default(self):
@@ -268,7 +268,7 @@ class TestEndToEndInjection:
         assert params["rls_paycom_authenticated_user"] == "JTI-BOB"
 
         settings_arg = call.kwargs["settings"]
-        assert settings_arg["readonly"] == 1  # safety cap still on the settings= channel
+        assert settings_arg["readonly"] == 2  # safe default still on the settings= channel
         # The identity values must NOT leak onto the stripped settings= channel.
         assert "paycom_client_code" not in settings_arg
         assert "paycom_authenticated_user" not in settings_arg
@@ -307,7 +307,7 @@ class TestEndToEndInjection:
         settings_arg = call.kwargs["settings"]
         assert settings_arg["paycom_client_code"] == "CLIENT_B"
         assert settings_arg["paycom_authenticated_user"] == "JTI-BOB"
-        assert settings_arg["readonly"] == 1  # safety cap intact alongside tenant
+        assert settings_arg["readonly"] == 2  # safety cap intact alongside tenant
         assert "SETTINGS" not in call.args[0]  # nothing appended to the SQL body
 
 

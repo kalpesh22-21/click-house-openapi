@@ -153,12 +153,10 @@ def readonly_settings(settings: Settings) -> dict[str, Any]:
     must use this function so that all safety caps (readonly, execution time,
     result size) are consistently applied.
 
-    NOTE: ``readonly`` is configurable (1 by default).  readonly=1 works fine
-    with the per-tenant custom setting — the earlier blocker was clickhouse-connect
-    rejecting the unknown setting client-side, fixed by invalid_setting_action=
-    'send' at the top of this module, NOT a server-side readonly conflict.  The
-    config knob is retained for unusual ClickHouse setups; these caps are
-    authoritative regardless because we always send them ourselves.
+    NOTE: ``readonly`` is configurable (2 by default).  Level 2 forbids writes but
+    permits the trusted tenant and safety settings attached to each query.  ClickHouse
+    24.8 rejects even custom paycom_* settings at level 1, so using level 1 makes every
+    authenticated query fail before its row policy can run.
     """
     ch_settings: dict[str, Any] = {
         "readonly": settings.clickhouse_readonly,
