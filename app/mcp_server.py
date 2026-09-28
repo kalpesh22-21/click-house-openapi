@@ -326,7 +326,7 @@ def sample_rows(
 ) -> dict[str, Any]:
     """Return up to *limit* rows from the specified table (capped at 50)."""
     try:
-        return svc_sample_rows(database, table, limit)
+        return svc_sample_rows(database, table, limit, include_provenance=True)
     except Exception as exc:
         raise _domain_to_tool_error(exc) from exc
 
@@ -372,7 +372,7 @@ def run_query(
 ) -> dict[str, Any]:
     """Validate, optionally limit, and execute the SQL query."""
     try:
-        return svc_run_query(sql, limit)
+        return svc_run_query(sql, limit, include_provenance=True)
     except Exception as exc:
         raise _domain_to_tool_error(exc) from exc
 
@@ -398,7 +398,7 @@ def explain_query(
 ) -> dict[str, Any]:
     """Wrap *sql* in EXPLAIN and return the query plan."""
     try:
-        return svc_explain_query(sql)
+        return svc_explain_query(sql, include_provenance=True)
     except Exception as exc:
         raise _domain_to_tool_error(exc) from exc
 

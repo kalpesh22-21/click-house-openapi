@@ -501,14 +501,16 @@ class TestMcpToolGuardrails:
             mcp_get_table_schema(database="default", table="nonexistent")
         assert "TABLE_NOT_FOUND" in str(exc_info.value)
 
-    def test_run_query_passes_valid_sql(self, mock_execute):
+    @patch("app.service.get_catalog_schema", return_value={"default.t": {"id": "UInt64"}})
+    def test_run_query_passes_valid_sql(self, mock_catalog, mock_execute):
         """Valid SQL must reach execute_query via the MCP tool."""
         mock_execute.return_value = (["id"], [["1"]])
         result = mcp_run_query(sql="SELECT id FROM t LIMIT 1")
         assert result["columns"] == ["id"]
         mock_execute.assert_called_once()
 
-    def test_sample_rows_caps_at_50(self, mock_execute):
+    @patch("app.service.get_catalog_schema", return_value={"default.t": {"id": "UInt64"}})
+    def test_sample_rows_caps_at_50(self, mock_catalog, mock_execute):
         """MCP sampleRows must cap limit at 50 regardless of input."""
         mock_execute.return_value = (["id"], [["1"]])
         mcp_sample_rows(database="default", table="t", limit=100)

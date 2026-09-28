@@ -639,11 +639,28 @@ def get_table_schema(
     return response
 
 
+def _with_provenance(result: dict[str, Any], uses: frozenset[tuple[str, str]]) -> dict[str, Any]:
+    """Return the access dependencies validated for this response by the API.
+
+    Hidden policy columns are enforced by the API, not caller column scope. Match
+    the scope guard's exclusions so replay does not require internal RLS columns.
+    Scratch dependencies remain present and are session-gated by both consumers.
+    """
+    catalog = get_semantic_catalog()
+    columns = sorted(
+        (table, column) for table, column in uses
+        if column not in hidden_columns_for(catalog, table)
+    )
+    return {**result, "provenance": {"version": 1, "columns": [list(pair) for pair in columns]}}
+
+
 def sample_rows(
     database: str,
     table: str,
     limit: int = 5,
     settings: Settings | None = None,
+    *,
+    include_provenance: bool = False,
 ) -> dict[str, Any]:
     """Return up to *limit* rows from *database*.*table*.
 
@@ -752,10 +769,11 @@ def sample_rows(
     # table (scope=None on REST) then fails closed via _validate_scratch_name. A
     # normal warehouse sample references no scratch DB → no provenance parse.
     references_scratch = _references_scratch_db(sql, settings.scratch_database)
-    need_provenance = (scope is not None) or (
+    need_provenance = include_provenance or (scope is not None) or (
         settings.require_session_scratch_gate and references_scratch
     )
 
+    uses = None
     if need_provenance:
         catalog = get_catalog_schema()
 
@@ -813,14 +831,17 @@ def sample_rows(
 
     columns, rows = _execute(sql, settings)
 
-    return _compact_result(columns, rows, settings.max_response_rows, truncated_override=False)
+    result = _compact_result(columns, rows, settings.max_response_rows, truncated_override=False)
+    return _with_provenance(result, uses) if include_provenance else result
 
 
 def _enforce_query_guardrails(
     clean_sql: str,
     settings: Settings,
     caller: str = "query_guardrails",
-) -> None:
+    *,
+    include_provenance: bool = False,
+) -> frozenset[tuple[str, str]] | None:
     """Apply the shared security guardrails to already-sanitized *clean_sql*.
 
     This is the SINGLE enforcement code path shared by run_query and
@@ -831,10 +852,9 @@ def _enforce_query_guardrails(
       1b. Statement-kind gate, applied ONLY when provenance is required (below):
          SHOW / DESCRIBE / DESC / EXPLAIN are rejected up front with
          DISALLOWED_STATEMENT_TYPE because the extractor cannot process them.  They
-         remain available to unscoped callers (REST/stdio), which never enter that
-         branch.
+         remain available to unscoped REST callers that do not request provenance.
       2. Scratch-session isolation + column-scope enforcement, triggered when
-         EITHER a scope is bound (``scope is not None`` — the scoped MCP path,
+         provenance is requested, a scope is bound (``scope is not None`` — the scoped MCP path,
          behavior identical to before) OR the query references the scratch
          database while ``require_session_scratch_gate`` is on (ADR-0002, H3).
          The latter disjunct is what makes scratch access fail closed on EVERY
@@ -857,8 +877,9 @@ def _enforce_query_guardrails(
     CARTESIAN_JOIN_FORBIDDEN, SCRATCH_SESSION_VIOLATION, PARSE_FAILED_CLOSED,
     and COLUMN_SCOPE_VIOLATION — plus QueryValidationError/DISALLOWED_STATEMENT_TYPE
     from the statement-kind gate, and TABLE_NOT_ALLOWED from the catalogued-table
-    guardrail (when RESTRICT_TO_CATALOGUED_TABLES is on). Returns None when the
-    query is permitted.
+    guardrail (when RESTRICT_TO_CATALOGUED_TABLES is on). Returns the validated
+    dependency set, or None when provenance was not required. MCP callers require
+    provenance even without a bound column scope; legacy REST shapes are unchanged.
     """
     # ---------------------------------------------------------------------------
     # Cartesian-join guardrail (applies to EVERY caller — scoped HTTP/JWT AND the
@@ -906,10 +927,11 @@ def _enforce_query_guardrails(
     # scope-less transport references no scratch DB → need_provenance is False → no
     # parse, no PARSE_FAILED_CLOSED regression (the GPT Action stays working).
     references_scratch = _references_scratch_db(clean_sql, settings.scratch_database)
-    need_provenance = (scope is not None) or (
+    need_provenance = include_provenance or (scope is not None) or (
         settings.require_session_scratch_gate and references_scratch
     )
 
+    uses = None
     if need_provenance:
         # -----------------------------------------------------------------------
         # Statement-kind gate — reject metadata SQL HONESTLY, before the extractor.
@@ -1012,11 +1034,15 @@ def _enforce_query_guardrails(
                 )
     # ---------------------------------------------------------------------------
 
+    return uses
+
 
 def run_query(
     sql: str,
     limit: int | None = None,
     settings: Settings | None = None,
+    *,
+    include_provenance: bool = False,
 ) -> dict[str, Any]:
     """Validate, optionally limit, and execute *sql*.
 
@@ -1052,7 +1078,9 @@ def run_query(
             code=exc.detail.get("code", "QUERY_VALIDATION_ERROR"),
         ) from exc
 
-    _enforce_query_guardrails(clean_sql, settings, caller="run_query")
+    uses = _enforce_query_guardrails(
+        clean_sql, settings, caller="run_query", include_provenance=include_provenance
+    )
 
     # Apply caller-supplied limit override.
     # The substitution pattern preserves a trailing OFFSET clause (captured in
@@ -1070,12 +1098,15 @@ def run_query(
 
     columns, rows = _execute(clean_sql, settings)
 
-    return _compact_result(columns, rows, settings.max_response_rows)
+    result = _compact_result(columns, rows, settings.max_response_rows)
+    return _with_provenance(result, uses) if include_provenance else result
 
 
 def explain_query(
     sql: str,
     settings: Settings | None = None,
+    *,
+    include_provenance: bool = False,
 ) -> dict[str, Any]:
     """Wrap *sql* in EXPLAIN and return the query plan.
 
@@ -1128,12 +1159,15 @@ def explain_query(
     # session's scratch table (or an out-of-scope column) and have ClickHouse
     # confirm its existence/structure while building the plan — the exact leak
     # this shared gate closes.
-    _enforce_query_guardrails(inner_sql, settings, caller="explain_query")
+    uses = _enforce_query_guardrails(
+        inner_sql, settings, caller="explain_query", include_provenance=include_provenance
+    )
 
     explain_sql = f"EXPLAIN {inner_sql}"
     columns, rows = _execute(explain_sql, settings)
     columns, rows, plan_truncated = _collapse_explain_plan(columns, rows)
 
-    return _compact_result(
+    result = _compact_result(
         columns, rows, settings.max_response_rows, truncated_override=plan_truncated
     )
+    return _with_provenance(result, uses) if include_provenance else result

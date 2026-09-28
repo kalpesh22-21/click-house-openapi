@@ -164,7 +164,8 @@ class TestWiring:
         assert "In query" not in err
         assert "localhost:8123" not in err
 
-    def test_mcp_run_query_surfaces_hint_and_not_explain_advice(self):
+    @patch("app.service.get_catalog_schema", return_value={})
+    def test_mcp_run_query_surfaces_hint_and_not_explain_advice(self, _catalog):
         from mcp.server.fastmcp.exceptions import ToolError
 
         from app import service
@@ -184,7 +185,8 @@ class TestWiring:
         assert "explainQuery" not in msg
         assert "Apply the hint, then retry." in msg
 
-    def test_mcp_unlisted_code_gets_generic_retry_suffix(self):
+    @patch("app.service.get_catalog_schema", return_value={})
+    def test_mcp_unlisted_code_gets_generic_retry_suffix(self, _catalog):
         from mcp.server.fastmcp.exceptions import ToolError
 
         from app import service
