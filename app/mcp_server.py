@@ -209,6 +209,29 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
     return ToolError("An internal error occurred.")
 
 
+def _clean_result_value(value: Any) -> Any:
+    """Remove trailing NUL padding from MCP text cells, including nested values.
+
+    This is a presentation policy, not a type conversion: the service result
+    does not carry ClickHouse types, so it applies to all string values.
+    Preserve embedded NULs, whitespace, binary values, and mapping keys.
+    """
+    if isinstance(value, str):
+        return value.rstrip("\x00")
+    if isinstance(value, list):
+        return [_clean_result_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_clean_result_value(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _clean_result_value(item) for key, item in value.items()}
+    return value
+
+
+def _clean_query_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Copy and clean only row values; leave metadata and service data intact."""
+    return {**result, "rows": _clean_result_value(result["rows"])}
+
+
 # ---------------------------------------------------------------------------
 # MCP tools
 #
@@ -310,6 +333,7 @@ def get_table_schema(
         "Return a small sample of raw rows from the specified table so you can inspect "
         "actual data values, formats, and nullability before writing analytical queries. "
         "Default sample size is 5 rows; maximum is 50. "
+        "Trailing null characters are removed from text values in returned rows. "
         "Call getTableSchema first to know the column names, then use sampleRows to "
         "understand real data distributions. "
         "If the table has any column outside your permitted access scope, the call is rejected "
@@ -326,7 +350,9 @@ def sample_rows(
 ) -> dict[str, Any]:
     """Return up to *limit* rows from the specified table (capped at 50)."""
     try:
-        return svc_sample_rows(database, table, limit, include_provenance=True)
+        return _clean_query_result(
+            svc_sample_rows(database, table, limit, include_provenance=True)
+        )
     except Exception as exc:
         raise _domain_to_tool_error(exc) from exc
 
@@ -336,6 +362,7 @@ def sample_rows(
     description=(
         "Execute a read-only SQL query (SELECT or WITH) against ClickHouse "
         "and return results in a compact {columns, rows, row_count, truncated} format. "
+        "Trailing null characters are removed from text values in returned rows. "
         "The server enforces read-only mode, execution time limits, and row caps. "
         "If 'truncated' is true, the result was capped at the server MAX_RESPONSE_ROWS limit "
         "— narrow your query with a more selective WHERE clause or reduce your LIMIT. "
@@ -372,7 +399,7 @@ def run_query(
 ) -> dict[str, Any]:
     """Validate, optionally limit, and execute the SQL query."""
     try:
-        return svc_run_query(sql, limit, include_provenance=True)
+        return _clean_query_result(svc_run_query(sql, limit, include_provenance=True))
     except Exception as exc:
         raise _domain_to_tool_error(exc) from exc
 

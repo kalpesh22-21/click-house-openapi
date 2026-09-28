@@ -52,6 +52,13 @@ The same Docker image can run as an MCP server — exposing the same six operati
 | `runQuery` | Execute a validated read-only SQL query |
 | `explainQuery` | EXPLAIN a query without executing it |
 
+`runQuery` and `sampleRows` remove trailing NUL characters (`\u0000` in JSON)
+from text values in returned rows, including nested arrays, tuples, and map
+values. This makes padded descriptions such as `"Planned PDO\u0000"` read as
+`"Planned PDO"`. The cleanup applies to all text values, not only `FixedString`
+columns. Embedded NULs, whitespace, Unicode, binary values, map keys, and result
+metadata are preserved. REST responses and stored ClickHouse data are unchanged.
+
 ### Recommended LLM workflow
 
 ```
