@@ -1,0 +1,252 @@
+database: dbpcm_warehouse
+table: total_earning
+region: workforce_time_attendance
+description: >
+  Summarized daily earning entries per employee by earning code. Aggregates timecard outcomes
+  into daily buckets for payroll cost analysis and labor reporting. Not individual punch pairs —
+  use punch_pair for matched In/Out detail.
+
+grain: []
+grain_verifiable: false
+grain_note: >
+  Physical storage key is (proc_center, client_code, table_source, id). Analytic grain is
+  one row per employee × punch_date × earn_code × department_code bucket. This grain is
+  unverifiable against live data while the MCP is down.
+
+primary_key: []
+primary_key_note: >
+  No business primary key is exposed. The physical ORDER BY key is
+  (proc_center, client_code, table_source, id).
+
+temporal:
+  dimensions:
+    - name: punch_date
+      role: event
+      date_col: punch_date
+    - name: pay_period
+      role: period
+      range:
+        start_col: pay_period_start_date
+        end_col: pay_period_end_date
+  default_pin: punch_date
+  note: >
+    Constrain at least one time dimension before broad aggregation. Use punch_date for the day
+    of the timecard entry; use pay_period_start_date and pay_period_end_date for period-covered
+    analysis. Also used for cross-table total_earning↔payroll joins via employee_code + overlapping
+    pay periods.
+
+join_keys:
+  - column: employee_code
+    joins: employee.employee_code
+    join_on: [employee_code]
+    cardinality: N:1
+    implicit_join_scope: [client_code, proc_center]
+  - column: department_code
+    joins: department.department_code
+    join_on: [department_code]
+    cardinality: many_to_reference
+    confidence: low
+
+columns:
+  employee_code:
+    type: FixedString(4)
+    description: Employee identifier; canonical join key to employee.
+    synonyms:
+      - EmployeeCode (legacy CamelCase alias, not a physical column reference)
+
+  id:
+    type: UInt64
+    description: Internal storage row id. Part of the physical ORDER BY key.
+
+  punch_date:
+    type: Date32
+    description: Date of the timecard entry.
+    synonyms:
+      - PunchDate (legacy CamelCase alias, not a physical column reference)
+
+  pay_period_start_date:
+    type: Date32
+    description: Start date of the pay period covered by the earning entry.
+    synonyms:
+      - PayPeriodStartDate (legacy CamelCase alias, not a physical column reference)
+
+  pay_period_end_date:
+    type: Date32
+    description: End date of the pay period covered by the earning entry.
+    synonyms:
+      - PayPeriodEndDate (legacy CamelCase alias, not a physical column reference)
+
+  earn_code:
+    type: LowCardinality(String)
+    client_defined: true
+    description_col: earn_code_description
+    description: >
+      Earning code for the timecard entry. CLIENT-DEFINED and drifts over time —
+      resolve concepts to codes via resolveValues(earn_code, <concept>), do not hardcode.
+      Interpret with earn_code_description and the punch_date / pay period context.
+    synonyms:
+      - EarnCode (legacy CamelCase alias, not a physical column reference)
+
+  earn_code_description:
+    type: String
+    client_defined: true
+    description: >
+      Human-readable description for earn_code. Either field can be null or historically
+      inconsistent. Use with earn_code for display, not as a canonical policy label.
+    synonyms:
+      - EarnCodeDescription (legacy CamelCase alias, not a physical column reference)
+
+  earn_hours:
+    type: Decimal(19, 6)
+    unit: hours
+    description: >
+      Total earning hours for the daily bucket. Non-nullable per DDL — no IS NOT NULL guard is needed.
+    synonyms:
+      - EarnHours (legacy CamelCase alias, not a physical column reference)
+
+  earn_amount:
+    type: Decimal(12, 2)
+    unit: USD
+    description: >
+      Total earning amount in the daily bucket. Non-nullable per DDL — no IS NOT NULL guard is needed.
+    synonyms:
+      - EarnAmount (legacy CamelCase alias, not a physical column reference)
+
+  earn_rate:
+    type: Decimal(19, 6)
+    unit: USD_per_hour
+    description: Rate of pay for this earning entry when applicable.
+    synonyms:
+      - EarnRate (legacy CamelCase alias, not a physical column reference)
+
+  pay_class_code:
+    type: FixedString(3)
+    description: Pay class code governing overtime, rounding, and break rules.
+    synonyms:
+      - PayClassCode (legacy CamelCase alias, not a physical column reference)
+
+  department_code:
+    type: String
+    description: Department code for labor allocation.
+    synonyms:
+      - DeptCode (legacy CamelCase alias, not a physical column reference)
+
+  table_source:
+    type: LowCardinality(String)
+    description: >
+      Physical source of the row. The ORDER BY key includes table_source, so the same
+      real-world event ingested via two sources would NOT be deduplicated — aggregation
+      across sources may double-count.
+
+measures:
+  total_hours:
+    column: earn_hours
+    agg: sum
+    defined_over: >
+      rows after deduplication with FINAL; may be filtered by earn_code, pay_class_code,
+      department_code, or date range
+
+  total_amount:
+    column: earn_amount
+    agg: sum
+    defined_over: >
+      rows after deduplication with FINAL; may be filtered by earn_code, pay_class_code,
+      department_code, or date range
+    unit: USD
+
+  avg_earn_rate:
+    column: earn_rate
+    agg: avg
+    defined_over: >
+      rows after deduplication with FINAL; meaningful when scoped to a single earn_code
+      or employee
+
+  earning_entry_count:
+    column: "*"
+    agg: count
+    defined_over: >
+      rows after deduplication with FINAL; may be filtered by earn_code, pay_class_code,
+      department_code, or date range
+
+rules:
+  - id: dedup_first
+    predicate: "FROM total_earning FINAL"
+    applies_when: any aggregation or analysis on this table
+    description: >
+      The ONLY canonical deduplication pattern is `FROM total_earning FINAL`. The
+      ReplacingMergeTree(__version, __deleted) requires FINAL to deliver correct,
+      tombstone-safe state. Aggregation without FINAL is INCORRECT — it can include
+      stale duplicates or resurrect deleted rows. Filtering `__deleted = 0` without FINAL
+      is also incorrect. Note that replica convergence after merges means non-FINAL reads
+      may see divergent counts across replicas.
+
+  - id: pay_period_alignment_check
+    predicate: "punch_date NOT BETWEEN pay_period_start_date AND pay_period_end_date"
+    applies_when: validating data quality of pay period declarations
+    description: >
+      MOST rows should have punch_date within their declared pay period. Rows that fail this
+      check warrant investigation but are not necessarily wrong. DO NOT use this as a WHERE
+      filter when querying by pay period — use pay_period_start_date and pay_period_end_date
+      in the query predicate instead.
+
+ambiguities:
+  - term: overtime
+    resolves_to:
+      - "pay-class-configured overtime bases (daily OT/DT, weekly OT/DT, pay-period OT/DT, weighted OT options)"
+      - "daily_overtime_over_8h is ONE common convention, NOT the universal default"
+    default: pay_class_configured_overtime
+    clarify_if: user wants daily, weekly, pay-period, or weighted overtime; or a specific threshold
+
+  - term: regular_hours
+    resolves_to:
+      - "resolveValues(earn_code, 'regular / standard / base hours') → filter earn_code IN result; SUM(earn_hours) after FINAL"
+    default: regular_hours_by_earn_code
+    clarify_if: user defines regular hours differently or wants all non-overtime hours
+
+  - term: labor_cost
+    resolves_to:
+      - "SUM(earn_amount) after deduplication with FINAL"
+    default: total_amount
+    clarify_if: user wants cost by department, employee, pay period, or date range
+
+  - term: table_source_hazard
+    resolves_to:
+      - "Values are unobserved; physical key includes table_source so the same real-world event ingested via two sources would NOT be deduped"
+    default: note_only
+    clarify_if: user aggregates across table_source without verifying single-source-per-entity
+
+  - term: pay_timing
+    resolves_to:
+      - punch_date
+      - pay_period_start_date / pay_period_end_date
+    default: punch_date
+    clarify_if: timing is ambiguous between the day of the timecard entry and the pay period covered
+
+  - term: productivity
+    resolves_to:
+      - "earn_hours / scheduled_hours (scheduled_hours is NOT on this table; join to scheduling or employee as needed)"
+    default: not_directly_available
+    clarify_if: user has a different productivity metric or needs scheduled hours
+
+schema_notes:
+  - "Table uses ReplicatedReplacingMergeTree(__version, __deleted)."
+  - "Row policies shipped in schema MR9 with tenant + employee-level gating via dbpcm_warehouse_security.user_employee_access."
+  - "Results are additionally employee-filtered per principal beyond the tenant scope expressed in row_scope."
+  - "Descriptions derived from DDL + product documentation without live data verification (provisional pending MCP restoration)."
+  - "__version and __deleted are hidden ReplacingMergeTree columns; do not reference them in queries."
+
+mcp_projection:
+  hidden_columns:
+    - client_code
+    - proc_center
+    - __version
+    - __deleted
+  notes:
+    - client_code and proc_center are enforced by row-level policy and omitted from exposed columns and joins.
+    - __version and __deleted are physical storage and deduplication fields and are omitted from the model-facing schema.
+
+row_scope:
+  implicit_filters:
+    - client_code
+    - proc_center
+  enforced_by: ClickHouse row policy

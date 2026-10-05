@@ -1,0 +1,266 @@
+database: dbpcm_warehouse
+table: punch_pair
+region: workforce_time_attendance
+description: >
+  Employee matched In/Out punch pair records. Each row captures one paired clock-in and clock-out
+  event (day, lunch, break, or transfer punch types). Not individual unpaired punches — use the
+  Punches table for raw single-clock events.
+
+grain: []
+grain_verifiable: false
+grain_note: >
+  Physical storage key is (proc_center, client_code, table_source, id). Analytic grain is
+  one row per matched In/Out punch pair for an employee. This grain is unverifiable against
+  live data while the MCP is down.
+
+primary_key: []
+primary_key_note: >
+  No business primary key is exposed. The physical ORDER BY key is
+  (proc_center, client_code, table_source, id).
+
+temporal:
+  dimensions:
+    - name: punch_date
+      role: event
+      date_col: punch_date
+    - name: in_punch_time
+      role: event
+      date_col: in_punch_time
+    - name: out_punch_time
+      role: event
+      date_col: out_punch_time
+  default_pin: punch_date
+  note: >
+    in_punch_time and out_punch_time are the ACTUAL punch timestamps, not rounded values.
+    punch_date is the calendar date on which the pair is recorded. Use punch_date for day-level
+    aggregation; use in_punch_time or out_punch_time for precise clock-time analysis.
+
+join_keys:
+  - column: employee_code
+    joins: employee.employee_code
+    join_on: [employee_code]
+    cardinality: N:1
+    implicit_join_scope: [client_code, proc_center]
+  - column: department_code
+    joins: department.department_code
+    join_on: [department_code]
+    cardinality: many_to_reference
+    confidence: low
+
+columns:
+  employee_code:
+    type: FixedString(4)
+    description: Employee identifier; canonical join key to employee.
+    synonyms:
+      - EmployeeCode (legacy CamelCase alias, not a physical column reference)
+
+  id:
+    type: UInt64
+    description: Internal storage row id. Part of the physical ORDER BY key.
+
+  punch_date:
+    type: Date32
+    description: Calendar date on which the punch pair is recorded.
+    synonyms:
+      - PunchDate (legacy CamelCase alias, not a physical column reference)
+
+  in_punch_time:
+    type: DateTime64(6)
+    description: >
+      Actual timestamp of the In punch. Does NOT reflect rounding, grace periods, or pay-class rules.
+    synonyms:
+      - InPunchTime (legacy CamelCase alias, not a physical column reference)
+
+  out_punch_time:
+    type: DateTime64(6)
+    description: >
+      Actual timestamp of the Out punch. Does NOT reflect rounding, grace periods, or pay-class rules.
+    synonyms:
+      - OutPunchTime (legacy CamelCase alias, not a physical column reference)
+
+  hours_type:
+    type: LowCardinality(FixedString(2))
+    description: >
+      Earning/hours classification code. Values are client-defined and currently UNOBSERVED
+      (dev MCP is down). Interpret tendency via resolveValues(hours_type, <concept>) against
+      the client's configured earning types. Do not hardcode enum values.
+
+  earn_hours:
+    type: Decimal(19, 6)
+    unit: hours
+    description: >
+      Number of paid hours produced by the punch pair. Non-nullable per DDL — no IS NOT NULL guard is needed.
+      May differ from the elapsed time between in_punch_time and out_punch_time due to pay-class rounding,
+      grace periods, break deductions, or other pay-class rules.
+    synonyms:
+      - EarnHours (legacy CamelCase alias, not a physical column reference)
+
+  earn_amount:
+    type: Decimal(12, 2)
+    unit: USD
+    description: >
+      Currency value produced by the punch pair. Non-nullable per DDL — no IS NOT NULL guard is needed.
+    synonyms:
+      - EarnAmount (legacy CamelCase alias, not a physical column reference)
+
+  pay_class_code:
+    type: FixedString(3)
+    description: Pay class code governing rounding, grace, overtime, and break rules for this pair.
+    synonyms:
+      - PayClassCode (legacy CamelCase alias, not a physical column reference)
+
+  in_punch_type:
+    type: FixedString(2)
+    values:
+      ID: in_day
+      IL: in_lunch
+      IB: in_break
+      IX: in_transfer
+    description: Type of the In punch.
+    synonyms:
+      - InPunchType (legacy CamelCase alias, not a physical column reference)
+
+  out_punch_type:
+    type: FixedString(2)
+    values:
+      OD: out_day
+      OL: out_lunch
+      OB: out_break
+      OX: out_transfer
+    description: Type of the Out punch.
+    synonyms:
+      - OutPunchType (legacy CamelCase alias, not a physical column reference)
+
+  department_code:
+    type: String
+    description: Distributed department code associated with the timecard entry.
+    synonyms:
+      - DeptCode (legacy CamelCase alias, not a physical column reference)
+
+  supervisor_approval:
+    type: Nullable(String)
+    description: Supervisor approval status or indicator for the punch pair. May be null.
+    synonyms:
+      - SupervisorApproval (legacy CamelCase alias, not a physical column reference)
+
+  employee_approval:
+    type: Nullable(String)
+    description: Employee approval status or indicator for the punch pair. May be null.
+    synonyms:
+      - EmployeeApproval (legacy CamelCase alias, not a physical column reference)
+
+  table_source:
+    type: LowCardinality(String)
+    description: >
+      Physical source of the row. The ORDER BY key includes table_source, so the same
+      real-world event ingested via two sources would NOT be deduplicated — aggregation
+      across sources may double-count.
+
+measures:
+  total_paid_hours:
+    column: earn_hours
+    agg: sum
+    defined_over: >
+      rows after deduplication with FINAL; may be filtered by pay_class_code, department_code,
+      punch_date, or punch-type rules
+
+  total_earn_amount:
+    column: earn_amount
+    agg: sum
+    defined_over: >
+      rows after deduplication with FINAL; may be filtered by pay_class_code, department_code,
+      punch_date, or punch-type rules
+    unit: USD
+
+  pair_count:
+    column: "*"
+    agg: count
+    defined_over: >
+      rows after deduplication with FINAL; may be filtered by pay_class_code, department_code,
+      punch_date, or punch-type rules
+
+rules:
+  - id: dedup_first
+    predicate: "FROM punch_pair FINAL"
+    applies_when: any aggregation or analysis on this table
+    description: >
+      The ONLY canonical deduplication pattern is `FROM punch_pair FINAL`. The
+      ReplacingMergeTree(__version, __deleted) requires FINAL to deliver correct,
+      tombstone-safe state. Aggregation without FINAL is INCORRECT — it can include
+      stale duplicates or resurrect deleted rows. Filtering `__deleted = 0` without FINAL
+      is also incorrect. Note that replica convergence after merges means non-FINAL reads
+      may see divergent counts across replicas.
+
+ambiguities:
+  - term: overtime
+    resolves_to:
+      - "pay-class-configured overtime bases (daily OT/DT, weekly OT/DT, pay-period OT/DT, weighted OT options)"
+      - "daily_overtime_over_8h is ONE common convention, NOT the universal default"
+    default: pay_class_configured_overtime
+    clarify_if: user wants daily, weekly, pay-period, or weighted overtime; or a specific threshold
+
+  - term: hours_worked
+    resolves_to:
+      - "SUM(earn_hours) after deduplication with FINAL"
+      - "elapsed time between in_punch_time and out_punch_time (actual clock time)"
+    default: total_paid_hours
+    clarify_if: user wants actual elapsed clock time vs paid hours after rounding/grace rules
+
+  - term: table_source_hazard
+    resolves_to:
+      - "Values are unobserved; physical key includes table_source so the same real-world event ingested via two sources would NOT be deduped"
+    default: note_only
+    clarify_if: user aggregates across table_source without verifying single-source-per-entity
+
+  - term: midnight_spanning_pairs
+    resolves_to:
+      - "Day-ownership convention for pairs spanning midnight is UNRESOLVED"
+    default: unresolved
+    clarify_if: user groups by punch_date and a pair spans midnight
+
+  - term: shift_length
+    resolves_to:
+      - "elapsed time between in_punch_time and out_punch_time (actual clock time)"
+    default: actual_elapsed_time
+    clarify_if: user wants paid hours (earn_hours) instead of raw elapsed time
+
+  - term: legacy_earn_code_on_pairs
+    resolves_to:
+      - "earn_code does NOT exist on punch_pair in this table schema; semantics no longer available on this table"
+    default: not_available
+    clarify_if: user references legacy PunchPairs EarnCode — direct them to total_earning.earn_code or payroll.type_code
+
+  - term: legacy_earn_rate_on_pairs
+    resolves_to:
+      - "earn_rate does NOT exist on punch_pair in this table schema; semantics no longer available on this table"
+    default: not_available
+    clarify_if: user references legacy PunchPairs EarnRate — direct them to total_earning.earn_rate or payroll.type_rate
+
+  - term: legacy_home_department_on_pairs
+    resolves_to:
+      - "home department does NOT exist on punch_pair in this table schema; semantics no longer available on this table"
+    default: not_available
+    clarify_if: user wants home department — use employee.home_department or direct to employee table
+
+schema_notes:
+  - "Table uses ReplicatedReplacingMergeTree(__version, __deleted)."
+  - "Row policies shipped in schema MR9 with tenant + employee-level gating via dbpcm_warehouse_security.user_employee_access."
+  - "Results are additionally employee-filtered per principal beyond the tenant scope expressed in row_scope."
+  - "Descriptions derived from DDL + product documentation without live data verification (provisional pending MCP restoration)."
+  - "__version and __deleted are hidden ReplacingMergeTree columns; do not reference them in queries."
+
+mcp_projection:
+  hidden_columns:
+    - client_code
+    - proc_center
+    - __version
+    - __deleted
+  notes:
+    - client_code and proc_center are enforced by row-level policy and omitted from exposed columns and joins.
+    - __version and __deleted are physical storage and deduplication fields and are omitted from the model-facing schema.
+
+row_scope:
+  implicit_filters:
+    - client_code
+    - proc_center
+  enforced_by: ClickHouse row policy

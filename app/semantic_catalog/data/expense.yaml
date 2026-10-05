@@ -1,0 +1,392 @@
+database: dbpcm_warehouse
+table: expense
+region: expense_management
+description: Expense Management line-item table using the new ClickHouse DDL structure with snake_case column names only.
+  Contains individual employee expense entries submitted through the Expense Management module, including reimbursable expenses,
+  corporate card purchases, mileage and trip details, and per diem payments. One row represents one individual expense line
+  item; an expense report can contain many line items, and one payroll transaction can pay many expense line items.
+grain:
+- expense_id
+grain_verifiable: true
+grain_note: Natural grain is one row per expense_id within tenant scope. expense_report is not unique because one report can
+  contain many expense line items. For paid-spend analysis, multiple line items may share employee_code and expense_paid_date,
+  but expense_id remains the row-level grain.
+primary_key:
+- expense_id
+primary_key_note: Tenant-scoped expense line-item key. expense_id must not be used across clients or processing centers by
+  itself. The physical ORDER BY key is (proc_center, client_code, expense_id).
+temporal:
+  dimensions:
+    - name: expense_event
+      role: event
+      date_col: individual_expense_date
+    - name: report_submission_event
+      role: event
+      date_col: date_time_submitted
+    - name: approval_event
+      role: event
+      date_col: approved_date
+    - name: payment_event
+      role: event
+      date_col: expense_paid_date
+    - name: purchase_event
+      role: event
+      date_col: purchase_date
+    - name: post_event
+      role: event
+      date_col: post_date
+    - name: import_event
+      role: event
+      date_col: import_date
+    - name: card_validity_period
+      role: period
+      range:
+        start_col: card_issue_date
+        end_col: card_expiration_date
+  default_pin: payment_event
+  note: Constrain at least one expense time dimension before broad aggregation. Use expense_paid_date for paid timing; use individual_expense_date for when the expense was incurred; use date_time_submitted for submission; use approved_date for approval; use purchase_date, post_date, and import_date for corporate card transaction timing; use card_issue_date and card_expiration_date for the card validity period.
+join_keys:
+- column: employee_code
+  joins: employee.employee_code
+  join_on:
+  - employee_code
+  cardinality: N:1
+  description: Join Expense to Employee using tenant scope.
+  implicit_join_scope:
+  - client_code
+  - proc_center
+- column: department_code
+  joins: department.department_code
+  join_on:
+  - department_code
+  cardinality: N:1
+  description: Join Expense to Department using tenant scope.
+  implicit_join_scope:
+  - client_code
+  - proc_center
+- column: payroll_transaction_number
+  joins: payroll.transaction_number
+  join_on:
+  - payroll_transaction_number = transaction_number
+  cardinality: N:1
+  description: Join an expense line paid through payroll to its payroll transaction using tenant scope.
+  implicit_join_scope:
+  - client_code
+  - proc_center
+columns:
+  expense_id:
+    type: UInt64
+    description: Unique row-level identifier for the individual expense line item within tenant scope.
+  employee_code:
+    type: Nullable(FixedString(4))
+    description: Employee identifier associated with the expense line item. Join to employee.employee_code using tenant scope.
+  comment:
+    type: Nullable(String)
+    description: Description or comment recorded on the expense line.
+  expense_rule:
+    type: Nullable(FixedString(50))
+    description: Expense rule code from the source system.
+    client_defined: true
+    description_col: expense_rule_description
+  expense_rule_description:
+    type: Nullable(FixedString(255))
+    description: Human-readable description of the expense rule.
+  expense_policy:
+    type: Nullable(FixedString(50))
+    description: Expense policy code.
+    client_defined: true
+    description_col: expense_policy_description
+  expense_policy_description:
+    type: Nullable(FixedString(255))
+    description: Human-readable description of the expense policy.
+  expense_account_code:
+    type: Nullable(FixedString(50))
+    description: Expense account code.
+    client_defined: true
+    description_col: expense_account_description
+  expense_account_description:
+    type: Nullable(FixedString(255))
+    description: Expense account description.
+  amount_requested:
+    type: Nullable(Decimal(19, 2))
+    description: Amount requested for reimbursement in the submitted expense workflow.
+    unit: USD
+  amount_approved:
+    type: Nullable(Decimal(19, 2))
+    description: Amount approved for reimbursement. Use as the default expense amount for approved-spend analysis.
+    unit: USD
+  expense_status:
+    type: Nullable(FixedString(50))
+    description: Workflow status of the expense line.
+    values:
+    - Paid
+    - Approved
+    - Denied
+    - Pending Approval
+    - Marked as Paid
+    - Returned
+    client_defined: true
+  data_set_transaction:
+    type: Nullable(FixedString(50))
+    description: Internal dataset transaction reference.
+  payroll_transaction_number:
+    type: Nullable(FixedString(50))
+    description: Payroll transaction number when the expense is associated with payroll. An empty string may represent no
+      payroll transaction.
+  individual_expense_date:
+    type: Nullable(Date32)
+    description: Date the expense was incurred.
+  expense_report_submission_date:
+    type: Nullable(DateTime64(6))
+    description: Date and time the expense report was submitted.
+  date_time_submitted:
+    type: Nullable(DateTime64(6))
+    description: Date and time the expense line was submitted.
+  approved_date:
+    type: Nullable(Date32)
+    description: Date the expense was approved.
+  expense_paid_date:
+    type: Nullable(DateTime64(6))
+    description: Date and time the expense was paid. Recommended default temporal pin for executive paid-spend reporting.
+  expense_country_paid_in:
+    type: Nullable(FixedString(3))
+    description: Country where the expense was paid.
+  tied_to_expense_report_on:
+    type: Nullable(DateTime64(6))
+    description: Date and time the expense line was tied to an expense report.
+  number_of_units:
+    type: Nullable(Decimal(19, 2))
+    description: Number of units used to calculate the expense amount.
+  rate:
+    type: Nullable(Decimal(19, 2))
+    description: Rate applied to number_of_units.
+    unit: USD
+  number_of_units_rate:
+    type: Nullable(FixedString(100))
+    description: Source display value combining the number of units and rate.
+  department_code:
+    type: Nullable(FixedString(50))
+    description: Department code associated with the expense.
+    client_defined: true
+    description_col: department_description
+  department_description:
+    type: Nullable(FixedString(255))
+    description: Department description associated with the expense.
+  expense_report:
+    type: Nullable(FixedString(255))
+    description: Expense report identifier. One report can contain many individual expense line items.
+  final_approved_user:
+    type: Nullable(FixedString(100))
+    description: User who gave final approval to the expense line.
+  expense_created_by:
+    type: Nullable(FixedString(100))
+    description: User who created the expense line.
+  submitted_currency:
+    type: Nullable(FixedString(10))
+    description: Currency in which the expense was submitted.
+  exchange_rate:
+    type: Nullable(FixedString(100))
+    description: Source-provided exchange rate applied to a foreign-currency submission. Stored as FixedString(100) in the DDL.
+  missing_receipt_status:
+    type: Nullable(FixedString(50))
+    description: Indicates whether the receipt is missing.
+    values:
+    - 'Yes'
+    - 'No'
+  missing_receipt_reason:
+    type: Nullable(String)
+    description: Reason provided when the receipt is missing.
+  receipt_attached:
+    type: Nullable(FixedString(10))
+    description: Indicates whether a receipt is attached.
+    values:
+    - 'Yes'
+    - 'No'
+  potential_duplicate_expense:
+    type: Nullable(FixedString(10))
+    description: Indicates whether the expense was flagged as a potential duplicate.
+    values:
+    - 'Yes'
+    - 'No'
+  expense_type:
+    type: Nullable(FixedString(20))
+    description: Expense type classification.
+    values:
+    - Personal
+    - Corporate Card
+    client_defined: true
+  expense_deduction_code:
+    type: Nullable(FixedString(50))
+    description: Expense deduction code used to associate the expense with payroll deductions.
+    client_defined: true
+  auto_decision_detail:
+    type: Nullable(String)
+    description: Automated decision detail produced by policy, validation, or fraud checks.
+  custom_fields:
+    type: Nullable(String)
+    description: Custom-field payload from the source system.
+  expense_limit:
+    type: Nullable(FixedString(100))
+    description: Source-provided expense limit amount or rule. Stored as String in the DDL.
+  submitted_miles:
+    type: Nullable(Decimal(19, 2))
+    description: Mileage submitted for reimbursement.
+    unit: miles
+  approved_miles:
+    type: Nullable(Decimal(19, 2))
+    description: Mileage approved for reimbursement. Use as the default mileage measure.
+    unit: miles
+  from_location:
+    type: Nullable(String)
+    description: Trip origin location.
+  to_location:
+    type: Nullable(String)
+    description: Trip destination location.
+  total_trip_time:
+    type: Nullable(FixedString(20))
+    description: Source display value for total trip time.
+  trip_start_time:
+    type: Nullable(FixedString(20))
+    description: Source-provided trip start time. Stored as String in the DDL.
+  trip_end_time:
+    type: Nullable(FixedString(20))
+    description: Source-provided trip end time. Stored as String in the DDL.
+  trip_purpose:
+    type: Nullable(FixedString(255))
+    description: Business or travel purpose recorded for the trip.
+  commuter_mileage:
+    type: Nullable(Decimal(19, 2))
+    description: Commuter mileage to exclude from reimbursable mileage.
+    unit: miles
+  start_odometer_reading:
+    type: Nullable(Decimal(19, 2))
+    description: Odometer reading at trip start.
+    unit: miles
+  end_odometer_reading:
+    type: Nullable(Decimal(19, 2))
+    description: Odometer reading at trip end.
+    unit: miles
+  stop_location_one:
+    type: Nullable(String)
+    description: First stop location on the trip.
+  stop_location_two:
+    type: Nullable(String)
+    description: Second stop location on the trip.
+  stop_location_three:
+    type: Nullable(String)
+    description: Third stop location on the trip.
+  corporate_card_transaction_number:
+    type: Nullable(FixedString(100))
+    description: Corporate card transaction number associated with the expense line.
+  merchant:
+    type: Nullable(FixedString(255))
+    description: Merchant where the corporate card purchase was made.
+  card_number:
+    type: Nullable(FixedString(50))
+    description: Corporate card number or reference, typically masked.
+  purchase_amount:
+    type: Nullable(Decimal(19, 2))
+    description: Corporate card purchase amount.
+    unit: USD
+  purchase_date:
+    type: Nullable(Date32)
+    description: Date of the corporate card purchase.
+  post_date:
+    type: Nullable(Date32)
+    description: Date the corporate card transaction posted.
+  import_date:
+    type: Nullable(Date32)
+    description: Date the corporate card transaction was imported into the expense system.
+  card_limit:
+    type: Nullable(Decimal(19, 2))
+    description: Corporate card spending limit.
+    unit: USD
+  card_issue_date:
+    type: Nullable(Date32)
+    description: Date the corporate card was issued.
+  card_expiration_date:
+    type: Nullable(Date32)
+    description: Date the corporate card expires.
+rules:
+- id: approved_expenses
+  predicate: expense_status IN ('Approved', 'Paid', 'Marked as Paid')
+  applies_when: User asks about reimbursable or approved spend.
+  description: Restrict spend to approved or paid workflow statuses.
+- id: paid_expenses
+  predicate: expense_status = 'Paid'
+  applies_when: User asks about expenses actually paid.
+  description: Use the strict paid status for cash-out-the-door analysis.
+- id: trip_expenses
+  predicate: submitted_miles > 0 OR approved_miles > 0
+  applies_when: User asks about mileage or trip expenses.
+  description: Restrict to expense lines with actual mileage greater than zero.
+- id: corporate_card_expenses
+  predicate: corporate_card_transaction_number IS NOT NULL
+  applies_when: User asks about corporate card spend.
+  description: Restrict to rows tied to a corporate card transaction.
+- id: payroll_reconciliation
+  predicate: payroll_transaction_number != ''
+  applies_when: User is reconciling expenses to payroll transactions.
+  description: Use a non-empty-string predicate to select only expense lines associated with a payroll transaction.
+ambiguities:
+- term: expense_amount
+  resolves_to:
+  - amount_requested
+  - amount_approved
+  - purchase_amount
+  default: amount_approved
+  clarify_if: The question distinguishes requested, approved, or corporate card purchase amount.
+- term: expense_date
+  resolves_to:
+  - individual_expense_date
+  - expense_report_submission_date
+  - date_time_submitted
+  - approved_date
+  - expense_paid_date
+  default: expense_paid_date
+  clarify_if: The question distinguishes when the expense occurred, was submitted, was approved, or was paid.
+- term: trip_mileage
+  resolves_to:
+  - submitted_miles
+  - approved_miles
+  default: approved_miles
+  clarify_if: The question distinguishes submitted from approved mileage.
+- term: department
+  resolves_to:
+  - department_code
+  - department_description
+  - department.department_name
+  default: department_description for display and department_code for filtering
+  clarify_if: Conformed department dimensional attributes are required.
+schema_notes:
+- The table uses ReplicatedReplacingMergeTree using version as the version column and is ordered by (proc_center, client_code,
+  expense_id).
+- version is DateTime64(6) and is the ReplacingMergeTree version column; it is hidden from the MCP projection.
+- expense_id is UInt64 and is unique only within tenant scope.
+- individual_expense_date, approved_date, purchase_date, post_date, import_date, card_issue_date, and card_expiration_date
+  use Nullable(Date32).
+- expense_report_submission_date, date_time_submitted, expense_paid_date, and tied_to_expense_report_on use Nullable(DateTime64(6)).
+- amount_requested, amount_approved, number_of_units, rate, mileage fields, odometer fields, purchase_amount, and card_limit
+  use Nullable(Decimal(19, 2)).
+- payroll_transaction_number is Nullable(FixedString(50)); an empty string may be used when no payroll transaction exists,
+  so use payroll_transaction_number != '' rather than IS NOT NULL when filtering for reconciled rows.
+- Numerous source fields use FixedString(N) in the physical DDL. Values are stored right-padded with null bytes. The API strips
+  that padding before returning values, so callers see clean strings. Equality filters such as expense_status = 'Paid' still
+  work because ClickHouse handles FixedString padding transparently in comparisons.
+- Empty strings may represent missing source values and should be handled explicitly in semantic queries.
+- Do not treat expense_report as unique and do not aggregate the same expense_id more than once.
+- expense_status is client-defined; documented observed values are Paid, Approved, Denied, Pending Approval, Marked as Paid,
+  and Returned.
+mcp_projection:
+  hidden_columns:
+  - client_code
+  - proc_center
+  - version
+  notes:
+  - proc_center and client_code are tenant-scope columns enforced by row policy and omitted from exposed columns and joins.
+  - version is the ReplacingMergeTree version column used for deduplication and is omitted from the model-facing schema.
+row_scope:
+  implicit_filters:
+  - client_code
+  - proc_center
+  enforced_by: ClickHouse row policy

@@ -143,15 +143,15 @@ columns:
       in names include Jr., Sr., III, and PhD.
   employee_status:
     type: Nullable(String)
-    description: The employee status code indicating whether the employee is Active, Terminated, Inactive, On Leave, Deceased,
-      Retired, Not Hired, or PreHire.
+    description: The employee status code indicating whether the employee is of in any of status below.
     values:
-    - A
-    - D
-    - I
-    - R
-    - T
-    - V
+    - Active
+    - Deceased
+    - Inactive
+    - Retired
+    - Terminated
+    - On Leave
+    - Not Hired
   hire_date:
     type: Nullable(DateTime64(6))
     description: This is the date the employee was hired in the company.
@@ -633,11 +633,11 @@ columns:
     client_defined: true
 rules:
 - id: active_employee
-  predicate: employee_status = 'A'
+  predicate: employee_status = 'Active'
   applies_when: User asks for active/current active employees.
   description: Restrict to active employees.
 - id: exclude_not_hired_default
-  predicate: employee_status != 'N' OR employee_status IS NULL
+  predicate: employee_status != 'Not Hired' OR employee_status IS NULL
   applies_when: Default employee analysis without an explicit status filter.
   description: Exclude not-hired records by default.
 - id: rehired_not_terminated
@@ -645,7 +645,7 @@ rules:
   applies_when: Termination-status evaluation.
   description: Apply with the requested termination-state filter and account for rehire timing.
 - id: missing_date_sentinel
-  predicate: <date_column> != toDateTime64('1900-01-01 00:00:00', 6)
+  predicate: <date_column> IS NOT NULL AND toDate32(<date_column>) > toDate32('1900-01-01')
   applies_when: Filtering for populated employee dates on fields that use default date sentinels.
   description: Several nullable DateTime64 fields use 1900-01-01 00:00:00.000000 as a missing/default date rather than NULL.
 ambiguities:

@@ -1,80 +1,49 @@
 database: dbpcm_warehouse
 table: payroll
 region: workforce_payroll
-description: Payroll register line-item table. Contains paycheck components such as earnings, deductions, taxes, benefits,
-  employer taxes, and net-pay distributions. Not one row per paycheck.
+description: Payroll register line-item table. Contains paycheck components such as earnings, deductions, taxes, benefits, employer taxes, and net-pay distributions. Not one row per paycheck.
 grain:
-- register_type
-- profile_code
-- department_code
-- transaction_number
-- type_code
-- type_code_description
-- type_rate
-- employee_code
-- distributed_job_cost_code
-- check_number
+  - pay_date
+  - employee_code
+  - dedup_hash
 grain_verifiable: true
-grain_note: Payroll register LINE ITEMS - one row per unique ClickHouse sort/dedup tuple above, not one row per paycheck.
-  transaction_number and check_number should not be treated as unique by themselves. Multiple rows can share the same employee_code
-  + pay_date.
+grain_note: >
+  Payroll is a line-item register table. The physical deduplication grain is represented by dedup_hash,
+  which is derived from payroll business attributes including gross_to_net_key, profile_code,
+  type_code, type_rate, employee_code, distributed_job_allocation_key, pay_date and check_number.
+  Multiple payroll rows may exist for the same employee and pay_date.
+primary_key: []
+primary_key_note: >
+  No business primary key is exposed. The physical storage grain is represented by dedup_hash together with tenant scope.
 temporal:
   dimensions:
-  - name: pay_period
-    role: period
-    range:
-      start_col: pay_period_start_date
-      end_col: pay_period_end_date
-  - name: pay_event
-    role: event
-    date_col: pay_date
+    - name: pay_period
+      role: period
+      range:
+        start_col: pay_period_start_date
+        end_col: pay_period_end_date
+    - name: pay_event
+      role: event
+      date_col: pay_date
   default_pin: pay_period
   note: Constrain at least one payroll time dimension before broad aggregation. Use pay_date for issued/paid timing; use pay_period_start_date
     and pay_period_end_date for the period covered.
-primary_key: []
-primary_key_note: No simple single-column business primary key is exposed. The ORDER BY tuple is unique in observed data and
-  defines the ClickHouse sort/dedup grain.
 join_keys:
-- column: employee_code
-  joins: employee.employee_code
-  join_on:
-  - employee_code
-  cardinality: N:1
-  confidence: high
-  description: Join Payroll to Employee using employee_code.
-  implicit_join_scope:
-  - client_code
-  - proc_center
-- column: department_code
-  joins: department.department_code
-  join_on:
-  - department_code
-  cardinality: N:1
-  confidence: medium
-  description: Join payroll department_code to department using tenant scope when department attributes are needed.
-  implicit_join_scope:
-  - client_code
-  - proc_center
-# Labor allocation join model — TEMPLATED join_key (overlay pattern form):
-# each payroll line item carries up to 20 INDEPENDENT labor-allocation dimension values in
-# labor_allocation_key_1..labor_allocation_key_20. Each key column holds a join_key
-# value that resolves to exactly one labor_allocation row (labor_allocation.join_key
-# is unique within a tenant), from which the allocation code and description are read.
-# The 20 keys are DISTINCT dimension slots (types 1..20) — the per-slot MEANING lives in
-# each labor_allocation_key_N column's own description below — but they ALL join
-# labor_allocation on join_key identically, so the JOIN is authored ONCE as a pattern
-# entry (column_pattern + index_range) instead of 20 near-identical rows. The overlay
-# (app/semantic_catalog/overlay.py) emits this as a SINGLE compact join_key carrying the
-# pattern + range + join_on template + description; it is NOT expanded to 20 entries in
-# getTableSchema. The model selects whichever key(s) 1..20 the question needs. Tenant
-# scope (the RLS columns) is applied server-side by the ClickHouse row policy and is
-# intentionally NOT part of the model-facing ON clause. Cardinality N:1.
-- column_pattern: labor_allocation_key_{n}
-  index_range: [1, 20]
-  joins: labor_allocation.join_key
-  join_on: labor_allocation_key_{n} = join_key
-  cardinality: N:1
-  description: Each labor_allocation_key_{n} (n=1..20) is a DISTINCT labor-allocation dimension (see each column's own description for what it represents); join the specific key(s) the question needs to labor_allocation on join_key to resolve its code/description.
+  - column: employee_code
+    joins: employee.employee_code
+    join_on: [employee_code]
+    cardinality: N:1
+    implicit_join_scope: [client_code, proc_center]
+  - column: department_code
+    joins: department.department_code
+    join_on: [department_code]
+    cardinality: N:1
+    implicit_join_scope: [client_code, proc_center]
+  - column_pattern: labor_allocation_key_{n}
+    index_range: [1,20]
+    joins: labor_allocation.join_key
+    join_on: labor_allocation_key_{n} = join_key
+    cardinality: N:1
 columns:
   employee_code:
     type: FixedString(4)
@@ -90,12 +59,12 @@ columns:
       ERTAX: employer_tax
     description: Main payroll register category for the line item.
   amount:
-    type: Nullable(Decimal(19, 2))
+    type: Decimal(19, 2)
     description: Monetary amount for the payroll line. Meaning depends on register_type. Negative values can occur for reversals
       or adjustments.
     unit: USD
   type_hours:
-    type: Nullable(Decimal(19, 2))
+    type: Decimal(19, 2)
     description: Hours associated with the payroll type code when applicable. Negative values can occur for reversals or adjustments.
     unit: hours
   type_code:
@@ -104,7 +73,7 @@ columns:
     client_defined: true
     description_col: type_code_description
   type_code_description:
-    type: FixedString(64)
+    type: String
     description: Human-readable description for type_code.
     client_defined: true
   profile_code:
@@ -112,10 +81,10 @@ columns:
     description: Payroll profile or benefit eligibility profile code when applicable.
     client_defined: true
   distributed_job_cost_code:
-    type: FixedString(119)
+    type: String
     description: This is a key formed by concatenating all labor allocation keys.
   department_code:
-    type: FixedString(12)
+    type: String
     description: Department code on the payroll row.
     client_defined: true
   type_rate:
@@ -123,13 +92,13 @@ columns:
     description: Rate associated with the type code when applicable.
     unit: USD_per_hour
   pay_date:
-    type: Nullable(Date32)
+    type: Date32
     description: Check/payment date; use when the question is about when payroll was issued.
   pay_period_start_date:
-    type: Nullable(Date32)
+    type: Date32
     description: Start date of the pay period covered by the line item.
   pay_period_end_date:
-    type: Nullable(Date32)
+    type: Date32
     description: End date of the pay period covered by the line item.
   transaction_number:
     type: FixedString(9)
@@ -137,103 +106,109 @@ columns:
   check_number:
     type: UInt32
     description: Check number for the payroll item when paid by or associated with a check. Not unique by itself.
+  gross_to_net_key:
+    type: LowCardinality(FixedString(3))
+    description: Internal payroll balancing category used in gross-to-net calculations and payroll register grouping.
+  distributed_job_allocation_key:
+    type: String
+    description: Internal payroll allocation key used for distributed labor costing.
   labor_allocation_key_1:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 1. Join labor_allocation_key_1 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_2:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 2. Join labor_allocation_key_2 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_3:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 3. Join labor_allocation_key_3 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_4:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 4. Join labor_allocation_key_4 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_5:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 5. Join labor_allocation_key_5 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_6:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 6. Join labor_allocation_key_6 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_7:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 7. Join labor_allocation_key_7 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_8:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 8. Join labor_allocation_key_8 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_9:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 9. Join labor_allocation_key_9 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_10:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 10. Join labor_allocation_key_10 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_11:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 11. Join labor_allocation_key_11 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_12:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 12. Join labor_allocation_key_12 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_13:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 13. Join labor_allocation_key_13 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_14:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 14. Join labor_allocation_key_14 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_15:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 15. Join labor_allocation_key_15 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_16:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 16. Join labor_allocation_key_16 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_17:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 17. Join labor_allocation_key_17 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_18:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 18. Join labor_allocation_key_18 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_19:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 19. Join labor_allocation_key_19 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
   labor_allocation_key_20:
-    type: Nullable(String)
+    type: String
     description: Labor allocation key for dimension 20. Join labor_allocation_key_20 to labor_allocation.join_key to resolve
       the allocation code and description; tenant scope is applied server-side by the row policy.
     client_defined: true
@@ -357,19 +332,22 @@ ambiguities:
   default: Use the specifically requested labor allocation type number
   clarify_if: The request does not identify which labor allocation type, from 1 through 20, should be used.
 schema_notes:
-- labor_allocation_key_1 through labor_allocation_key_20 resolve independently through labor_allocation using client_code
-  + proc_center and the key column matched to join_key.
-- Do not join labor-allocation keys by join_key alone because tenant scope must be preserved.
-- register_type observed values are DDUCT, EARN, EEBEN, EETAX, ERTAX, and NETPAYDIST.
-- amount and type_hours are populated in observed data but can be negative for reversals or adjustments.
+  - The table uses ReplicatedReplacingMergeTree(version).
+  - dedup_hash is a materialized physical deduplication key and is not exposed to semantic consumers.
+  - pay_date, pay_period_start_date and pay_period_end_date are non-nullable Date32 fields.
+  - amount and type_hours are required Decimal(19,2) fields and may contain negative values for reversals.
+  - gross_to_net_key participates in payroll balancing and deduplication logic.
 mcp_projection:
   hidden_columns:
-  - client_code
-  - proc_center
+    - client_code
+    - proc_center
+    - version
+    - dedup_hash
   notes:
-  - client_code and proc_center are enforced by row-level policy and omitted from exposed columns and joins.
+    - client_code and proc_center are enforced by row-level policy and omitted from exposed columns and joins.
+    - version and dedup_hash are physical storage and deduplication fields and are omitted from the model-facing schema.
 row_scope:
   implicit_filters:
-  - client_code
-  - proc_center
+    - client_code
+    - proc_center
   enforced_by: ClickHouse row policy
