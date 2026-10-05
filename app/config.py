@@ -84,9 +84,9 @@ class Settings(BaseSettings):
     trino_request_timeout: float = Field(30, gt=0)
     trino_mysql_schema: str = "dbonline"
     trino_clickhouse_catalog: str = "clickhouse"
-    # Optional view-hosting catalog: reporting.mysql_shard_07.employee.
+    # View-hosting catalog: dbpcm_datawarehouse.mysql_shard_07.employee.
     # Empty means connector catalogs: mysql_shard_07.dbonline.employee.
-    trino_mysql_view_catalog: str = ""
+    trino_mysql_view_catalog: str = "dbpcm_datawarehouse"
     trino_client_code_claim: str = "clientcode"
     trino_proc_center_claim: str = "proc_center"
     trino_username_claim: str = "user_name"

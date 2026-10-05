@@ -67,6 +67,31 @@ def request_identity(settings: Settings) -> tuple[str, str, str]:
     return values[0], values[1], values[2]
 
 
+def normalize_logical_sql(sql: str) -> str:
+    """Map the public Trino database alias to the existing authorization namespace."""
+    from app.trino_metadata import PUBLIC_DATABASE
+
+    try:
+        statements = sqlglot.parse(sql, read="clickhouse", error_level=ErrorLevel.RAISE)
+        if len(statements) != 1 or not isinstance(statements[0], exp.Query):
+            return sql  # The normal statement guard rejects unsupported inputs.
+        tree = statements[0]
+        changed = False
+        for node in tree.walk():
+            if (
+                isinstance(node, (exp.Table, exp.Column))
+                and node.db == PUBLIC_DATABASE
+                and not node.catalog
+            ):
+                node.set("db", exp.to_identifier(DEFAULT_DATABASE))
+                changed = True
+        return tree.sql(dialect="clickhouse") if changed else sql
+    except SqlglotError as exc:
+        raise QueryValidationError(
+            "Invalid logical SQL.", "TRINO_UNSUPPORTED_SQL"
+        ) from exc
+
+
 def rewrite_query(sql: str, settings: Settings) -> str:
     """Route base relations, preserving CTE names, aliases and logical columns.
 
@@ -82,7 +107,9 @@ def rewrite_query(sql: str, settings: Settings) -> str:
     )
     try:
         statements = sqlglot.parse(
-            inner, read="clickhouse", error_level=ErrorLevel.RAISE
+            normalize_logical_sql(inner),
+            read="clickhouse",
+            error_level=ErrorLevel.RAISE,
         )
         if len(statements) != 1 or not isinstance(statements[0], exp.Query):
             raise QueryValidationError(
@@ -91,7 +118,12 @@ def rewrite_query(sql: str, settings: Settings) -> str:
             )
         tree = qualify_tables(statements[0], db=DEFAULT_DATABASE, dialect="clickhouse")
         catalog = get_semantic_catalog()
+        from app.trino_metadata import canonical_database, physical_target
+
         allowed = settings.allowed_databases_list()
+        allowed = (
+            None if allowed is None else {canonical_database(db) for db in allowed}
+        )
         shard = None
         routed = set()
         for scope in traverse_scope(tree):
@@ -112,18 +144,11 @@ def rewrite_query(sql: str, settings: Settings) -> str:
                         "TABLE_NOT_ALLOWED",
                     )
                 entry = catalog[key]
-                if entry.get("source", "clickhouse") == "mysql":
-                    if shard is None:
-                        shard = resolve_mysql_shard(proc_center, client_code, settings)
-                    target_catalog = settings.trino_mysql_view_catalog or shard
-                    target_schema = (
-                        shard
-                        if settings.trino_mysql_view_catalog
-                        else settings.trino_mysql_schema
-                    )
-                else:
-                    target_catalog = settings.trino_clickhouse_catalog
-                    target_schema = source.db
+                if entry.get("source", "clickhouse") == "mysql" and shard is None:
+                    shard = resolve_mysql_shard(proc_center, client_code, settings)
+                target_catalog, target_schema, _ = physical_target(
+                    entry, shard or "", settings
+                )
                 source.set(
                     "catalog",
                     exp.to_identifier(validate_identifier(target_catalog), quoted=True),

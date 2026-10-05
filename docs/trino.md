@@ -2,12 +2,20 @@
 
 `TRINO_ENABLED=false` (default) preserves the existing ClickHouse path. Set it
 to true to use Trino for runQuery, explainQuery and sampleRows. Schema discovery
-and column provenance then use the authored semantic catalog, without querying
-ClickHouse `system.columns`. Logical names and the existing column-scope checks
-stay unchanged. This is a foundation for federation, not a completed migration
+and column provenance then use live Trino metadata intersected with the authored
+semantic catalog, without querying ClickHouse `system.columns`. The public
+database name is `dbpcm_datawarehouse`; existing column-scope keys remain compatible. This is a foundation for federation, not a completed migration
 of employee/expense SQL or production row policies.
 
 ## Catalog and routing contract
+
+When `TRINO_ENABLED=true`, MCP initialization instructions and tool descriptions
+advertise Trino as the execution backend while explicitly retaining the
+ClickHouse-compatible API input dialect. They explain logical shard routing,
+live Trino schema types, translation limits, and the separate native-Trino view
+deployment path. With the flag disabled, MCP advertises ClickHouse SQL instead.
+Restart the MCP server after changing the flag and reconnect clients so they
+refresh initialization instructions and cached tool descriptions.
 
 Each `app/semantic_catalog/data/*.yaml` table declares:
 
@@ -34,7 +42,8 @@ invalid identifiers fail closed; there is no fallback shard. Replace the functio
 body with the real routing service later. No user/tenant identity lookup table is
 created by this implementation.
 
-Trino uses three-part physical names. By default:
+Trino uses three-part physical names. With `TRINO_MYSQL_VIEW_CATALOG=`
+explicitly empty, direct source routing is:
 
 ```text
 employee                   -> mysql_shard_07.dbonline.employee
@@ -42,11 +51,11 @@ dbpcm_warehouse.department -> mysql_shard_07.dbonline.department
 dbpcm_warehouse.payroll    -> clickhouse.dbpcm_warehouse.payroll
 ```
 
-`TRINO_MYSQL_SCHEMA` changes `dbonline`. To route MySQL-backed logical tables to
-secured Trino views instead, set `TRINO_MYSQL_VIEW_CATALOG=reporting`:
+`TRINO_MYSQL_SCHEMA` changes `dbonline`. MySQL-backed logical tables default to
+secured Trino views with `TRINO_MYSQL_VIEW_CATALOG=dbpcm_datawarehouse`:
 
 ```text
-employee -> reporting.mysql_shard_07.employee
+employee -> dbpcm_datawarehouse.mysql_shard_07.employee
 ```
 
 That catalog must support view storage and be provisioned separately. Merely
@@ -166,9 +175,52 @@ Trino mode does not require ClickHouse connection settings for query execution.
 The separate scratch/upload subsystem remains ClickHouse-specific and is not
 supported as a Trino report source. MCP health advertises scratch as unsupported
 in this mode; do not enable scratch/upload workflows for this experimental path.
-Health probes check Trino connectivity, not security readiness or source view
-existence. Schema discovery is the declared contract, not proof that physical
-relations have been deployed.
+Health probes check Trino connectivity, not security readiness. Discovery
+separately checks the resolved physical relations as described below.
+
+## Live discovery and the public database name
+
+In Trino mode the API advertises `dbpcm_datawarehouse`. Both that public name and
+legacy `dbpcm_warehouse` input remain accepted. For example:
+
+```text
+dbpcm_datawarehouse.employee
+    -> JWT proc_center + clientcode resolve mysql_shard_07
+    -> dbpcm_datawarehouse.mysql_shard_07.employee
+```
+
+The public name is an alias for the existing semantic database. YAML keys, JWT
+column-scope strings, and provenance retain `dbpcm_warehouse` for compatibility;
+changing the alias does not grant new access. `ALLOWED_DATABASES` may contain
+either name in Trino mode. ClickHouse-source tables still route to the configured
+ClickHouse catalog and their original database schema.
+
+`listDatabases`, `listTables`, and `getTableSchema` now:
+
+1. Require verified tenant/user claims and resolve the shard before network I/O.
+2. Connect with that request's effective identity and probe Trino with `SELECT 1`.
+3. Read `information_schema.columns` for only the relevant catalogued targets.
+4. Intersect physical columns with YAML columns and validate each discovered
+   relation using a projected `SELECT ... LIMIT 0` (including view dependencies).
+5. Return available logical tables and columns. Existing hidden-column and
+   column-scope filtering still applies to `getTableSchema` and sampling.
+
+A table with no matching physical columns is omitted. A partial view exposes only
+its deployed, catalogued columns; extra physical tables/columns are not exposed.
+`listDatabases` returns a database only when at least one eligible table exists.
+`listTables` keeps its existing table-summary shape; use `getTableSchema` for the
+actual column list and Trino types. Sample projections and query provenance also
+use live column availability. This does not certify that source types match all
+catalog assumptions or that row policies are configured correctly.
+
+Metadata is read fresh per operation with no cross-request cache. An unknown
+shard fails before connecting. Connection, permission, or invalid-view failures
+return `TRINO_DISCOVERY_UNAVAILABLE`, rather than showing stale metadata or
+silently skipping a failed source. Missing relations with no metadata are simply
+omitted. `SELECT 1` checks the coordinator; metadata/zero-row probes check source
+resolution and view analysis, not source data freshness or a full source scan.
+The service account and effective user need the corresponding metadata/view
+permissions. `TRINO_SECURITY_READY` continues to gate business queries.
 
 ## Copyable minimal employee view
 
@@ -177,7 +229,7 @@ tables. It exposes only the columns needed for a department-count demo, not the
 complete employee catalog. Queries for other catalog columns (including a full
 `sampleRows` projection) require extending the view first.
 
-Prerequisites: provision a view-capable Trino catalog named `reporting` (for
+Prerequisites: provision a view-capable Trino catalog named `dbpcm_datawarehouse` (for
 example, a Hive connector backed by a metastore), and configure the
 `mysql_shard_07` source catalog. The compose file and catalog generator above do
 not provision this view store. Run the following SQL through an administrative
@@ -192,9 +244,9 @@ schema that isolates the processing center; a caller-identity check alone cannot
 disambiguate those rows.
 
 ```sql
-CREATE SCHEMA IF NOT EXISTS reporting.mysql_shard_07;
+CREATE SCHEMA IF NOT EXISTS dbpcm_datawarehouse.mysql_shard_07;
 
-CREATE VIEW reporting.mysql_shard_07.employee
+CREATE VIEW dbpcm_datawarehouse.mysql_shard_07.employee
 SECURITY DEFINER
 AS
 SELECT
@@ -236,7 +288,7 @@ In the API environment, in addition to the connection settings above:
 
 ```dotenv
 TRINO_ENABLED=true
-TRINO_MYSQL_VIEW_CATALOG=reporting
+TRINO_MYSQL_VIEW_CATALOG=dbpcm_datawarehouse
 TRINO_SHARD_ROUTES={"pc1":{"10R37":"mysql_shard_07"}}
 ```
 
@@ -250,19 +302,19 @@ Submit this logical SQL to the MCP `runQuery` tool:
 
 ```sql
 SELECT department_code, department_name, COUNT(*) AS employee_count
-FROM dbpcm_warehouse.employee
+FROM dbpcm_datawarehouse.employee
 WHERE department_name = 'dev'
 GROUP BY department_code, department_name;
 ```
 
-The API rewrites the FROM target to `reporting.mysql_shard_07.employee`. The view
+The API rewrites the FROM target to `dbpcm_datawarehouse.mysql_shard_07.employee`. The view
 adds the client and employee-access restrictions internally. For a direct CLI
 smoke check against the local unauthenticated development coordinator, use:
 
 ```bash
 docker compose -f docker-compose.trino.yml exec trino trino \
   --user 'pc1|10R37|aabusaad' \
-  --execute "SELECT department_code, department_name, COUNT(*) AS employee_count FROM reporting.mysql_shard_07.employee WHERE department_name = 'dev' GROUP BY department_code, department_name"
+  --execute "SELECT department_code, department_name, COUNT(*) AS employee_count FROM dbpcm_datawarehouse.mysql_shard_07.employee WHERE department_name = 'dev' GROUP BY department_code, department_name"
 ```
 
 This CLI command tests the view directly and does not test API JWT verification.
@@ -272,8 +324,7 @@ the result can be empty depending on source data.
 `TRINO_MYSQL_VIEW_CATALOG` applies to **all** tables marked `source: mysql`.
 Create corresponding views before querying those tables. This minimal example
 does not install the full employee query, other MySQL views, or ClickHouse row
-policies, and it does not change discovery: metadata still lists the authored
-YAML tables and columns.
+policies, and it uses live discovery: only deployed, catalogued tables and columns are returned.
 
 ## Verification
 

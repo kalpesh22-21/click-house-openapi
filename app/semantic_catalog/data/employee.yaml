@@ -2,13 +2,13 @@ database: dbpcm_warehouse
 table: employee
 source: mysql
 region: workforce_employee
-description: Current-state employee master table using the new ClickHouse DDL structure with snake_case column names only.
+description: Current-state employee reporting relation with snake_case column names. MySQL-backed Trino views must expose the normalized reporting columns.
 grain:
 - employee_code
-grain_verifiable: true
+grain_verifiable: false
 primary_key:
 - employee_code
-primary_key_note: Tenant-scoped employee key. employee_code must not be used across clients or processing centers by itself.
+primary_key_note: Intended tenant-scoped employee key. employee_code must not be used across clients or processing centers by itself. Joined source records can duplicate employees; verify uniqueness before counting rows as employees.
 temporal:
   dimensions: []
   default_pin: null
@@ -144,7 +144,7 @@ columns:
       in names include Jr., Sr., III, and PhD.
   employee_status:
     type: Nullable(String)
-    description: The employee status code indicating whether the employee is of in any of status below.
+    description: Employee status description, not the raw source status code.
     values:
     - Active
     - Deceased
@@ -153,6 +153,8 @@ columns:
     - Terminated
     - On Leave
     - Not Hired
+    - Prehire
+    - Unknown
   hire_date:
     type: Nullable(DateTime64(6))
     description: This is the date the employee was hired in the company.
@@ -243,14 +245,21 @@ columns:
     - I do not wish to self-identify
     - Male
     - Non-Binary
+    - Not Implemented
   ethnic_background:
     type: Nullable(String)
-    description: This is the ethnic background code reported by the employee
+    description: Raw ethnic background code reported by the employee. Use ethnic_background_description for the display description.
+  ethnic_background_description:
+    type: Nullable(String)
+    description: Display description of the employee's ethnic background. Distinct from the raw ethnic_background code; an unmapped code produces an empty string.
   country_code:
     type: Nullable(String)
     description: The 2-digit ISO country code associated with the employee's country of residence
     values:
     - US
+  primary_country_code:
+    type: Nullable(String)
+    description: Country code of the selected primary address. Distinct from country_code on the employee record; may be NULL when no eligible primary address exists.
   street_address_1:
     type: Nullable(String)
     description: This is the physical street address the employee enters as their home street address.
@@ -431,15 +440,17 @@ columns:
       or a Seasonal employee.
     values:
     - Full Time
-    - None
+    - ''
     - Part Time
     - Seasonal
+    - Temporary
   employment_type:
     type: Nullable(String)
     description: This field indicates whether the employee is a W2 employee or a 1099 employee.
     values:
     - '1099'
     - W2
+    - Not Impl.
   pay_basis:
     type: Nullable(String)
     description: This is type of pay the employee receives, some expected values could be Salary, Hourly, Commission, or By
@@ -451,12 +462,11 @@ columns:
     - Salary
   hourly_salary:
     type: Nullable(Decimal(18, 6))
-    description: The calculated hourly salary of the employee based on their processing schedule, annual salary, and per pay
-      period hours
+    description: Hourly salary value supplied by the employee source record. The reporting view does not independently calculate it from annual salary and scheduled hours.
     unit: USD
   annual_salary:
     type: Nullable(Decimal(18, 6))
-    description: This is the annual salary of the employee. (Estimated for hourly employee). For a MEDIAN of this column,
+    description: Reported or annualized salary. The source fallback can produce zero for non-exempt employees; do not assume it estimates hourly employees' annual earnings. For a MEDIAN of this column,
       ClickHouse quantileExact(0.5) returns the UPPER middle value when the group has an even number of rows, not the average
       of the two middle values; for a true median use (quantileExactLow(0.5)(annual_salary) + quantileExactHigh(0.5)(annual_salary))
       / 2.
@@ -484,18 +494,12 @@ columns:
     unit: USD
   employee_pay_type:
     type: LowCardinality(Nullable(String))
-    description: The type of pay the employee gets. It can be one of these 'Comission Only', 'Salary' and 'Hourly'.
+    description: Employee pay classification. Unmatched source conditions produce the string 'None'.
     values:
     - Commission Only
     - Hourly
     - Salary
-  position_pay_type:
-    type: LowCardinality(Nullable(String))
-    description: The type of pay the this position gets. It can be one of these 'Comission Only', 'Salary' and 'Hourly'.
-    values:
-    - Commission Only
     - None
-    - Salary
   paycode_profile_code:
     type: Nullable(String)
     description: A unique 3 digit alphanumeric code provided by the user that is set when creating a Benefit Eligibility Profile.
@@ -508,9 +512,6 @@ columns:
   pay_frequency:
     type: Nullable(String)
     description: Schedule indicating how often the employee receives compensation payments.
-  payroll_profile_fein:
-    type: Nullable(String)
-    description: Payroll Profile FEIN
   pay_class:
     type: Nullable(String)
     description: A pay class is a set of rules governing how employees earn time and include all rules associated with employee
@@ -697,7 +698,11 @@ ambiguities:
   default: Use the specifically requested allocation type
   clarify_if: The allocation type number is not identified.
 schema_notes:
-- employee_pay_type and position_pay_type are LowCardinality(Nullable(String)).
+- Types are the existing logical ClickHouse-compatible contract, not verified MySQL source types. Trino discovery reports deployed physical column types separately.
+- Trino views map string columns to VARCHAR, decimal columns to DECIMAL(18,6), position_level to INTEGER, and direct_deposit to SMALLINT. Verify source ranges and direct_deposit values of 0 or 1; casts do not enforce these business constraints.
+- DateTime64(6) columns target TIMESTAMP(6) in Trino. Confirm source DATE, DATETIME, or TIMESTAMP types and timezone semantics before casting; a cast does not establish source precision or non-null guarantees.
+- The declared employee grain is intended, not verified for joined MySQL reporting views. Validate child-table uniqueness or current-row selection before COUNT(*) is used as employee count.
+- employee_pay_type is LowCardinality(Nullable(String)).
 - labor_allocation_key_1 through labor_allocation_key_20 join independently to labor_allocation using client_code + proc_center
   + join_key.
 - Date fields with observed 1900-01-01 00:00:00.000000 sentinel values include rehire_date, termination_date, old_termination_date,
@@ -708,9 +713,9 @@ mcp_projection:
   - client_code
   - proc_center
   notes:
-  - client_code and proc_center are enforced by row-level policy and omitted from exposed columns and joins.
+  - client_code and proc_center are enforced by the configured backend row-access mechanism and omitted from exposed columns and joins.
 row_scope:
   implicit_filters:
   - client_code
   - proc_center
-  enforced_by: ClickHouse row policy
+  enforced_by: ClickHouse row policy on the ClickHouse path; secured views or equivalent tenant and employee-access policies on the Trino path. Sending identity alone does not enforce row access.

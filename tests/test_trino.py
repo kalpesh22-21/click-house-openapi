@@ -23,6 +23,7 @@ def trino_settings():
     return Settings(
         _env_file=None,
         trino_enabled=True,
+        trino_mysql_view_catalog="",
         trino_security_ready=True,
         trino_http_scheme="http",
         trino_shard_routes={
@@ -259,11 +260,13 @@ def test_service_flag_routes_query_and_explain(monkeypatch, trino_settings, prin
     ch.assert_not_called()
 
 
-def test_logical_metadata_never_reads_clickhouse(monkeypatch, trino_settings):
+def test_logical_metadata_never_reads_clickhouse(
+    monkeypatch, trino_settings, authored_discovery
+):
     monkeypatch.setattr(
         service, "execute_query", MagicMock(side_effect=AssertionError("CH metadata"))
     )
-    assert service.list_databases(trino_settings) == [{"name": "dbpcm_warehouse"}]
+    assert service.list_databases(trino_settings) == [{"name": "dbpcm_datawarehouse"}]
     assert any(
         t["name"] == "employee"
         for t in service.list_tables("dbpcm_warehouse", trino_settings)
@@ -273,7 +276,9 @@ def test_logical_metadata_never_reads_clickhouse(monkeypatch, trino_settings):
     assert all(c["name"] != "client_code" for c in schema["columns"])
 
 
-def test_sample_uses_authored_columns(monkeypatch, trino_settings, principal):
+def test_sample_uses_authored_columns(
+    monkeypatch, trino_settings, principal, authored_discovery
+):
     trino = MagicMock(return_value=(["employee_code"], [["E1"]]))
     monkeypatch.setattr(trino_client, "execute_query", trino)
     monkeypatch.setattr(
@@ -284,7 +289,9 @@ def test_sample_uses_authored_columns(monkeypatch, trino_settings, principal):
     assert "employee_code" in sql and "`client_code`" not in sql
 
 
-def test_trino_column_scope_is_still_enforced(monkeypatch, trino_settings, principal):
+def test_trino_column_scope_is_still_enforced(
+    monkeypatch, trino_settings, principal, authored_discovery
+):
     from app.errors import ColumnScopeError
     from app.principal import current_scope
 
@@ -304,7 +311,9 @@ def test_trino_column_scope_is_still_enforced(monkeypatch, trino_settings, princ
     trino.assert_not_called()
 
 
-def test_trino_provenance_uses_logical_names(monkeypatch, trino_settings, principal):
+def test_trino_provenance_uses_logical_names(
+    monkeypatch, trino_settings, principal, authored_discovery
+):
     monkeypatch.setattr("app.catalog.get_settings", lambda: trino_settings)
     monkeypatch.setattr(
         trino_client,
@@ -366,3 +375,205 @@ def test_generator_rejects_injection(patch):
     source = {"catalog": "mysql_shard_07", "host": "localhost", **patch}
     with pytest.raises(ValueError):
         render_catalogs({"mysql_shards": [source]})
+
+
+@pytest.fixture
+def authored_discovery(monkeypatch):
+    from app import trino_metadata
+
+    def fake(settings, database=None, table=None):
+        return {
+            key: {
+                **entry,
+                "columns": {
+                    name: {**info, "physical_type": "varchar"}
+                    for name, info in entry["columns"].items()
+                },
+            }
+            for key, entry in trino_metadata.logical_catalog(settings).items()
+            if (
+                database is None
+                or entry["database"] == trino_metadata.canonical_database(database)
+            )
+            and (table is None or entry["table"] == table)
+        }
+
+    monkeypatch.setattr(trino_metadata, "discover", fake)
+
+
+def discovery_connection(monkeypatch, rows):
+    conn, cursor = MagicMock(), MagicMock()
+    conn.cursor.return_value = cursor
+    cursor.fetchone.return_value = [1]
+
+    def execute(sql, parameters=None):
+        cursor.fetchmany.side_effect = (
+            [rows, []] if "information_schema" in sql else [[]]
+        )
+
+    cursor.execute.side_effect = execute
+    connect = MagicMock(return_value=conn)
+    monkeypatch.setattr(trino_client, "_connect", connect)
+    return connect, conn, cursor
+
+
+def test_live_discovery_intersects_and_probes(monkeypatch, trino_settings, principal):
+    from app import trino_metadata
+
+    trino_settings.trino_mysql_view_catalog = "dbpcm_datawarehouse"
+    connect, conn, cursor = discovery_connection(
+        monkeypatch,
+        [
+            ["employee", "employee_code", "varchar"],
+            ["employee", "department_name", "varchar(100)"],
+            ["employee", "secret_extra", "varchar"],
+            ["uncatalogued", "employee_code", "varchar"],
+        ],
+    )
+    result = trino_metadata.discover(trino_settings, "dbpcm_datawarehouse", "employee")
+    assert set(result) == {"dbpcm_warehouse.employee"}
+    assert set(result["dbpcm_warehouse.employee"]["columns"]) == {
+        "employee_code",
+        "department_name",
+    }
+    connect.assert_called_once_with(trino_settings, "pc1|10R37|alice")
+    calls = cursor.execute.call_args_list
+    assert calls[0].args == ("SELECT 1",)
+    assert calls[1].args[1] == ["mysql_shard_07", "employee"]
+    assert '"dbpcm_datawarehouse".information_schema.columns' in calls[1].args[0]
+    assert (
+        '"dbpcm_datawarehouse"."mysql_shard_07"."employee" LIMIT 0' in calls[2].args[0]
+    )
+    cursor.close.assert_called_once()
+    conn.close.assert_called_once()
+
+
+def test_live_discovery_missing_and_partial_views(
+    monkeypatch, trino_settings, principal
+):
+    discovery_connection(monkeypatch, [["employee", "employee_code", "varchar"]])
+    assert service.list_databases(trino_settings) == [{"name": "dbpcm_datawarehouse"}]
+    assert [
+        x["name"] for x in service.list_tables("dbpcm_datawarehouse", trino_settings)
+    ] == ["employee"]
+    schema = service.get_table_schema("dbpcm_datawarehouse", "employee", trino_settings)
+    assert schema["database"] == "dbpcm_datawarehouse"
+    assert [c["name"] for c in schema["columns"]] == ["employee_code"]
+    discovery_connection(monkeypatch, [])
+    assert service.list_databases(trino_settings) == []
+    assert service.list_tables("dbpcm_datawarehouse", trino_settings) == []
+
+
+def test_discovery_resolves_before_network(monkeypatch, trino_settings, principal):
+    connect = MagicMock()
+    monkeypatch.setattr(trino_client, "_connect", connect)
+    trino_settings.trino_shard_routes = {}
+    with pytest.raises(QueryValidationError, match="No MySQL shard"):
+        service.list_databases(trino_settings)
+    connect.assert_not_called()
+
+
+def test_discovery_failure_is_sanitized_and_closed(
+    monkeypatch, trino_settings, principal
+):
+    from app import trino_metadata
+
+    _, conn, cursor = discovery_connection(monkeypatch, [])
+    cursor.execute.side_effect = RuntimeError("secret endpoint")
+    with pytest.raises(ClickHouseUnavailableError) as error:
+        trino_metadata.discover(trino_settings)
+    assert error.value.code == "TRINO_DISCOVERY_UNAVAILABLE"
+    assert "secret" not in str(error.value)
+    cursor.close.assert_called_once()
+    conn.close.assert_called_once()
+
+
+def test_public_alias_routes_with_default_view_catalog(trino_settings, principal):
+    trino_settings.trino_mysql_view_catalog = Settings(
+        _env_file=None
+    ).trino_mysql_view_catalog
+    assert tables(
+        trino_client.rewrite_query(
+            "SELECT dbpcm_datawarehouse.employee.employee_code FROM dbpcm_datawarehouse.employee",
+            trino_settings,
+        )
+    ) == {("dbpcm_datawarehouse", "mysql_shard_07", "employee")}
+
+
+def test_public_alias_preserves_scope_checks(
+    monkeypatch, trino_settings, principal, authored_discovery
+):
+    from app.errors import ColumnScopeError
+    from app.principal import current_scope
+
+    monkeypatch.setattr("app.catalog.get_settings", lambda: trino_settings)
+    execute = MagicMock(return_value=(["employee_code"], [["E1"]]))
+    monkeypatch.setattr(trino_client, "execute_query", execute)
+    token = current_scope.set(frozenset({"dbpcm_warehouse.employee.employee_code"}))
+    try:
+        service.run_query(
+            "SELECT employee_code FROM dbpcm_datawarehouse.employee",
+            settings=trino_settings,
+            include_provenance=True,
+        )
+        execute.reset_mock()
+        with pytest.raises(ColumnScopeError):
+            service.run_query(
+                "SELECT employee_name FROM dbpcm_datawarehouse.employee",
+                settings=trino_settings,
+                include_provenance=True,
+            )
+        execute.assert_not_called()
+    finally:
+        current_scope.reset(token)
+
+
+def test_discovery_is_fresh_for_each_tenant(monkeypatch, trino_settings):
+    from app.trino_metadata import discover
+
+    trino_settings.trino_mysql_view_catalog = "dbpcm_datawarehouse"
+    connect, _, cursor = discovery_connection(
+        monkeypatch, [["employee", "employee_code", "varchar"]]
+    )
+    for pc, shard in [("pc1", "mysql_shard_07"), ("pc2", "mysql_shard_08")]:
+        token = current_principal.set(
+            Principal(
+                "subject",
+                {"proc_center": pc, "clientcode": "10R37", "user_name": "alice"},
+            )
+        )
+        try:
+            discover(trino_settings, "dbpcm_datawarehouse", "employee")
+            assert connect.call_args.args[1] == f"{pc}|10R37|alice"
+            assert cursor.execute.call_args_list[-2].args[1] == [shard, "employee"]
+        finally:
+            current_principal.reset(token)
+    assert connect.call_count == 2
+
+
+def test_public_alias_allowlist_and_explain(
+    monkeypatch, trino_settings, principal, authored_discovery
+):
+    trino_settings.allowed_databases = "dbpcm_datawarehouse"
+    trino_settings.trino_mysql_view_catalog = "dbpcm_datawarehouse"
+    assert tables(
+        trino_client.rewrite_query(
+            "SELECT employee_code FROM dbpcm_datawarehouse.employee", trino_settings
+        )
+    ) == {("dbpcm_datawarehouse", "mysql_shard_07", "employee")}
+    assert service.list_tables("dbpcm_datawarehouse", trino_settings)
+    execute = MagicMock(return_value=(["plan"], [["plan text"]]))
+    monkeypatch.setattr(trino_client, "execute_query", execute)
+    service.explain_query(
+        "SELECT employee_code FROM dbpcm_datawarehouse.employee",
+        settings=trino_settings,
+    )
+    assert "dbpcm_warehouse.employee" in execute.call_args.args[0]
+    assert execute.call_args.args[0].startswith("EXPLAIN")
+
+
+def test_physical_view_cannot_bypass_routing(trino_settings, principal):
+    with pytest.raises(QueryValidationError):
+        trino_client.rewrite_query(
+            "SELECT * FROM dbpcm_datawarehouse.mysql_shard_08.employee", trino_settings
+        )

@@ -104,15 +104,43 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
+# Advertised during MCP initialization and tools/list. Configuration is read at
+# startup; restart the server after changing TRINO_ENABLED.
+_SQL_GUIDANCE = (
+    "Execution backend: Trino (federated MySQL and ClickHouse). "
+    "The API input dialect remains ClickHouse-compatible SQL; the server translates "
+    "supported queries to Trino. This is not an unrestricted native-Trino SQL endpoint. "
+    "Prefer portable SELECT/WITH SQL, COUNT(*), and single-quoted string literals. "
+    "Use logical names such as dbpcm_datawarehouse.employee; the server resolves the "
+    "tenant shard. Do not supply physical catalog.schema.table names. "
+    "ClickHouse-specific functions, aggregate semantics, SETTINGS, and table functions "
+    "are not universally supported. Do not blindly copy ClickHouse-specific catalog "
+    "examples; use explainQuery to check a supported query, and do not retry unchanged "
+    "SQL after TRINO_UNSUPPORTED_SQL. Native Trino view DDL must be deployed separately; "
+    "DDL is blocked by this API. Scratch report sources are unsupported in Trino mode. "
+    if settings.trino_enabled else
+    "Execution backend and SQL dialect: ClickHouse. Use logical database.table names "
+    "returned by discovery and ClickHouse-compatible read-only SQL. "
+)
+_SCHEMA_GUIDANCE = (
+    "getTableSchema reports live Trino types (VARCHAR, TIMESTAMP, DECIMAL, etc.) "
+    "for available catalogued columns. Catalog type definitions and provenance/scope "
+    "keys retain the legacy ClickHouse-compatible contract and dbpcm_warehouse "
+    "namespace; live type names do not change the API input dialect. "
+    if settings.trino_enabled else
+    "getTableSchema reports ClickHouse column types and catalog documentation. "
+)
+
 mcp = FastMCP(
     name="ClickHouse API",
     instructions=(
-        "This MCP server gives you read-only access to ClickHouse databases. "
+        "This MCP server gives you read-only access to reporting databases. "
+        + _SQL_GUIDANCE + _SCHEMA_GUIDANCE +
         "Recommended workflow: "
         "(1) Call listDatabases to discover available databases. "
         "(2) Call listTables to see tables in a database. "
         "(3) Call getTableSchema BEFORE writing any SELECT query — this gives you "
-        "exact column names, ClickHouse types, and comments. "
+        "exact column names, types, and comments. "
         "(4) Optionally call sampleRows to inspect real data values. "
         "(5) Call explainQuery to validate your SQL before running it. "
         "(6) Call runQuery to execute the validated query. "
@@ -248,7 +276,10 @@ def _clean_query_result(result: dict[str, Any]) -> dict[str, Any]:
 @mcp.tool(
     name="listDatabases",
     description=(
-        "Return the list of ClickHouse databases this server is configured to expose. "
+        ("Resolve the authenticated tenant shard, probe Trino, and return logical databases "
+         "with available catalogued tables. The reporting database is dbpcm_datawarehouse. "
+         if settings.trino_enabled else
+         "Return the list of ClickHouse databases this server is configured to expose. ") +
         "Results respect the ALLOWED_DATABASES server allowlist — databases outside that "
         "list are never returned. "
         "Call this first to discover which databases are available before listing tables."
@@ -265,7 +296,11 @@ def list_databases() -> list[dict[str, Any]]:
 @mcp.tool(
     name="listTables",
     description=(
-        "Return all tables (and their storage engines) inside the specified database. "
+        ("Return available catalogued tables in the specified logical database after "
+         "resolving the tenant shard and checking Trino metadata. Unavailable columns "
+         "are omitted by getTableSchema; connection failures return an error. "
+         if settings.trino_enabled else
+         "Return all tables (and their storage engines) inside the specified database. ") +
         "Call listDatabases first if you are unsure which databases are available. "
         "The 'database' parameter must be a database name returned by listDatabases."
     ),
@@ -287,8 +322,8 @@ def list_tables(
         "Catalog (description, synonyms, units, known values, grain, primary key, join keys, "
         "measures, rules, and disambiguation guidance) when the table is catalogued. "
         "ALWAYS call this before writing a SELECT query against an unfamiliar table. "
-        "Knowing the schema tells you exact column names, types (e.g. UInt64, Nullable(String), "
-        "DateTime64(3)), and descriptive comments — preventing type-mismatch errors and helping "
+        "Knowing the schema tells you exact column names, types, "
+        "and descriptive comments — preventing type-mismatch errors and helping "
         "you write correct WHERE clauses and aggregations. "
         "Columns and catalog entries outside your permitted access scope are omitted. "
         "Use the optional 'columns' argument to fetch the FULL documentation for specific "
@@ -297,7 +332,8 @@ def list_tables(
         "sections (description, grain, rules, ambiguities, join keys, measures, temporal, "
         "primary key) are always returned in full — 'columns' narrows the column list only. "
         "Omit 'columns' (or pass an empty list) to get every column. Requested names that are "
-        "not available to you are omitted and echoed back under 'columns_not_found'."
+        "not available to you are omitted and echoed back under 'columns_not_found'. "
+        + _SCHEMA_GUIDANCE
     ),
 )
 def get_table_schema(
@@ -360,7 +396,7 @@ def sample_rows(
 @mcp.tool(
     name="runQuery",
     description=(
-        "Execute a read-only SQL query (SELECT or WITH) against ClickHouse "
+        "Execute a read-only SQL query (SELECT or WITH) against the configured backend "
         "and return results in a compact {columns, rows, row_count, truncated} format. "
         "Trailing null characters are removed from text values in returned rows. "
         "The server enforces read-only mode, execution time limits, and row caps. "
@@ -372,7 +408,8 @@ def sample_rows(
         "explainQuery can validate a well-formed, in-scope query's plan before you run it, "
         "but it enforces the same scope/session/scratch guardrails — it will not bypass a "
         "validation, column-scope, or scratch-session rejection. "
-        "INSERT, UPDATE, DELETE, DDL, and external table functions are blocked."
+        "INSERT, UPDATE, DELETE, DDL, and external table functions are blocked. "
+        + _SQL_GUIDANCE
     ),
 )
 def run_query(
@@ -410,14 +447,15 @@ def run_query(
         "Run EXPLAIN on a SQL statement and return the query execution plan without executing it. "
         "Use this to validate SQL syntax and inspect the query plan BEFORE calling runQuery, "
         "especially for complex queries. "
-        "If EXPLAIN succeeds the query is syntactically valid and safe to run. "
+        "EXPLAIN checks the plan; success does not guarantee runtime success or performance. "
         "explainQuery enforces the SAME scope, session, and scratch-isolation guardrails as "
         "runQuery — it is NOT an escape hatch: a query that fails those gates (column-scope, "
         "scratch-session, or provenance-parse) is rejected here too, so do not retry a "
         "gate-rejected query through explainQuery. "
         "EXPLAIN is fast and cheap — it does not read actual data rows. "
         "THE WHOLE PLAN ARRIVES AS ONE ROW: rows[0][0] is the plan tree as indented, "
-        "newline-separated text, so row_count is 1 however many lines the plan has."
+        "newline-separated text, so row_count is 1 however many lines the plan has. "
+        + _SQL_GUIDANCE
     ),
 )
 def explain_query(

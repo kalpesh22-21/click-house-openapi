@@ -77,6 +77,10 @@ _LIMIT_TAIL_RE = re.compile(r"\bLIMIT\s+\d+(\s+OFFSET\s+\d+)?\s*$", re.IGNORECAS
 def _check_database_allowed(database: str, settings: Settings) -> None:
     """Raise DatabaseNotAllowedError if *database* is not in the allowlist."""
     allowed = settings.allowed_databases_list()
+    if settings.trino_enabled:
+        from app.trino_metadata import canonical_database
+        database = canonical_database(database)
+        allowed = None if allowed is None else [canonical_database(db) for db in allowed]
     if allowed is not None and database not in allowed:
         raise DatabaseNotAllowedError(
             message=(
@@ -382,8 +386,8 @@ def list_databases(settings: Settings | None = None) -> list[dict[str, str]]:
         settings = get_settings()
 
     if settings.trino_enabled:
-        from app.trino_metadata import logical_catalog
-        rows = [(name,) for name in sorted({e["database"] for e in logical_catalog(settings).values()})]
+        from app.trino_metadata import discover, public_database
+        return [{"name": name} for name in sorted({public_database(e["database"]) for e in discover(settings).values()})]
     else:
         _, rows = _execute("SELECT name FROM system.databases ORDER BY name", settings)
 
@@ -429,11 +433,10 @@ def list_tables(
         "ORDER BY name"
     )
     if settings.trino_enabled:
-        from app.trino_metadata import logical_catalog
-        rows = [
-            [database, entry["table"], "Trino"]
-            for _, entry in sorted(logical_catalog(settings).items())
-            if entry["database"] == database
+        from app.trino_metadata import discover, public_database
+        return [
+            {"database": public_database(entry["database"]), "name": entry["table"], "engine": "Trino"}
+            for _, entry in sorted(discover(settings, database).items())
         ]
     else:
         _, rows = _execute(sql, settings, parameters={"db": database})
@@ -588,6 +591,10 @@ def get_table_schema(
     if settings is None:
         settings = get_settings()
 
+    if settings.trino_enabled:
+        from app.trino_metadata import canonical_database
+        database = canonical_database(database)
+
     # Validate the caller-supplied narrowing list BEFORE any I/O: a malformed
     # argument is the caller's bug, not a reason to hit ClickHouse.
     columns_filter = _validate_columns_filter(columns)
@@ -655,6 +662,9 @@ def get_table_schema(
         columns_filter=columns_filter,
     )
     response["catalog_sha"] = get_catalog_sha()
+    if settings.trino_enabled:
+        from app.trino_metadata import public_database
+        response["database"] = public_database(database)
     return response
 
 
@@ -720,6 +730,10 @@ def sample_rows(
     """
     if settings is None:
         settings = get_settings()
+
+    if settings.trino_enabled:
+        from app.trino_metadata import canonical_database
+        database = canonical_database(database)
 
     _check_database_allowed(database, settings)
     _check_table_allowed(database, table, settings)
@@ -1102,6 +1116,10 @@ def run_query(
             code=exc.detail.get("code", "QUERY_VALIDATION_ERROR"),
         ) from exc
 
+    if settings.trino_enabled:
+        from app.trino_client import normalize_logical_sql
+        clean_sql = normalize_logical_sql(clean_sql)
+
     uses = _enforce_query_guardrails(
         clean_sql, settings, caller="run_query", include_provenance=include_provenance
     )
@@ -1184,6 +1202,10 @@ def explain_query(
     # session's scratch table (or an out-of-scope column) and have ClickHouse
     # confirm its existence/structure while building the plan — the exact leak
     # this shared gate closes.
+    if settings.trino_enabled:
+        from app.trino_client import normalize_logical_sql
+        inner_sql = normalize_logical_sql(inner_sql)
+
     uses = _enforce_query_guardrails(
         inner_sql, settings, caller="explain_query", include_provenance=include_provenance
     )
