@@ -769,6 +769,9 @@ async def _clickhouse_ok() -> bool:
     """
     from app.clickhouse_client import ping
 
+    if get_settings().trino_enabled:
+        from app.trino_client import ping
+
     ok = False
     with anyio.move_on_after(_HEALTH_PING_TIMEOUT_S):
         # ping() takes NO arguments so it reuses the process-wide cached singleton
@@ -795,11 +798,11 @@ async def health_ready(request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "status": "ok" if ch_ok else "unavailable",
-            "clickhouse": "ok" if ch_ok else "error",
+            ("trino" if get_settings().trino_enabled else "clickhouse"): "ok" if ch_ok else "error",
             "transport": "http",
             # Advertise the scratch-write side-channel contract version so a
             # runtime can assert the capability at startup (contract §Q6).
-            "scratch_api": "v1",
+            "scratch_api": "unsupported" if get_settings().trino_enabled else "v1",
         },
         status_code=200 if ch_ok else 503,
     )
@@ -820,11 +823,11 @@ async def health_check(request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "status": "ok",
-            "clickhouse": "ok" if ch_ok else "error",
+            ("trino" if get_settings().trino_enabled else "clickhouse"): "ok" if ch_ok else "error",
             "transport": "http",
             # Advertise the scratch-write side-channel contract version so a
             # runtime can assert the capability at startup (contract §Q6).
-            "scratch_api": "v1",
+            "scratch_api": "unsupported" if get_settings().trino_enabled else "v1",
         }
     )
 

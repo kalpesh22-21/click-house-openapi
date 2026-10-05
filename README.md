@@ -2,6 +2,12 @@
 
 A read-only REST API **and MCP server** that sits in front of ClickHouse and is designed to be consumed by a **ChatGPT Custom GPT Action** or any **MCP-capable LLM client** (Claude Desktop, Claude Code, etc.). The LLM calls this API to discover schema and execute SQL without ever touching ClickHouse directly.
 
+## Experimental Trino backend
+
+An opt-in Trino execution layer, MySQL shard routing stub, and standalone Docker
+Compose setup are available. See [Trino setup and migration scope](docs/trino.md).
+The existing ClickHouse backend remains the default.
+
 ## OpenAI Agent Examples
 
 Runnable examples showing how to drive the MCP server from an OpenAI agent

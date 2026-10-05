@@ -1,5 +1,6 @@
 database: dbpcm_warehouse
 table: department
+source: mysql
 region: workforce_organization
 description: Tenant-scoped department reference using snake_case column names only.
 grain:

@@ -21,6 +21,8 @@ env
 # Environment / secrets — never bake these into the image
 .env
 *.env
+.env.trino
+docker/trino/catalog/
 
 # Test artefacts
 .pytest_cache

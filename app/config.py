@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Annotated, Dict, List, Optional
+from typing import Annotated, Dict, List, Literal, Optional
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -71,6 +71,31 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    # --- Execution backend ---
+    # Experimental federation. Logical SQL/column permissions remain unchanged;
+    # physical names are resolved only after the service guardrails run.
+    trino_enabled: bool = False
+    trino_host: str = "localhost"
+    trino_port: int = Field(8080, ge=1, le=65535)
+    trino_http_scheme: Literal["http", "https"] = "https"
+    trino_user: str = "mcp_backend"
+    trino_password: str = Field("", repr=False)
+    trino_request_timeout: float = Field(30, gt=0)
+    trino_mysql_schema: str = "dbonline"
+    trino_clickhouse_catalog: str = "clickhouse"
+    # Optional view-hosting catalog: reporting.mysql_shard_07.employee.
+    # Empty means connector catalogs: mysql_shard_07.dbonline.employee.
+    trino_mysql_view_catalog: str = ""
+    trino_client_code_claim: str = "clientcode"
+    trino_proc_center_claim: str = "proc_center"
+    trino_username_claim: str = "user_name"
+    # Placeholder implementation of (processing center, client) -> shard.
+    # No default shard: unknown tenants must never land on an arbitrary source.
+    trino_shard_routes: dict[str, dict[str, str]] = Field(default_factory=dict)
+    # Switching drivers cannot preserve ClickHouse getSetting-based RLS by
+    # itself. Enable only after deploying equivalent secured views/policies.
+    trino_security_ready: bool = False
 
     # --- ClickHouse connection ---
     # host/user/password default empty so a Vault-backed deploy can construct
@@ -712,7 +737,7 @@ class Settings(BaseSettings):
         still fails fast and loud.  CLICKHOUSE_PASSWORD may legitimately be empty
         (passwordless server), so it is never part of this gate.
         """
-        if self.vault_enabled:
+        if self.vault_enabled or self.trino_enabled:
             return self
         missing = [
             name.upper()

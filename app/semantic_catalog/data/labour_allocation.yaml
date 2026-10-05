@@ -1,5 +1,6 @@
 database: dbpcm_warehouse
 table: labor_allocation
+source: mysql
 region: workforce_labor_allocation
 description: Tenant-scoped labor allocation reference using snake_case column names only.
 grain:

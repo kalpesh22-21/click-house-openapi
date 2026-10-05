@@ -1,5 +1,6 @@
 database: dbpcm_warehouse
 table: employee
+source: mysql
 region: workforce_employee
 description: Current-state employee master table using the new ClickHouse DDL structure with snake_case column names only.
 grain:

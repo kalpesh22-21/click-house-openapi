@@ -12,6 +12,8 @@ dist/
 # Environment / secrets
 .env
 .env.local
+.env.trino
+docker/trino/catalog/*.properties
 *.local
 
 # Test / coverage

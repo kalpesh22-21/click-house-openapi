@@ -179,6 +179,10 @@ def _load_raw_table_entries(schema_dir: Path | str) -> dict[str, dict[str, Any]]
         qualified_key = f"{database}.{table_name}"
 
         entry = dict(raw)
+        if entry.get("source", "clickhouse") not in ("clickhouse", "mysql"):
+            raise CatalogValidationError(
+                f"{qualified_key}: source must be 'clickhouse' or 'mysql'."
+            )
         entry["database"] = database
         result[qualified_key] = entry
 

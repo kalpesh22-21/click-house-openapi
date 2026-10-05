@@ -1,5 +1,6 @@
 database: dbpcm_warehouse
 table: candidate_education
+source: mysql
 description: Candidate-provided education history linked to an ATS application. Not verified current employee education and not directly linked to employee_code or candidate_id.
 
 grain: [ education_id ]

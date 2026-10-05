@@ -1,5 +1,6 @@
 database: dbpcm_warehouse
 table: punch_pair
+source: clickhouse
 region: workforce_time_attendance
 description: >
   Employee matched In/Out punch pair records. Each row captures one paired clock-in and clock-out

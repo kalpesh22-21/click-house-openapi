@@ -1,5 +1,6 @@
 database: dbpcm_warehouse
 table: candidate_employment_history
+source: mysql
 description: Candidate-provided prior employment history linked to an ATS application. Not verified internal employment history and not directly linked to employee_code or candidate_id.
 
 grain: [ employment_id ]

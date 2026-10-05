@@ -84,3 +84,4 @@ class HealthResponse(BaseModel):
 
     status: str = Field("ok", description="Always 'ok' when the service is healthy")
     clickhouse: str = Field(..., description="'ok' if ClickHouse is reachable, else 'error'")
+    trino: str | None = Field(None, description="Trino reachability when enabled")

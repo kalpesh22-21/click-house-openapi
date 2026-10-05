@@ -1,5 +1,6 @@
 database: dbpcm_warehouse
 table: total_earning
+source: clickhouse
 region: workforce_time_attendance
 description: >
   Summarized daily earning entries per employee by earning code. Aggregates timecard outcomes

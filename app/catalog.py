@@ -97,6 +97,11 @@ def get_catalog_schema() -> dict[str, dict[str, str]]:
     """
     global _cached_catalog, _cache_timestamp
 
+    settings = get_settings()
+    if settings.trino_enabled:
+        from app.trino_metadata import catalog_schema
+        return catalog_schema(settings)
+
     if _is_cache_fresh():
         return _cached_catalog  # type: ignore[return-value]
 

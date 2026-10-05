@@ -1,5 +1,6 @@
 database: dbpcm_warehouse
 table: payroll
+source: clickhouse
 region: workforce_payroll
 description: Payroll register line-item table. Contains paycheck components such as earnings, deductions, taxes, benefits, employer taxes, and net-pay distributions. Not one row per paycheck.
 grain:

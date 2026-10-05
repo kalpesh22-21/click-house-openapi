@@ -1,5 +1,6 @@
 database: dbpcm_warehouse
 table: applicant_tracking_requisition
+source: mysql
 description: Applicant Tracking requisition table. One row per job requisition; use for job opening metadata, requisition status, posting windows, open positions, hires, recruiter, and hiring-manager context.
 
 grain: [ requisition_id ]

@@ -11,6 +11,8 @@ openpyxl==3.1.5
 defusedxml==0.7.1
 uvicorn[standard]==0.32.1
 clickhouse-connect>=1.7.2,<2
+# Optional execution backend selected with TRINO_ENABLED.
+trino>=0.336,<0.337
 pydantic-settings==2.7.1
 pydantic==2.11.7
 python-dotenv==1.0.1

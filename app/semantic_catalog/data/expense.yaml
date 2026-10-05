@@ -1,5 +1,6 @@
 database: dbpcm_warehouse
 table: expense
+source: mysql
 region: expense_management
 description: Expense Management line-item table using the new ClickHouse DDL structure with snake_case column names only.
   Contains individual employee expense entries submitted through the Expense Management module, including reimbursable expenses,

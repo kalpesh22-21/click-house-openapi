@@ -1,5 +1,6 @@
 database: dbpcm_warehouse
 table: accrual_events
+source: mysql
 description: Employee accrual-event log for time-off requests and related accrual activity. Event-level records, not an accrual-balance table.
 
 grain: []

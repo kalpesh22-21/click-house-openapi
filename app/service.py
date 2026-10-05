@@ -191,6 +191,9 @@ def _execute(
     HTTPException(502) for connectivity errors.  We re-raise those as
     transport-agnostic domain errors so the MCP layer never sees HTTPException.
     """
+    if settings.trino_enabled:
+        from app.trino_client import execute_query as execute_trino_query
+        return execute_trino_query(sql, settings, parameters)
     try:
         return execute_query(sql, settings, parameters)
     except HTTPException as exc:
@@ -378,7 +381,11 @@ def list_databases(settings: Settings | None = None) -> list[dict[str, str]]:
     if settings is None:
         settings = get_settings()
 
-    _, rows = _execute("SELECT name FROM system.databases ORDER BY name", settings)
+    if settings.trino_enabled:
+        from app.trino_metadata import logical_catalog
+        rows = [(name,) for name in sorted({e["database"] for e in logical_catalog(settings).values()})]
+    else:
+        _, rows = _execute("SELECT name FROM system.databases ORDER BY name", settings)
 
     allowed = settings.allowed_databases_list()
     return [
@@ -421,7 +428,15 @@ def list_tables(
         "WHERE database = %(db)s "
         "ORDER BY name"
     )
-    _, rows = _execute(sql, settings, parameters={"db": database})
+    if settings.trino_enabled:
+        from app.trino_metadata import logical_catalog
+        rows = [
+            [database, entry["table"], "Trino"]
+            for _, entry in sorted(logical_catalog(settings).items())
+            if entry["database"] == database
+        ]
+    else:
+        _, rows = _execute(sql, settings, parameters={"db": database})
 
     tables = [
         {"database": row[0], "name": row[1], "engine": row[2]}
@@ -603,7 +618,11 @@ def get_table_schema(
         "WHERE database = %(db)s AND table = %(tbl)s "
         "ORDER BY position"
     )
-    _, rows = _execute(sql, settings, parameters={"db": database, "tbl": table})
+    if settings.trino_enabled:
+        from app.trino_metadata import column_rows
+        rows = column_rows(database, table, settings)
+    else:
+        _, rows = _execute(sql, settings, parameters={"db": database, "tbl": table})
 
     if not rows:
         raise TableNotFoundError(
@@ -732,9 +751,13 @@ def sample_rows(
             "WHERE database = %(db)s AND table = %(tbl)s "
             "ORDER BY position"
         )
-        _, col_rows = _execute(
-            intro_sql, settings, parameters={"db": database, "tbl": table}
-        )
+        if settings.trino_enabled:
+            from app.trino_metadata import column_rows
+            col_rows = [[row[0]] for row in column_rows(database, table, settings)]
+        else:
+            _, col_rows = _execute(
+                intro_sql, settings, parameters={"db": database, "tbl": table}
+            )
         if not col_rows:
             raise TableNotFoundError(
                 message=(
@@ -827,7 +850,8 @@ def sample_rows(
 
     # Refresh the caller's employee row-policy set if stale/cold (no-op when the
     # feature is disabled or there is no principal). Fail-closed-loud on a cold JTI.
-    ensure_employee_access_fresh(settings)
+    if not settings.trino_enabled:
+        ensure_employee_access_fresh(settings)
 
     columns, rows = _execute(sql, settings)
 
@@ -1094,7 +1118,8 @@ def run_query(
 
     # Refresh the caller's employee row-policy set if stale/cold (no-op when the
     # feature is disabled or there is no principal). Fail-closed-loud on a cold JTI.
-    ensure_employee_access_fresh(settings)
+    if not settings.trino_enabled:
+        ensure_employee_access_fresh(settings)
 
     columns, rows = _execute(clean_sql, settings)
 

@@ -96,13 +96,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: RUF029
         logger.critical("Semantic Catalog RLS validation failed: %s", exc)
         sys.exit(1)
 
-    logger.info("Initialising ClickHouse client...")
-    try:
-        get_client()
-        logger.info("ClickHouse client initialised successfully.")
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to initialise ClickHouse client: %s", exc)
-        # Don't crash — the health probe will report degraded status.
+    if settings.trino_enabled:
+        logger.info("Experimental Trino backend selected; metadata comes from the semantic catalog.")
+    else:
+        logger.info("Initialising ClickHouse client...")
+        try:
+            get_client()
+            logger.info("ClickHouse client initialised successfully.")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to initialise ClickHouse client: %s", exc)
+            # Don't crash — the health probe will report degraded status.
 
     yield
 
