@@ -183,13 +183,6 @@ helm install clickhouse-api ./helm/clickhouse-api \
 
 ## Environment Variables
 
-`DATA_AS_OF_ENABLED` defaults to `true`. Set it to `false` and restart the MCP
-service to skip the refresh-status query and omit `data_as_of` entirely. Missing
-refresh-status tables also omit the key without failing the data query. The agent
-runtime has an independent flag with the same name to hide freshness metadata
-and UI labels, including previously saved timestamps.
-
-
 Variables marked **Secret** are managed in the Kubernetes Secret (via `secrets.*` in values.yaml).
 Variables marked **ConfigMap** are managed in the Kubernetes ConfigMap (via `config.*` in values.yaml).
 
