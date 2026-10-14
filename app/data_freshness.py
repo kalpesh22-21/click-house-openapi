@@ -17,6 +17,8 @@ def data_as_of(sql, settings):
     This optional lookup must never turn a successful data query into an error.
     The result builder omits the wire key whenever this returns None.
     """
+    if not getattr(settings, "data_as_of_enabled", True):
+        return None
     principal = get_current_principal()
     if principal is None or getattr(settings, "trino_enabled", False):
         return None

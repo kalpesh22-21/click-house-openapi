@@ -72,6 +72,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    data_as_of_enabled: bool = Field(
+        True,
+        description="Enable optional ingestion freshness metadata. Set DATA_AS_OF_ENABLED=false to disable.",
+    )
+
     # --- Execution backend ---
     # Experimental federation. Logical SQL/column permissions remain unchanged;
     # physical names are resolved only after the service guardrails run.

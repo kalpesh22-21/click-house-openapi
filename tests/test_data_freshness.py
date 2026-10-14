@@ -120,3 +120,39 @@ def test_missing_status_table_preserves_result_and_omits_key(monkeypatch, error)
     assert "data_as_of" not in result
     assert result == {**raw, "provenance": {"version": 1, "columns": []}}
     execute.assert_called_once()
+
+
+def test_disabled_flag_skips_lookup_and_omits_key(monkeypatch):
+    from app import service
+
+    execute = Mock()
+    monkeypatch.setattr(data_freshness, "execute_query", execute)
+    monkeypatch.setattr(service, "get_semantic_catalog", lambda: {})
+    settings = SimpleNamespace(data_as_of_enabled=False)
+    token = current_principal.set(
+        Principal("test", {"proc_center": "PC01", "clientcode": "CLIENT_A"})
+    )
+    try:
+        result = service._with_provenance(
+            {"columns": ["n"], "rows": [[1]]},
+            frozenset(),
+            sql="SELECT count() FROM employee",
+            settings=settings,
+        )
+    finally:
+        current_principal.reset(token)
+    assert "data_as_of" not in result
+    assert result["rows"] == [[1]]
+    execute.assert_not_called()
+
+
+def test_disabled_environment_flag(monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.setenv("DATA_AS_OF_ENABLED", "false")
+    assert (
+        Settings(
+            _env_file=None, clickhouse_host="localhost", clickhouse_user="test"
+        ).data_as_of_enabled
+        is False
+    )
