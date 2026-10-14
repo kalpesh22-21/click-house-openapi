@@ -77,6 +77,13 @@ from typing import Any
 import sqlglot
 import sqlglot.expressions as sqlglot_exp
 
+from app.semantic_catalog.loader import (
+    BACKEND_SCOPED_VALUE_FIELDS,
+    resolve_rules_for_backend,
+    scoped_field_for_backend,
+    scoped_notes_for_backend,
+)
+
 # ---------------------------------------------------------------------------
 # Identifier extraction helpers
 # ---------------------------------------------------------------------------
@@ -229,6 +236,8 @@ _COLUMN_OVERLAY_FIELDS = (
 def _merge_columns(
     introspected_columns: list[dict[str, Any]],
     catalog_columns: dict[str, Any],
+    *,
+    trino_enabled: bool,
 ) -> list[dict[str, Any]]:
     """Merge introspection {name, type, comment} with the catalog's per-column overlay.
 
@@ -237,6 +246,15 @@ def _merge_columns(
     to None/False when the column has no catalog entry (design §1.2 note: a
     column present in introspection but absent from the catalog's `columns:`
     block still returns with introspection fields only + nulled overlay fields).
+
+    Backend-scoped values: overlay fields listed in the loader's
+    ``BACKEND_SCOPED_VALUE_FIELDS`` (today: only ``values``) are resolved
+    through ``scoped_field_for_backend`` at copy time — the active backend's
+    ``<backend>_values`` sibling-key override wins over the plain ClickHouse-
+    default ``values``; the mechanism keys themselves are never copied into the
+    merged entry (only whitelisted overlay fields are ever emitted), so an
+    override never leaks its key spelling. ``observed_values`` stays a plain
+    pass-through on every backend.
     """
     merged: list[dict[str, Any]] = []
     for col in introspected_columns:
@@ -249,7 +267,12 @@ def _merge_columns(
         }
         if isinstance(overlay, dict):
             for field in _COLUMN_OVERLAY_FIELDS:
-                entry[field] = overlay.get(field)
+                if field in BACKEND_SCOPED_VALUE_FIELDS:
+                    entry[field] = scoped_field_for_backend(
+                        overlay, field, trino_enabled=trino_enabled
+                    )
+                else:
+                    entry[field] = overlay.get(field)
             entry["client_defined"] = bool(overlay.get("client_defined", False))
             entry["sensitive"] = bool(overlay.get("sensitive", False))
         else:
@@ -622,6 +645,7 @@ def build_table_schema_response(
     scope: frozenset[str] | None,
     introspected_schema: dict[str, dict[str, str]] | None = None,
     columns_filter: list[str] | None = None,
+    trino_enabled: bool = False,
 ) -> dict[str, Any]:
     """Build the merged (+ scope-filtered) getTableSchema response (design §1.2).
 
@@ -689,6 +713,31 @@ def build_table_schema_response(
 
     Does NOT set `catalog_sha` — the caller (app/service.py) attaches that from
     `app.semantic_catalog.loader.get_catalog_sha()`.
+
+    `trino_enabled` (backend-scoped catalog keys): the running API's active
+    backend (app/service.py passes ``settings.trino_enabled``). Three
+    resolutions follow from it, all decoder-only at this surface:
+
+      * scoped NOTES — when the table declares ``trino_notes`` /
+        ``clickhouse_notes`` (see app/semantic_catalog/loader.py), a
+        synthesized top-level ``notes`` key carries the ACTIVE backend's
+        scoped notes; the key is OMITTED ENTIRELY when there is no
+        active-backend note, so a table without scoped notes — or a
+        deployment on the other backend — produces a response byte-identical
+        to before this mechanism existed. The scoped keys themselves never
+        appear in the response.
+      * scoped VALUES — per-column ``values`` (the only field in the
+        loader's ``BACKEND_SCOPED_VALUE_FIELDS``) is resolved from a
+        ``trino_values`` / ``clickhouse_values`` sibling-key override when
+        one applies, else the plain ClickHouse-default ``values``. Only the
+        resolved value is ever emitted under ``values``; mechanism keys are
+        never serialized (``_merge_columns`` copies whitelisted fields only).
+      * rule BACKENDS — a ``rules[]`` entry declaring
+        ``backends: [clickhouse|trino]`` applies only to the named
+        backend(s); non-matching rules are excluded before any scope
+        filtering (on every mode) and the ``backends`` key is stripped from
+        every emitted rule. Absent ``backends`` keeps the rule on both
+        backends — a fully unscoped table is byte-identical across flavors.
     """
     qualified_key = f"{database}.{table}"
     entry = catalog.get(qualified_key)
@@ -700,7 +749,9 @@ def build_table_schema_response(
     # introspected columns, not the catalog's documentation subset.
     own_column_names = {c["name"] for c in introspected_columns}
 
-    merged_columns = _merge_columns(introspected_columns, catalog_columns)
+    merged_columns = _merge_columns(
+        introspected_columns, catalog_columns, trino_enabled=trino_enabled
+    )
 
     description = entry.get("description") if catalogued else None
     grain = entry.get("grain") if catalogued else None
@@ -710,6 +761,14 @@ def build_table_schema_response(
     measures_raw = entry.get("measures") if catalogued else None
     rules = entry.get("rules") if catalogued else None
     ambiguities = entry.get("ambiguities") if catalogued else None
+
+    # Rule backend membership (`backends: [clickhouse|trino]`): exclude rules
+    # that do not apply to the ACTIVE backend and strip the mechanism key from
+    # those that remain. Runs HERE — where rules enter the build — BEFORE and
+    # INDEPENDENT of `_filter_rules` scope enforcement, on every mode
+    # (enforcement, stdio scope=None, and allow-all alike). Identity pass-
+    # through when no rule is scoped (see loader.resolve_rules_for_backend).
+    rules = resolve_rules_for_backend(rules, trino_enabled=trino_enabled)
 
     # measures is authored as a {name: {column, agg, defined_over}} mapping in the
     # YAML; the response shape (design §1.2) is a list with `name` folded in.
@@ -825,6 +884,12 @@ def build_table_schema_response(
         "rules": rules,
         "ambiguities": ambiguities,
     }
+    # Backend-scoped catalog notes: surface ONLY the active backend's notes
+    # (shared `schema_notes` stay on their existing surfaces; nothing else
+    # changes — no key at all when no active-backend note exists).
+    notes = scoped_notes_for_backend(entry, trino_enabled=trino_enabled) if catalogued else []
+    if notes:
+        response["notes"] = notes
     if columns_not_found is not None:
         response["columns_not_found"] = columns_not_found
     return response

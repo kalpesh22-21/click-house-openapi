@@ -2,7 +2,7 @@
 
 Exercises the authoritative front-door path end-to-end against a REAL l2
 ClickHouse: multipart file + mapping → parse → rename → scratch_ingest.materialize
-→ a session-scoped ``scratch.s_<sid>_bp_<uuid>`` table with the mapping-renamed
+→ a session-scoped ``dbpcm_scratch.s_<sid>_bp_<uuid>`` table with the mapping-renamed
 canonical join keys.  Mirrors the gating of
 tests/integration/test_scratch_write_integration.py (RUN_INTEGRATION=1 + a live
 ClickHouse reachable on :8123); a plain ``pytest tests/`` run skips it.
@@ -66,7 +66,7 @@ def scratch_settings():
         oidc_issuer="https://idp.test/",
         oidc_audience="clickhouse-api",
         public_base_url="https://test.example.com",
-        scratch_database="scratch",
+        scratch_database="dbpcm_scratch",
         scratch_ttl_seconds=3600,
         scratch_max_rows=10_000,
     )
@@ -112,15 +112,15 @@ class TestUploadMaterializeLive:
                 r[0]
                 for r in admin.query(
                     "SELECT name FROM system.columns "
-                    "WHERE database='scratch' AND table={t:String}",
+                    "WHERE database='dbpcm_scratch' AND table={t:String}",
                     parameters={"t": bare},
                 ).result_rows
             }
             assert {"employee_code", "department_code", "note"} <= names
             data = admin.query(
-                f"SELECT employee_code, department_code, note FROM scratch.`{bare}` "
+                f"SELECT employee_code, department_code, note FROM dbpcm_scratch.`{bare}` "
                 "ORDER BY employee_code"
             ).result_rows
             assert data == [("E1", "D1", "hi"), ("E2", "D2", "yo")]
         finally:
-            admin.command(f"DROP TABLE IF EXISTS scratch.`{bare}`")
+            admin.command(f"DROP TABLE IF EXISTS dbpcm_scratch.`{bare}`")

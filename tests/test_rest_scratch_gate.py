@@ -6,7 +6,7 @@ On the REST transport (the ChatGPT GPT Action surface) ``current_scope`` is None
 (auth.py binds neither scope nor session). The legacy enforcement rode inside
 ``if scope is not None:`` in ``_enforce_query_guardrails`` and the ``sample_rows``
 inline block, so scratch enforcement was SKIPPED on REST — a REST caller could
-``SELECT * FROM scratch.s_<victim>_bp_...`` and read another session's scratch
+``SELECT * FROM dbpcm_scratch.s_<victim>_bp_...`` and read another session's scratch
 table (H3).
 
 The fix (ADR-0002) re-triggers provenance extraction whenever the query
@@ -153,74 +153,74 @@ def _gate_off_settings() -> Settings:
 
 class TestReferencesScratchDbPreCheck:
     def test_matches_bare_scratch_ref(self):
-        assert _references_scratch_db("SELECT * FROM scratch.t", "scratch") is True
+        assert _references_scratch_db("SELECT * FROM dbpcm_scratch.t", "dbpcm_scratch") is True
 
     def test_matches_backtick_quoted_ref(self):
-        assert _references_scratch_db("SELECT x FROM `scratch`.`t`", "scratch") is True
+        assert _references_scratch_db("SELECT x FROM `dbpcm_scratch`.`t`", "dbpcm_scratch") is True
 
     def test_matches_case_insensitively(self):
-        assert _references_scratch_db("SELECT x FROM SCRATCH.T", "scratch") is True
+        assert _references_scratch_db("SELECT x FROM DBPCM_SCRATCH.T", "dbpcm_scratch") is True
 
     def test_matches_inside_join(self):
-        sql = "SELECT a.x FROM scratch.x AS a JOIN analytics.employees AS e ON a.id = e.employee_id"
-        assert _references_scratch_db(sql, "scratch") is True
+        sql = "SELECT a.x FROM dbpcm_scratch.x AS a JOIN analytics.employees AS e ON a.id = e.employee_id"
+        assert _references_scratch_db(sql, "dbpcm_scratch") is True
 
     def test_does_not_match_warehouse_only_query(self):
         assert _references_scratch_db(
-            "SELECT employee_id FROM analytics.employees", "scratch"
+            "SELECT employee_id FROM analytics.employees", "dbpcm_scratch"
         ) is False
 
     def test_column_named_scratch_is_tolerated_false_positive(self):
         """OVER-APPROXIMATION (documented, tolerated): a column/alias literally
-        named ``scratch`` matches the token scan even though no scratch TABLE is
+        named ``dbpcm_scratch`` matches the token scan even though no scratch TABLE is
         referenced. This only forces the provenance parse to run (a safe,
         fail-closed cost) — it never grants access. The pre-check MUST never
         return False for a real scratch reference, so a spurious True here is the
         acceptable side of the trade."""
         assert _references_scratch_db(
-            "SELECT scratch FROM analytics.employees", "scratch"
+            "SELECT dbpcm_scratch FROM analytics.employees", "dbpcm_scratch"
         ) is True
 
     def test_respects_configured_db_name(self):
         # A non-default scratch DB name is honoured; the default token is not.
         assert _references_scratch_db("SELECT * FROM sandbox.t", "sandbox") is True
-        assert _references_scratch_db("SELECT * FROM scratch.t", "sandbox") is False
+        assert _references_scratch_db("SELECT * FROM dbpcm_scratch.t", "sandbox") is False
 
     # --- ADR-0002 review: no-space quoted forms (the verified false-negative) ---
-    # Deleting the quote used to FUSE `FROM"scratch"` → `FROMscratch`, killing the
+    # Deleting the quote used to FUSE `FROM"dbpcm_scratch"` → `FROMscratch`, killing the
     # left \b boundary so `\bscratch\b` did not match → False → H3 bypass on REST.
     # Replacing the quote with a SPACE preserves the boundary. These MUST be True.
 
     def test_matches_double_quote_no_space(self):
-        assert _references_scratch_db('SELECT x FROM"scratch"."t"', "scratch") is True
+        assert _references_scratch_db('SELECT x FROM"dbpcm_scratch"."t"', "dbpcm_scratch") is True
 
     def test_matches_backtick_no_space(self):
-        assert _references_scratch_db("SELECT x FROM`scratch`.`t`", "scratch") is True
+        assert _references_scratch_db("SELECT x FROM`dbpcm_scratch`.`t`", "dbpcm_scratch") is True
 
     def test_matches_join_double_quote_no_space(self):
-        sql = 'SELECT a.x FROM analytics.employees a JOIN"scratch"."t" s ON a.id = s.id'
-        assert _references_scratch_db(sql, "scratch") is True
+        sql = 'SELECT a.x FROM analytics.employees a JOIN"dbpcm_scratch"."t" s ON a.id = s.id'
+        assert _references_scratch_db(sql, "dbpcm_scratch") is True
 
     def test_matches_leading_double_quote_no_space(self):
         # Even with the quote flush against the keyword on BOTH sides.
-        assert _references_scratch_db('FROM"scratch"."t"', "scratch") is True
+        assert _references_scratch_db('FROM"dbpcm_scratch"."t"', "dbpcm_scratch") is True
 
 
 # ---------------------------------------------------------------------------
-# ADVERSARIAL — REST shape (scope=None, session=None) reading foreign scratch.
+# ADVERSARIAL — REST shape (scope=None, session=None) reading foreign dbpcm_scratch.
 # This is the H3 close: it used to return rows; it must now fail closed.
 # ---------------------------------------------------------------------------
 
 class TestRestShapeScratchFailsClosed:
     def test_run_query_rest_scratch_violation(self, mock_execute, mock_catalog):
-        sql = f"SELECT employee_id FROM scratch.{_FOREIGN_SCRATCH}"
+        sql = f"SELECT employee_id FROM dbpcm_scratch.{_FOREIGN_SCRATCH}"
         with pytest.raises(ColumnScopeError) as exc_info:
             _run(sql, scope=None, session_id=None)
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
         mock_execute.assert_not_called()
 
     def test_explain_query_rest_scratch_violation(self, mock_execute, mock_catalog):
-        sql = f"SELECT employee_id FROM scratch.{_FOREIGN_SCRATCH}"
+        sql = f"SELECT employee_id FROM dbpcm_scratch.{_FOREIGN_SCRATCH}"
         with pytest.raises(ColumnScopeError) as exc_info:
             _explain(sql, scope=None, session_id=None)
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
@@ -228,14 +228,14 @@ class TestRestShapeScratchFailsClosed:
 
     def test_sample_rows_rest_scratch_violation(self, mock_execute, mock_catalog):
         with pytest.raises(ColumnScopeError) as exc_info:
-            _sample("scratch", _FOREIGN_SCRATCH, scope=None, session_id=None)
+            _sample("dbpcm_scratch", _FOREIGN_SCRATCH, scope=None, session_id=None)
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
         mock_execute.assert_not_called()
 
     def test_run_query_rest_scratch_backtick_quoted_violation(
         self, mock_execute, mock_catalog
     ):
-        sql = f"SELECT employee_id FROM `scratch`.`{_FOREIGN_SCRATCH}`"
+        sql = f"SELECT employee_id FROM `dbpcm_scratch`.`{_FOREIGN_SCRATCH}`"
         with pytest.raises(ColumnScopeError) as exc_info:
             _run(sql, scope=None, session_id=None)
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
@@ -248,7 +248,7 @@ class TestRestShapeScratchFailsClosed:
     def test_run_query_rest_scratch_double_quote_no_space_violation(
         self, mock_execute, mock_catalog
     ):
-        sql = f'SELECT employee_id FROM"scratch"."{_FOREIGN_SCRATCH}"'
+        sql = f'SELECT employee_id FROM"dbpcm_scratch"."{_FOREIGN_SCRATCH}"'
         with pytest.raises(ColumnScopeError) as exc_info:
             _run(sql, scope=None, session_id=None)
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
@@ -257,7 +257,7 @@ class TestRestShapeScratchFailsClosed:
     def test_run_query_rest_scratch_backtick_no_space_violation(
         self, mock_execute, mock_catalog
     ):
-        sql = f"SELECT employee_id FROM`scratch`.`{_FOREIGN_SCRATCH}`"
+        sql = f"SELECT employee_id FROM`dbpcm_scratch`.`{_FOREIGN_SCRATCH}`"
         with pytest.raises(ColumnScopeError) as exc_info:
             _run(sql, scope=None, session_id=None)
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
@@ -268,7 +268,7 @@ class TestRestShapeScratchFailsClosed:
     ):
         sql = (
             'SELECT e.employee_id FROM analytics.employees e '
-            f'JOIN"scratch"."{_FOREIGN_SCRATCH}" s ON e.employee_id = s.employee_id'
+            f'JOIN"dbpcm_scratch"."{_FOREIGN_SCRATCH}" s ON e.employee_id = s.employee_id'
         )
         with pytest.raises(ColumnScopeError) as exc_info:
             _run(sql, scope=None, session_id=None)
@@ -278,7 +278,7 @@ class TestRestShapeScratchFailsClosed:
     def test_explain_query_rest_scratch_double_quote_no_space_violation(
         self, mock_execute, mock_catalog
     ):
-        sql = f'SELECT employee_id FROM"scratch"."{_FOREIGN_SCRATCH}"'
+        sql = f'SELECT employee_id FROM"dbpcm_scratch"."{_FOREIGN_SCRATCH}"'
         with pytest.raises(ColumnScopeError) as exc_info:
             _explain(sql, scope=None, session_id=None)
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
@@ -287,7 +287,7 @@ class TestRestShapeScratchFailsClosed:
     def test_explain_query_rest_scratch_backtick_no_space_violation(
         self, mock_execute, mock_catalog
     ):
-        sql = f"SELECT employee_id FROM`scratch`.`{_FOREIGN_SCRATCH}`"
+        sql = f"SELECT employee_id FROM`dbpcm_scratch`.`{_FOREIGN_SCRATCH}`"
         with pytest.raises(ColumnScopeError) as exc_info:
             _explain(sql, scope=None, session_id=None)
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
@@ -332,7 +332,7 @@ class TestGptWarehouseQueryUnaffected:
 
 class TestGateOffRevertsToLegacy:
     def test_run_query_gate_off_scratch_executes(self, mock_execute, mock_catalog):
-        sql = f"SELECT employee_id FROM scratch.{_FOREIGN_SCRATCH}"
+        sql = f"SELECT employee_id FROM dbpcm_scratch.{_FOREIGN_SCRATCH}"
         result = _run(sql, scope=None, session_id=None, settings=_gate_off_settings())
         assert result is not None
         mock_execute.assert_called_once()
@@ -341,7 +341,7 @@ class TestGateOffRevertsToLegacy:
 
     def test_sample_rows_gate_off_scratch_executes(self, mock_execute, mock_catalog):
         result = _sample(
-            "scratch", _FOREIGN_SCRATCH, scope=None, session_id=None,
+            "dbpcm_scratch", _FOREIGN_SCRATCH, scope=None, session_id=None,
             settings=_gate_off_settings(),
         )
         assert result is not None

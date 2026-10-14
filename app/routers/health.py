@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter
 
 from app.clickhouse_client import ping
 from app.config import get_settings
+from app.error_logging import log_failure
 from app.models import HealthResponse
 
 router = APIRouter(tags=["Health"])
@@ -35,8 +38,13 @@ def health_check() -> HealthResponse:
     # few seconds, so that churns connections continuously.
     if get_settings().trino_enabled:
         from app.trino_client import ping as trino_ping
-        return HealthResponse(status="ok", clickhouse="not_used", trino="ok" if trino_ping() else "error")
+        ok = trino_ping()
+        if not ok:
+            log_failure(logging.getLogger(__name__), "rest.health", code="TRINO_UNAVAILABLE")
+        return HealthResponse(status="ok", clickhouse="not_used", trino="ok" if ok else "error")
     ch_ok = ping()
+    if not ch_ok:
+        log_failure(logging.getLogger(__name__), "rest.health", code="CLICKHOUSE_UNAVAILABLE")
     return HealthResponse(
         status="ok",
         clickhouse="ok" if ch_ok else "error",

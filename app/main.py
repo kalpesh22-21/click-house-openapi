@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator
+from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import get_settings
 from app.employee_access import EmployeeAccessError
+from app.error_logging import configure_logging, log_failure
 from app.errors import (
     ArgumentValidationError,
     CartesianJoinError,
@@ -49,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: RUF029
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup / shutdown logic.
 
     On startup we:
@@ -65,12 +73,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: RUF029
     settings = get_settings()
 
     # Reconfigure logging now that we have the real log level from settings.
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level, logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        stream=sys.stdout,
-        force=True,
-    )
+    configure_logging(settings.log_level)
 
     # Fail closed: the REST API has no unauthenticated mode.  If OIDC/JWT auth
     # is not configured, refuse to serve rather than allow open access.
@@ -104,7 +107,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: RUF029
             get_client()
             logger.info("ClickHouse client initialised successfully.")
         except Exception as exc:  # noqa: BLE001
-            logger.error("Failed to initialise ClickHouse client: %s", exc)
+            log_failure(logger, "startup.clickhouse", exc, code="CLICKHOUSE_UNAVAILABLE")
             # Don't crash — the health probe will report degraded status.
 
     yield
@@ -172,8 +175,7 @@ _DOMAIN_ERROR_STATUS: dict[type, int] = {
 async def domain_error_handler(request: Request, exc: ClickHouseAPIError) -> JSONResponse:
     """Translate a domain error to its HTTP status (default 500 if unmapped)."""
     status_code = _DOMAIN_ERROR_STATUS.get(type(exc), 500)
-    if status_code >= 500:
-        logger.exception("Unmapped domain error for %s %s", request.method, request.url.path)
+    log_failure(logger, "rest.domain", exc, status=status_code)
     return JSONResponse(
         status_code=status_code,
         content={"error": exc.message, "code": exc.code},
@@ -183,11 +185,26 @@ async def domain_error_handler(request: Request, exc: ClickHouseAPIError) -> JSO
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all handler that prevents raw stack traces from leaking to clients."""
-    logger.exception("Unhandled exception for %s %s", request.method, request.url.path)
+    log_failure(logger, "rest.unhandled", exc, status=500)
     return JSONResponse(
         status_code=500,
         content={"error": "An internal server error occurred.", "code": "INTERNAL_ERROR"},
     )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def logged_http_error(request: Request, exc: StarletteHTTPException):
+    # Routes convert domain errors to HTTPException; those bypass the domain
+    # handler. Preserve FastAPI's response and authentication headers.
+    code = exc.detail.get("code", "HTTP_ERROR") if isinstance(exc.detail, dict) else "HTTP_ERROR"
+    log_failure(logger, "rest.http", exc, code=code, status=exc.status_code)
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def logged_validation_error(request: Request, exc: RequestValidationError):
+    log_failure(logger, "rest.validation", exc, code="REQUEST_VALIDATION_ERROR", status=422)
+    return await request_validation_exception_handler(request, exc)
 
 
 # ---------------------------------------------------------------------------

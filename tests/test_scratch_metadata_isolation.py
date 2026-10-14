@@ -1,8 +1,8 @@
 """D64 scratch-table isolation for the METADATA read tools (list_tables / get_table_schema).
 
 run_query / sample_rows were already session-gated; these tests cover the metadata
-leak fixed alongside them: list_tables('scratch') must return only the caller's own
-scratch tables (empty when no session is bound), and get_table_schema('scratch', ...)
+leak fixed alongside them: list_tables('dbpcm_scratch') must return only the caller's own
+scratch tables (empty when no session is bound), and get_table_schema('dbpcm_scratch', ...)
 must raise SCRATCH_SESSION_VIOLATION for a foreign / session-less scratch table while
 still returning the schema of the caller's own scratch table.
 
@@ -54,7 +54,7 @@ from app.config import get_settings  # noqa: E402
 from app.errors import ColumnScopeError  # noqa: E402
 from app.principal import current_session_id  # noqa: E402
 
-_SCRATCH_DB = get_settings().scratch_database  # "scratch"
+_SCRATCH_DB = get_settings().scratch_database  # "dbpcm_scratch"
 
 # Session A owns two scratch tables; session B owns one.  Names follow the mint
 # pattern s_<session_id>_bp_<uuid> (session ids are underscore-free).

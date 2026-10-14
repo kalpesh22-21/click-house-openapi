@@ -170,7 +170,7 @@ class TestD83SampleRowsScratchSessionViolation:
     def test_D83_sample_rows_cross_session_scratch_rejected(self, mock_execute, mock_catalog):
         with pytest.raises(ColumnScopeError) as exc_info:
             _sample_with_scope(
-                "scratch", "s_other-session_tmp", _FULL_SCOPE, session_id="sess-001"
+                "dbpcm_scratch", "s_other-session_tmp", _FULL_SCOPE, session_id="sess-001"
             )
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
         mock_execute.assert_not_called()

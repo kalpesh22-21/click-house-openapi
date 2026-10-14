@@ -74,6 +74,8 @@ from sqlglot.optimizer.qualify_columns import qualify_columns
 from sqlglot.optimizer.qualify_tables import qualify_tables
 from sqlglot.optimizer.scope import traverse_scope
 
+from app.constants import SCRATCH_DATABASE
+
 # ---------------------------------------------------------------------------
 # Public exception hierarchy
 # ---------------------------------------------------------------------------
@@ -212,7 +214,7 @@ class CartesianJoinForbiddenError(Exception):
 # Constants
 # ---------------------------------------------------------------------------
 
-_SCRATCH_DB = "scratch"
+_SCRATCH_DB = SCRATCH_DATABASE
 # Scratch table naming pattern: s_<sessionId>_<suffix> (D64).
 # The bound session_id is an UNDERSCORE-FREE identifier-safe token (the runtime
 # sanitizer mints `s<32hex>`), so the owning session can be extracted

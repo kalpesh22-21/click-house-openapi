@@ -139,7 +139,7 @@ def _decode_and_map(token: str, key: Any, algorithms: list[str], settings: Setti
     except jwt.InvalidTokenError as exc:
         # Catch-all for signature failures, malformed tokens, missing required
         # claims, immature (nbf) tokens, etc.  Detail to logs only.
-        logger.info("JWT validation failed: %s", exc)
+        logger.error("JWT validation failed: failure_class=%s", type(exc).__name__)
         raise JWTAuthError("Invalid token.", code="INVALID_AUTH") from exc
 
 
@@ -166,7 +166,7 @@ def _verify_signature(token: str, settings: Settings) -> dict:
         # The former is the client's fault; the latter is ours.  We cannot
         # cleanly distinguish here, so log detail and return a generic 503 —
         # failing closed (no token is trusted) rather than open.
-        logger.warning("JWKS signing-key resolution failed: %s", exc)
+        logger.error("JWKS signing-key resolution failed: failure_class=%s", type(exc).__name__)
         raise JWTAuthError(
             "Unable to verify token signing key.",
             code="JWKS_UNAVAILABLE",
@@ -177,12 +177,12 @@ def _verify_signature(token: str, settings: Settings) -> dict:
         # get_signing_key_from_jwt — which reads the unverified header to pick a
         # key — BEFORE we reach jwt.decode().  Treat it as an invalid token (401),
         # not a server error.
-        logger.info("Malformed token rejected during key resolution: %s", exc)
+        logger.error("Malformed token rejected during key resolution: failure_class=%s", type(exc).__name__)
         raise JWTAuthError("Invalid token.", code="INVALID_AUTH") from exc
     except Exception as exc:  # noqa: BLE001
         # Defensive: the auth boundary must NEVER surface a 500.  Any unexpected
         # failure resolving the signing key fails closed as an invalid token.
-        logger.warning("Unexpected error resolving signing key: %s", exc)
+        logger.error("Unexpected error resolving signing key: failure_class=%s", type(exc).__name__)
         raise JWTAuthError("Invalid token.", code="INVALID_AUTH") from exc
 
     return _decode_and_map(token, signing_key, settings.jwt_algorithms_list(), settings)
@@ -235,7 +235,7 @@ def validate_token(token: str, settings: Optional[Settings] = None) -> Principal
         try:
             scope_list = json.loads(raw_scope)
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.info("Token 'column_scope' claim is not valid JSON: %s", exc)
+            logger.error("Token column_scope is not valid JSON: failure_class=%s", type(exc).__name__)
             raise JWTAuthError(
                 "Token 'column_scope' claim is not a valid JSON list.",
                 code="MISSING_SCOPE_CLAIM",

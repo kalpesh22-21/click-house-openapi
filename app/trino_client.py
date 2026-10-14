@@ -8,9 +8,11 @@ catalog. It does NOT install database row policies or employee reporting views.
 from __future__ import annotations
 
 import json
+import logging
 import re
+from collections.abc import Callable
 from contextlib import suppress
-from typing import Any
+from typing import Any, NamedTuple
 
 import sqlglot
 from sqlglot import exp
@@ -27,6 +29,9 @@ from app.errors import (
 from app.principal import get_current_principal
 from app.semantic_catalog.loader import DEFAULT_DATABASE, get_semantic_catalog
 from app.shard_routing import resolve_mysql_shard, validate_identifier
+from app.trino_errors import JOIN_FALLBACK_ERRORS, rewrite_trino_error
+
+logger = logging.getLogger(__name__)
 
 
 def _close(cursor, conn) -> None:
@@ -87,18 +92,408 @@ def normalize_logical_sql(sql: str) -> str:
                 changed = True
         return tree.sql(dialect="clickhouse") if changed else sql
     except SqlglotError as exc:
+        # Sanitized by construction: code + exception class only, never SQL
+        # text, identity claims, or data values.
+        logger.error(
+            "trino normalize: unparseable logical SQL: code=%s "
+            "failure_class=%s",
+            "TRINO_UNSUPPORTED_SQL",
+            type(exc).__name__,
+        )
         raise QueryValidationError(
             "Invalid logical SQL.", "TRINO_UNSUPPORTED_SQL"
         ) from exc
 
 
-def rewrite_query(sql: str, settings: Settings) -> str:
+# --- ClickHouse -> Trino function mapping -----------------------------------
+# The MCP validates ClickHouse-dialect logical SQL, so ClickHouse-only
+# functions legitimately reach this transpiler. sqlglot has no Trino mapping
+# for them and passes their names through VERBATIM (uniqExact renders as
+# UNIQEXACT): the query passes validation, dispatches, and only then dies on
+# the coordinator with FUNCTION_NOT_FOUND, visible to the caller as the
+# generic TRINO_QUERY_ERROR (bp-active-headcount-by-department hit exactly
+# this). This pass rewrites the ClickHouse-only functions we can map
+# EXACTLY, in place on the routed AST, post-validation and pre-render.
+#
+# Map discipline: one entry per function, keyed by the case-folded parsed
+# name; builders receive the parsed call and return its replacement. An
+# ABSENT entry or an arity mismatch means "leave untouched" by construction —
+# the existing passthrough behavior (the coordinator rejects it loudly) is
+# deliberately kept for anything unmapped rather than guessing at semantics.
+#
+# Inventory (exact-safe mappings only):
+#   uniqexact           -> COUNT(DISTINCT x)                            [1 arg]
+#   todate              -> CAST(x AS DATE)                              [1 arg]
+#   todate32            -> CAST(x AS DATE)                              [1 arg]
+#   todatetime          -> CAST(x AS TIMESTAMP)                         [1 arg]
+#   todatetime64        -> CAST(x AS TIMESTAMP(p))                      [2 args]
+#   tofloat64           -> CAST(x AS DOUBLE)                            [1 arg]
+#   tostring            -> CAST(x AS VARCHAR)                           [1 arg]
+#   touint8             -> truncate toward zero, modulo 256            [1 arg]
+#   sumif               -> COALESCE(SUM(x) FILTER (WHERE cond), 0)      [2 args]
+#   avgif               -> AVG(x) FILTER (WHERE cond)                   [2 args]
+#   multiif             -> CASE WHEN c THEN v ... ELSE v_else END       [odd arity >= 3]
+#   addmonths           -> DATE_ADD('month', n, d)  (arg-order swap)    [2 args]
+#   concatwithseparator -> NULL-guarded CONCAT_WS                     [>= 2 args]
+#
+# Kept UNMAPPED on purpose: quantileExactLow / quantileExactHigh — the
+# parametric double-call (quantileExactLow(0.5)(x)) parses as
+# exp.ParameterizedAgg (which the walk below does not even visit), and
+# Trino has no exact percentile aggregate; the mapping (approx_percentile
+# is an APPROXIMATION) is a quantile decision for a later owner, not an
+# exact-safe rewrite.
+
+
+class _FunctionMapping(NamedTuple):
+    """One map entry: the AST builder plus its arity admission test."""
+
+    builder: Callable[[exp.Func], exp.Expression]
+    accepts: Callable[[int], bool]
+
+
+def _uniq_exact_as_count_distinct(func: exp.Func) -> exp.Expression:
+    """uniqExact(x) -> COUNT(DISTINCT x), preserving EXACT semantics.
+
+    Never degrade to approx_count_distinct: ClickHouse `uniq` is the
+    approximate sibling (sqlglot already maps that one to APPROX_DISTINCT),
+    while uniqExact is exact, like COUNT(DISTINCT x). Both count distinct
+    values ignoring NULLs.
+    """
+    return exp.Count(this=exp.Distinct(expressions=list(func.expressions)))
+
+
+def _to_date32_as_cast_date(func: exp.Func) -> exp.Expression:
+    """toDate32(x) -> CAST(x AS DATE).
+
+    ClickHouse toDate32 widens Date to Date32 (range 1900-01-01..2299-12-31
+    vs Date's 1970-01-01..2149-06-06). On this catalog's columns the input is
+    a Date already or the literal '1900-01-01' missing-value sentinel, both
+    inside Trino DATE's range, and the corpus's missing_date_sentinel guard
+    (toDate32(col) > toDate32('1900-01-01')) evaluates identically once both
+    sides collapse to DATE — DATE-vs-DATE comparison needs no wider type.
+    """
+    return exp.Cast(
+        this=func.expressions[0], to=exp.DataType.build(exp.DataType.Type.DATE)
+    )
+
+
+def _to_date_as_cast_date(func: exp.Func) -> exp.Expression:
+    """toDate(x) -> CAST(x AS DATE).
+
+    ClickHouse toDate collapses Date / DateTime / string inputs to the
+    calendar day; Trino DATE covers the catalog's CH Date range ('1900-01-01'
+    sentinel through 2299-style values). On a DATE-typed column the cast is
+    the identity, on a timestamp it truncates to the date exactly as CH does
+    for DateTime inputs, and on a string literal 'YYYY-MM-DD' it equals CH
+    toDate(string). Documented divergence: a DATETIME-string input (CH
+    toDate('2024-01-01 05:00:00') accepts it) errors in Trino's CAST — the
+    catalog convention is date-literal strings, and such calls fail loudly
+    rather than mis-convert. Arity admission (map entry): exactly 1 arg, so
+    CH's optional timezone argument stays untouched.
+    """
+    return exp.Cast(
+        this=func.expressions[0], to=exp.DataType.build(exp.DataType.Type.DATE)
+    )
+
+
+def _to_datetime_as_cast_timestamp(func: exp.Func) -> exp.Expression:
+    """toDateTime(x) -> CAST(x AS TIMESTAMP).
+
+    CH tz-less DateTime ≈ Trino TIMESTAMP for this catalog's naive-datetime
+    usage: a DATE input yields midnight, a timestamp input is the identity,
+    and a 'YYYY-MM-DD[ hh:mm:ss]' string literal parses to the same naive
+    value CH computes. Documented divergence: CH also accepts an epoch
+    integer (seconds since 1970-01-01); Trino's CAST does not model epoch
+    conversion and rejects it, so such calls fail loudly rather than
+    mis-convert. Arity admission: exactly 1 arg — CH's optional timezone
+    argument stays untouched.
+    """
+    return exp.Cast(
+        this=func.expressions[0], to=exp.DataType.build(exp.DataType.Type.TIMESTAMP)
+    )
+
+
+def _to_datetime64_as_cast_timestamp(func: exp.Func) -> exp.Expression:
+    """toDateTime64(x, p) -> CAST(x AS TIMESTAMP(p)).
+
+    Verified against the pinned sqlglot (30.22.0): the 2-arg CH shape
+    (value, scale) maps onto exp.Cast carrying a parameterized TIMESTAMP
+    type and renders / round-trips cleanly as CAST(x AS TIMESTAMP(p)).
+    Second-precision timestamps and date/datetime string literals convert
+    exactly at the catalog's naive-datetime conventions. Documented
+    divergences: CH's optional 3-arg TIMEZONE form is NOT admitted (the
+    arity guard leaves it untouched); an epoch-integer value has CH epoch
+    semantics no CAST expresses — Trino rejects it loudly; p must be a
+    literal for Trino, so a non-literal scale renders as-is and the
+    coordinator rejects it. Never a silent mis-conversion.
+    """
+    value, precision = func.expressions
+    return exp.Cast(
+        this=value,
+        to=exp.DataType(
+            this=exp.DataType.Type.TIMESTAMP, expressions=[precision]
+        ),
+    )
+
+
+def _to_float64_as_cast_double(func: exp.Func) -> exp.Expression:
+    """toFloat64(x) -> CAST(x AS DOUBLE).
+
+    ClickHouse Float64 and Trino DOUBLE are both IEEE-754 binary64, so the
+    cast is value-preserving (the corpus's ratio convention
+    toFloat64(x) / y then divides in double precision on both engines).
+    """
+    return exp.Cast(
+        this=func.expressions[0], to=exp.DataType.build(exp.DataType.Type.DOUBLE)
+    )
+
+
+def _to_string_as_cast_varchar(func: exp.Func) -> exp.Expression:
+    """toString(x) -> CAST(x AS VARCHAR).
+
+    Corpus usage renders codes, dates and decimal amounts; both dialects
+    render dates as 'YYYY-MM-DD' and preserve decimal scale text ('100.00'),
+    so the rendering is equivalent for the catalog's column types.
+    """
+    return exp.Cast(
+        this=func.expressions[0], to=exp.DataType.build(exp.DataType.Type.VARCHAR)
+    )
+
+
+def _to_uint8_as_cast_integer(func: exp.Func) -> exp.Expression:
+    """Truncate numeric inputs toward zero and wrap into the UInt8 range.
+
+    Take the remainder BEFORE truncating: Trino may coerce integral inputs to
+    double for truncate(), and doing that to a full Int64 would lose low bits.
+    The remainder is bounded to (-256, 256), so that coercion is exact for
+    integers. String literals are admitted only as unsigned integer text;
+    string-valued expressions require an explicit numeric cast from the caller.
+    """
+    value = func.expressions[0]
+    while isinstance(value, exp.Paren):
+        value = value.this
+    if isinstance(value, exp.Literal) and value.is_string:
+        if not re.fullmatch(r"[+]?[0-9]+", value.this):
+            raise QueryValidationError(
+                "toUInt8 requires numeric input or an unsigned integer string literal.",
+                "TRINO_UNSUPPORTED_SQL",
+            )
+        # 10**8 is divisible by 256; earlier digits cannot affect the result.
+        # Bound int() parsing even for an unusually long input literal.
+        value = exp.Literal.number(int(value.this[-8:]) % 256)
+    elif isinstance(value, exp.Boolean):
+        value = exp.Literal.number(int(value.this))
+    elif isinstance(value, (exp.Predicate, exp.And, exp.Or, exp.Not)):
+        value = exp.Cast(this=_as_trino_condition(value), to=exp.DataType.build("INTEGER"))
+    remainder = exp.Mod(this=exp.Paren(this=value), expression=exp.Literal.number(256))
+    truncated = exp.Anonymous(this="truncate", expressions=[remainder])
+    wrapped = exp.Mod(
+        this=exp.Paren(this=exp.Add(this=truncated, expression=exp.Literal.number(256))),
+        expression=exp.Literal.number(256),
+    )
+    return exp.Cast(this=wrapped, to=exp.DataType.build("INTEGER"))
+
+
+def _as_trino_condition(condition: exp.Expression) -> exp.Expression:
+    """Trino requires Boolean conditions; ClickHouse also permits numeric flags."""
+    if isinstance(condition, (exp.And, exp.Or, exp.Not)):
+        condition.set("this", _as_trino_condition(condition.this))
+        if condition.expression is not None:
+            condition.set("expression", _as_trino_condition(condition.expression))
+        return condition
+    if isinstance(condition, (exp.Predicate, exp.Boolean)):
+        return condition
+    if isinstance(condition, exp.Paren):
+        return exp.Paren(this=_as_trino_condition(condition.this))
+    return exp.Cast(this=condition, to=exp.DataType.build("BOOLEAN"))
+
+
+def _sum_if_as_filtered_sum(func: exp.Func) -> exp.Expression:
+    """sumIf(x, cond) -> COALESCE(SUM(x) FILTER (WHERE cond), 0).
+
+    Both dialects skip non-matching rows, but the EMPTY matching set
+    diverges: ClickHouse sumIf returns 0, Trino SUM(...) FILTER returns
+    NULL. The corpus relies on the 0 — bp-compare-employee-paychecks-two-
+    periods pivots periods as sumIf(b) - sumIf(a), and its header documents
+    that the 0 replaces FULL OUTER JOIN + coalesce semantics for line items
+    present in only one period. NULL would poison that subtraction, so the
+    COALESCE is part of the exact mapping, not decoration.
+    """
+    value, cond = func.expressions
+    return exp.Coalesce(
+        this=exp.Filter(this=exp.Sum(this=value), expression=exp.Where(this=_as_trino_condition(cond))),
+        expressions=[exp.Literal.number(0)],
+    )
+
+
+def _avg_if_as_filtered_avg(func: exp.Func) -> exp.Expression:
+    """avgIf(x, cond) -> AVG(x) FILTER (WHERE cond).
+
+    Documented empty-set delta: ClickHouse avgIf over no matching rows
+    returns NaN, Trino returns NULL. No compensation is applied: the corpus
+    consumes avgIf as a terminal display column (bp-department-scorecard
+    rounds it straight into an output alias, never in further arithmetic),
+    where NULL renders more honestly than ClickHouse's NaN.
+    """
+    value, cond = func.expressions
+    return exp.Filter(this=exp.Avg(this=value), expression=exp.Where(this=_as_trino_condition(cond)))
+
+
+def _multi_if_as_case(func: exp.Func) -> exp.Expression:
+    """multiIf(c1, v1, c2, v2, ..., v_else) -> CASE WHEN ... ELSE ... END.
+
+    ClickHouse multiIf is exactly a left-to-right CASE chain: same
+    first-true-branch-wins evaluation, same else fallback. Arity admission
+    (map entry): ODD count >= 3 (one or more cond/value pairs plus the else
+    value); even-arity calls are invalid in ClickHouse itself and stay
+    untouched for the coordinator to reject.
+    """
+    args = func.expressions
+    ifs = [
+        exp.If(this=_as_trino_condition(args[i]), true=args[i + 1]) for i in range(0, len(args) - 1, 2)
+    ]
+    return exp.Case(ifs=ifs, default=args[-1])
+
+
+def _add_months_as_date_add(func: exp.Func) -> exp.Expression:
+    """addMonths(d, n) -> DATE_ADD('month', n, d) — NOTE the argument-order
+    swap: ClickHouse is (datetime, num_months), Trino is
+    date_add(unit, value, datetime). The unit is the verbatim string 'month'
+    (negative n shifts backwards, as in ClickHouse)."""
+    date_arg, months = func.expressions
+    return exp.DateAdd(this=date_arg, expression=months, unit=exp.Var(this="month"))
+
+
+def _concat_with_separator_as_concat_ws(func: exp.Func) -> exp.Expression:
+    """Preserve ClickHouse NULL propagation with sqlglot's CASE guard.
+
+    Trino's bare CONCAT_WS skips NULL arguments; coalesce=False requests the
+    guard that returns NULL when any argument is NULL. Non-string inputs still
+    require explicit string conversion on this path.
+    """
+    return exp.ConcatWs(expressions=list(func.expressions), coalesce=False)
+
+
+_CLICKHOUSE_FUNCTION_MAP: dict[str, _FunctionMapping] = {
+    "uniqexact": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n == 1),
+    "todate": _FunctionMapping(_to_date_as_cast_date, lambda n: n == 1),
+    "todate32": _FunctionMapping(_to_date32_as_cast_date, lambda n: n == 1),
+    "todatetime": _FunctionMapping(_to_datetime_as_cast_timestamp, lambda n: n == 1),
+    "todatetime64": _FunctionMapping(
+        _to_datetime64_as_cast_timestamp, lambda n: n == 2
+    ),
+    "tofloat64": _FunctionMapping(_to_float64_as_cast_double, lambda n: n == 1),
+    "tostring": _FunctionMapping(_to_string_as_cast_varchar, lambda n: n == 1),
+    "touint8": _FunctionMapping(_to_uint8_as_cast_integer, lambda n: n == 1),
+    "sumif": _FunctionMapping(_sum_if_as_filtered_sum, lambda n: n == 2),
+    "avgif": _FunctionMapping(_avg_if_as_filtered_avg, lambda n: n == 2),
+    "multiif": _FunctionMapping(_multi_if_as_case, lambda n: n >= 3 and n % 2 == 1),
+    "addmonths": _FunctionMapping(_add_months_as_date_add, lambda n: n == 2),
+    "concatwithseparator": _FunctionMapping(
+        _concat_with_separator_as_concat_ws, lambda n: n >= 2
+    ),
+}
+
+
+def _map_clickhouse_functions(tree: exp.Query) -> None:
+    """Apply _CLICKHOUSE_FUNCTION_MAP across the routed AST (in place).
+
+    sqlglot parses ClickHouse aggregates it does not model as
+    exp.AnonymousAggFunc subclasses (uniqExact -> exp.AnonymousAggFunc,
+    sumIf/avgIf -> exp.CombinedAggFunc) and unknown scalars as
+    exp.Anonymous; the parametric double-call quantileExact*(p)(x) parses as
+    exp.ParameterizedAgg, which this walk does NOT visit, so it stays
+    unmapped by construction. Each map entry admits its own arity: an absent
+    entry or an arity mismatch leaves the call untouched — e.g. ClickHouse's
+    multi-argument uniqExact(a, b) tuple semantics have no one-statement
+    Trino equivalent, so non-unary calls stay untouched, and the coordinator
+    rejects anything unmapped loudly.
+    """
+    # Map children before a parent can duplicate them in a NULL guard.
+    for func in reversed(list(tree.find_all(exp.Anonymous, exp.AnonymousAggFunc))):
+        mapping = _CLICKHOUSE_FUNCTION_MAP.get(func.name.lower())
+        if mapping is None or not mapping.accepts(len(func.expressions)):
+            continue
+        func.replace(mapping.builder(func))
+
+
+def rewrite_query(
+    sql: str, settings: Settings, *, optimize_employee_joins: bool = True
+) -> str:
     """Route base relations, preserving CTE names, aliases and logical columns.
 
     Physical catalog names and scratch relations are intentionally inaccessible
     to caller SQL. SELECT/UNION and plain EXPLAIN SELECT are the initial surface.
+
+    Transpile/validation rejections are logged at ERROR (sanitized: error
+    code + failure class only — never SQL text, identity values, or row data)
+    before they propagate; the wire contract (raised codes) is unchanged.
     """
-    proc_center, client_code, _ = request_identity(settings)
+    try:
+        return _rewrite_query(sql, settings, optimize_employee_joins=optimize_employee_joins)
+    except QueryValidationError as exc:
+        logger.error(
+            "trino transpile/validation rejected query: code=%s "
+            "failure_class=%s",
+            exc.code,
+            type(exc.__cause__).__name__
+            if exc.__cause__ is not None
+            else type(exc).__name__,
+        )
+        raise
+
+
+def _rewrite_employee_joins(tree: exp.Query, catalog: dict) -> None:
+    """Use audited packed keys only for direct, same-scope MySQL equality joins.
+
+    Requires the deployed employee-code domain contract. Execution fallback
+    handles missing keys/unsupported SQL, not silent encoding collisions.
+    CTE/derived outputs, USING, expressions, supervisor keys and OR predicates
+    are deliberately left alone. Public projections and tenant pins are intact.
+    """
+    for scope in traverse_scope(tree):
+        aliases = {}
+        for alias, (_, source) in scope.selected_sources.items():
+            if not isinstance(source, exp.Table) or source.catalog:
+                continue
+            entry = catalog.get(f"{source.db}.{source.name}", {})
+            if entry.get("source") == "mysql":
+                aliases[alias] = entry.get("trino_join_keys", {})
+        for join in scope.expression.args.get("joins", []):
+            condition = join.args.get("on")
+            if condition is None or join.args.get("method") or join.args.get("kind") in {"SEMI", "ANTI", "ASOF"}:
+                continue
+            pending = [condition]
+            while pending:
+                item = pending.pop().unnest()
+                if isinstance(item, exp.And):
+                    pending.extend((item.this, item.expression))
+                    continue
+                if not isinstance(item, exp.EQ):
+                    continue
+                left, right = item.this, item.expression
+                if not all(isinstance(c, exp.Column)
+                           and c.table in aliases and not c.db and not c.catalog
+                           for c in (left, right)):
+                    continue
+                if left.table == right.table:
+                    continue
+                mappings = [aliases[c.table].get(c.name) for c in (left, right)]
+                if not all(isinstance(m, dict) and m.get("column") and m.get("encoding") for m in mappings):
+                    continue
+                if mappings[0]["encoding"] != mappings[1]["encoding"]:
+                    continue
+                for column, mapping in zip((left, right), mappings):
+                    column.set("this", exp.to_identifier(validate_identifier(mapping["column"])))
+
+
+def _rewrite_query(
+    sql: str, settings: Settings, *, optimize_employee_joins: bool = True
+) -> str:
+    # All three identity claims are required and strictly validated, but only
+    # client_code is a routing input (paycompy client-code RANGE model).
+    identity = request_identity(settings)
+    client_code = identity[1]
     explain = bool(re.match(r"^\s*EXPLAIN\s+", sql, re.IGNORECASE))
     inner = (
         re.sub(r"^\s*EXPLAIN\s+", "", sql, count=1, flags=re.IGNORECASE)
@@ -117,15 +512,29 @@ def rewrite_query(sql: str, settings: Settings) -> str:
                 "TRINO_UNSUPPORTED_SQL",
             )
         tree = qualify_tables(statements[0], db=DEFAULT_DATABASE, dialect="clickhouse")
+        # ClickHouse resolves SELECT aliases in GROUP BY/HAVING (alias-first).
+        # Trino does not. Expand within this SELECT only, never into subqueries.
+        for select in tree.find_all(exp.Select):
+            aliases = {item.alias: item.this for item in select.expressions if isinstance(item, exp.Alias)}
+            for clause_name in ("group", "having"):
+                clause = select.args.get(clause_name)
+                if clause is not None:
+                    for node in list(clause.walk(prune=lambda n: isinstance(n, (exp.Subquery, exp.Select)))):
+                        if isinstance(node, exp.Column) and not node.table and node.name in aliases:
+                            node.replace(aliases[node.name].copy())
         catalog = get_semantic_catalog()
-        from app.trino_metadata import canonical_database, physical_target
+        from app.trino_metadata import canonical_database
+        from app.trino_native_sources import source_relation
 
         allowed = settings.allowed_databases_list()
         allowed = (
             None if allowed is None else {canonical_database(db) for db in allowed}
         )
+        if optimize_employee_joins:
+            _rewrite_employee_joins(tree, catalog)
         shard = None
         routed = set()
+        replacements = []
         for scope in traverse_scope(tree):
             for _, source in scope.selected_sources.values():
                 if not isinstance(source, exp.Table):
@@ -144,19 +553,10 @@ def rewrite_query(sql: str, settings: Settings) -> str:
                         "TABLE_NOT_ALLOWED",
                     )
                 entry = catalog[key]
+                # proc_center is NOT a routing input (paycompy client-code range model).
                 if entry.get("source", "clickhouse") == "mysql" and shard is None:
-                    shard = resolve_mysql_shard(proc_center, client_code, settings)
-                target_catalog, target_schema, _ = physical_target(
-                    entry, shard or "", settings
-                )
-                source.set(
-                    "catalog",
-                    exp.to_identifier(validate_identifier(target_catalog), quoted=True),
-                )
-                source.set(
-                    "db",
-                    exp.to_identifier(validate_identifier(target_schema), quoted=True),
-                )
+                    shard = resolve_mysql_shard(client_code, settings)
+                replacements.append((source, entry, shard or ""))
                 routed.add(id(source))
         # Catch table-function/other relation forms that scope traversal omitted.
         for table in tree.find_all(exp.Table):
@@ -166,15 +566,38 @@ def rewrite_query(sql: str, settings: Settings) -> str:
                 raise QueryValidationError(
                     "Unsupported Trino relation.", "TRINO_UNSUPPORTED_SQL"
                 )
+        # Only introduce trusted table functions after every caller relation has
+        # passed the logical-table gate, including nested scopes and CTEs.
+        for source, entry, resolved_shard in replacements:
+            replacement = source_relation(entry, resolved_shard, identity, settings)
+            replacement.set("alias", source.args.get("alias"))
+            source.replace(replacement)
         for count in tree.find_all(exp.Count):
             if count.this is None:
                 count.set("this", exp.Star())
+        # ClickHouse-only function mapping: post-validation/routing, pre-render
+        # (see the map's docstring above).
+        _map_clickhouse_functions(tree)
         rendered = tree.sql(dialect="trino", unsupported_level=ErrorLevel.RAISE)
         return f"EXPLAIN {rendered}" if explain else rendered
     except SqlglotError as exc:
         raise QueryValidationError(
             "SQL cannot be safely translated to Trino.", "TRINO_UNSUPPORTED_SQL"
         ) from exc
+
+
+def uses_clickhouse_sources(sql: str) -> bool:
+    """Inspect already validated logical SQL; CTE aliases are not physical sources."""
+    inner = re.sub(r"^\s*EXPLAIN\s+", "", sql, count=1, flags=re.IGNORECASE)
+    tree = qualify_tables(sqlglot.parse_one(normalize_logical_sql(inner), read="clickhouse"),
+                          db=DEFAULT_DATABASE, dialect="clickhouse")
+    catalog = get_semantic_catalog()
+    return any(
+        isinstance(source, exp.Table)
+        and catalog.get(f"{source.db}.{source.name}", {}).get("source", "clickhouse") == "clickhouse"
+        for scope in traverse_scope(tree)
+        for _, source in scope.selected_sources.values()
+    )
 
 
 def _connect(settings: Settings, user: str):
@@ -204,23 +627,7 @@ def _connect(settings: Settings, user: str):
     )
 
 
-def execute_query(
-    sql: str, settings: Settings | None = None, parameters: dict[str, Any] | None = None
-) -> tuple[list[str], list[list[Any]]]:
-    settings = settings or get_settings()
-    if not settings.trino_security_ready:
-        raise QueryValidationError(
-            "Provision Trino tenant/employee policies or secured views before setting TRINO_SECURITY_READY=true. "
-            "ClickHouse JWT settings are not forwarded by this adapter.",
-            "TRINO_SECURITY_NOT_CONFIGURED",
-        )
-    if parameters:
-        raise QueryValidationError(
-            "Internal ClickHouse parameter syntax cannot execute in Trino.",
-            "TRINO_UNSUPPORTED_SQL",
-        )
-    identity = request_identity(settings)
-    physical_sql = rewrite_query(sql, settings)
+def _execute_physical_query(physical_sql: str, settings: Settings, identity: tuple[str, str, str]):
     conn = cursor = None
     try:
         conn = _connect(settings, "|".join(identity))
@@ -241,22 +648,96 @@ def execute_query(
                     "TRINO_RESULT_LIMIT",
                 )
         return [col[0] for col in cursor.description], rows
+    finally:
+        _close(cursor, conn)
+
+
+def execute_query(
+    sql: str, settings: Settings | None = None, parameters: dict[str, Any] | None = None
+) -> tuple[list[str], list[list[Any]]]:
+    settings = settings or get_settings()
+    if not settings.trino_security_ready:
+        raise QueryValidationError(
+            "Provision Trino tenant/employee policies or secured views before setting TRINO_SECURITY_READY=true. "
+            "ClickHouse source policies must apply to the connector account and views.",
+            "TRINO_SECURITY_NOT_CONFIGURED",
+        )
+    if parameters:
+        raise QueryValidationError(
+            "Internal ClickHouse parameter syntax cannot execute in Trino.",
+            "TRINO_UNSUPPORTED_SQL",
+        )
+    identity = request_identity(settings)
+    physical_sql = rewrite_query(sql, settings)
+    if uses_clickhouse_sources(sql):
+        # Do not refresh for MySQL-only requests; validate/compile before I/O.
+        from app.employee_access import ensure_employee_access_fresh
+        ensure_employee_access_fresh(settings)
+    try:
+        try:
+            return _execute_physical_query(physical_sql, settings, identity)
+        except Exception as first_error:
+            from trino.exceptions import TrinoUserError
+
+            # Only coordinator query errors trigger fallback. Never repeat a
+            # timeout, transport failure, authorization denial, or result cap.
+            if not isinstance(first_error, TrinoUserError) or first_error.error_name not in JOIN_FALLBACK_ERRORS:
+                raise
+            original_sql = rewrite_query(sql, settings, optimize_employee_joins=False)
+            if original_sql == physical_sql:
+                raise
+            logger.error("Trino numeric employee join failed; retrying original string join once")
+            return _execute_physical_query(original_sql, settings, identity)
     except QueryValidationError:
         raise
     except Exception as exc:
         # Do not echo connector errors: they can contain SQL, identities and credentials.
-        from trino.exceptions import TrinoUserError
+        # The server log deliberately carries only sanitized fields — our error
+        # code, the exception/coordinator failure CLASS, and the coordinator
+        # query_id for ledger correlation — never the connector message, SQL
+        # text, identity claims, or row data.
+        from trino.exceptions import (
+            TrinoAuthError,
+            TrinoDataError,
+            TrinoQueryError,
+            TrinoUserError,
+        )
 
-        if isinstance(exc, TrinoUserError):
+        if isinstance(exc, TrinoDataError):
+            logger.error("trino result decoding failed: code=TRINO_QUERY_ERROR failure_class=TrinoDataError")
             raise ClickHouseQueryError(
-                "Trino rejected the query. Check the logical schema and supported SQL.",
+                "The Trino client cannot decode a result value. Use supported result types or ask the operator to check client compatibility.",
                 "TRINO_QUERY_ERROR",
             ) from exc
+
+        if isinstance(exc, TrinoQueryError) and (
+            isinstance(exc, TrinoUserError) or exc.error_type == "INSUFFICIENT_RESOURCES"
+        ):
+            logger.error(
+                "trino query rejected by coordinator: code=%s failure_class=%s "
+                "trino_error=%s query_id=%s",
+                "TRINO_QUERY_ERROR",
+                type(exc).__name__,
+                exc.error_name,
+                exc.query_id,
+            )
+            # Return only an allowlisted error name and authored hint. Raw
+            # coordinator text may contain private identifiers or row values;
+            # query_id stays log-side only.
+            raise ClickHouseQueryError(
+                rewrite_trino_error(exc),
+                "TRINO_QUERY_ERROR",
+            ) from exc
+        logger.error(
+            "trino query execution failed: code=%s failure_class=%s",
+            "TRINO_UNAVAILABLE",
+            type(exc).__name__,
+        )
         raise ClickHouseUnavailableError(
-            "Trino query execution failed.", "TRINO_UNAVAILABLE"
+            "Trino connector authentication failed; ask the operator to check credentials."
+            if isinstance(exc, TrinoAuthError) else "Trino query execution failed.",
+            "TRINO_UNAVAILABLE"
         ) from exc
-    finally:
-        _close(cursor, conn)
 
 
 def ping() -> bool:
@@ -268,7 +749,9 @@ def ping() -> bool:
         cursor = conn.cursor()
         cursor.execute("SELECT 1")
         return cursor.fetchone() == [1]
-    except Exception:  # noqa: BLE001 — connectivity probes must return a boolean
+    except Exception as exc:  # noqa: BLE001 — connectivity probes must return a boolean
+        from app.error_logging import log_failure
+        log_failure(logger, "trino.health", exc, code="TRINO_UNAVAILABLE")
         return False
     finally:
         _close(cursor, conn)

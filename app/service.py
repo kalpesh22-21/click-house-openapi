@@ -28,6 +28,7 @@ from fastapi import HTTPException
 from app.catalog import get_catalog_schema
 from app.clickhouse_client import execute_query
 from app.config import Settings, get_settings
+from app.constants import SCRATCH_DATABASE
 from app.employee_access import ensure_employee_access_fresh
 from app.errors import (
     ArgumentValidationError,
@@ -196,8 +197,16 @@ def _execute(
     transport-agnostic domain errors so the MCP layer never sees HTTPException.
     """
     if settings.trino_enabled:
-        from app.trino_client import execute_query as execute_trino_query
-        return execute_trino_query(sql, settings, parameters)
+        from app.query_routing import direct_clickhouse_sql
+
+        native_sql = direct_clickhouse_sql(sql, settings)
+        if native_sql is None:
+            from app.trino_client import execute_query as execute_trino_query
+            return execute_trino_query(sql, settings, parameters)
+        # run/sample skip their direct refresh when Trino is enabled. This
+        # branch owns it for all direct routes, including EXPLAIN; failures block.
+        ensure_employee_access_fresh(settings)
+        sql = native_sql
     try:
         return execute_query(sql, settings, parameters)
     except HTTPException as exc:
@@ -275,7 +284,7 @@ def _forbidden_out_of_scope_columns(
     catalog = get_semantic_catalog()
     forbidden: set[str] = set()
     for db_tbl, col in uses:
-        if db_tbl.startswith("scratch."):
+        if db_tbl.startswith(f"{SCRATCH_DATABASE}."):
             continue
         if col in hidden_columns_for(catalog, db_tbl):
             continue
@@ -305,9 +314,20 @@ def _forbidden_out_of_scope_columns(
 # the tree reads exactly as ClickHouse printed it. Callers that scan the plan for a
 # substring (`"ReadFromMergeTree" in ...`) are unaffected; only the row framing changes.
 #
+# TRINO INVERTS THE INPUT SHAPE. Trino's EXPLAIN returns ONE ROW whose single cell
+# carries the whole plan tree newline-joined. Taken at face value that cell is a single
+# "line" of thousands of chars: the 300-char per-line cap would decapitate the ENTIRE
+# tree (losing the ScanFilterProject leaves that prove physical shard routing) and the
+# head/tail budget would never see a second line. So any cell carrying embedded
+# newlines is SPLIT back into plan lines BEFORE the caps run — generically, for any
+# backend that produces the one-cell shape. For ClickHouse's one-row-per-line shape no
+# cell contains a newline and the split is a no-op, so the legacy behaviour is
+# preserved exactly.
+#
 # THE CAPS ARE HONEST, which the previous `truncated_override=False` was not: a plan
 # longer than the line budget keeps its HEAD AND ITS TAIL around an explicit elision
 # marker — never the head alone, for reason (2) — and reports `truncated: true`.
+# Splitting alone never sets `truncated`: it changes framing, not content.
 EXPLAIN_MAX_PLAN_LINES = 60
 EXPLAIN_MAX_PLAN_LINE_CHARS = 300
 _PLAN_ELISION = "... [{n} plan line(s) elided] ..."
@@ -326,10 +346,24 @@ def _collapse_explain_plan(
     shape ClickHouse produces for ``EXPLAIN`` is returned UNTOUCHED — this helper
     never reshapes something it does not recognise, so a future ``EXPLAIN PIPELINE``
     or a driver change degrades to the old behaviour instead of mangling the output.
+
+    Input shapes seen in the wild:
+
+      - ClickHouse: one row PER plan line.  No cell contains a newline, so the
+        split below is a no-op and the legacy path is preserved exactly.
+      - Trino: ONE row whose single cell carries the whole plan tree
+        newline-joined.  The cell is split back into real plan lines BEFORE the
+        per-line char cap and the head/tail line budget run — otherwise the line
+        cap decapitates the entire tree and the budget never engages.
+
+    ``truncated`` means content was dropped or shortened (a capped line or elided
+    lines).  The newline split itself changes framing, not content, so it never
+    sets the flag.
     """
     if len(columns) != 1 or not rows:
         return columns, rows, False
-    lines = ["" if row[0] is None else str(row[0]) for row in rows if row]
+    cells = ["" if row[0] is None else str(row[0]) for row in rows if row]
+    lines = [line for cell in cells for line in cell.split("\n")]
     truncated = False
     if any(len(line) > max_line_chars for line in lines):
         # A single over-long line is an `Expression` node listing every column it
@@ -426,12 +460,6 @@ def list_tables(
 
     _check_database_allowed(database, settings)
 
-    sql = (
-        "SELECT database, name, engine "
-        "FROM system.tables "
-        "WHERE database = %(db)s "
-        "ORDER BY name"
-    )
     if settings.trino_enabled:
         from app.trino_metadata import discover, public_database
         return [
@@ -439,6 +467,12 @@ def list_tables(
             for _, entry in sorted(discover(settings, database).items())
         ]
     else:
+        sql = (
+            "SELECT database, name, engine "
+            "FROM system.tables "
+            "WHERE database = %(db)s "
+            "ORDER BY name"
+        )
         _, rows = _execute(sql, settings, parameters={"db": database})
 
     tables = [
@@ -660,6 +694,9 @@ def get_table_schema(
         scope=scope,
         introspected_schema=introspected_schema,
         columns_filter=columns_filter,
+        # Backend-scoped catalog notes ride the response only when they match
+        # the deployment's ACTIVE backend (trino_notes here iff Trino serves).
+        trino_enabled=settings.trino_enabled,
     )
     response["catalog_sha"] = get_catalog_sha()
     if settings.trino_enabled:

@@ -120,7 +120,7 @@ class TestD64ScratchOwnSessionPasses:
         # Scratch table name follows the s_<session_id>_<suffix> pattern.
         sql = (
             "SELECT s.employee_id, s.hire_date_override, e.department "
-            "FROM scratch.s_sessabc123_onboarding AS s "
+            "FROM dbpcm_scratch.s_sessabc123_onboarding AS s "
             "JOIN analytics.employees AS e ON s.employee_id = e.employee_id "
             "WHERE e.status = 'A'"
         )
@@ -137,7 +137,7 @@ class TestD64ScratchOwnSessionPasses:
         """
         sql = (
             "SELECT hire_date_override, salary_adj "
-            "FROM scratch.s_sessxyz_compensation"
+            "FROM dbpcm_scratch.s_sessxyz_compensation"
         )
         result = _run_with_scope(sql, _FULL_SCOPE, session_id="sessxyz")
         assert result is not None
@@ -151,7 +151,7 @@ class TestD64ScratchCrossSessionRejected:
         # Table name has session prefix s_sessxyz789_ but caller is sessabc123.
         sql = (
             "SELECT s.employee_id, s.salary_adjustment, e.department "
-            "FROM scratch.s_sessxyz789_compensation AS s "
+            "FROM dbpcm_scratch.s_sessxyz789_compensation AS s "
             "JOIN analytics.employees AS e ON s.employee_id = e.employee_id "
             "WHERE e.status = 'A'"
         )
@@ -163,7 +163,7 @@ class TestD64ScratchCrossSessionRejected:
     def test_D64_scratch_different_session_rejected(self, mock_execute, mock_catalog):
         sql = (
             "SELECT employee_id "
-            "FROM scratch.s_sessother_onboarding"
+            "FROM dbpcm_scratch.s_sessother_onboarding"
         )
         with pytest.raises(ColumnScopeError) as exc_info:
             _run_with_scope(sql, _FULL_SCOPE, session_id="sessmine")
@@ -175,10 +175,10 @@ class TestD64ScratchParseFailClosed:
     """D64-scratch-parse-fail-closed — malformed scratch table name (non-prefixed) is fail-closed."""
 
     def test_D64_scratch_malformed_name_fail_closed(self, mock_execute, mock_catalog):
-        # scratch.compensation_export does not match s_<session_id>_<suffix> pattern.
+        # dbpcm_scratch.compensation_export does not match s_<session_id>_<suffix> pattern.
         sql = (
             "SELECT employee_id "
-            "FROM scratch.compensation_export"
+            "FROM dbpcm_scratch.compensation_export"
         )
         with pytest.raises(ColumnScopeError) as exc_info:
             _run_with_scope(sql, _FULL_SCOPE, session_id="sessabc123")
@@ -190,7 +190,7 @@ class TestD64ScratchParseFailClosed:
         """s_sessabc123_ with no suffix is also invalid."""
         # The provenance extractor requires a non-empty suffix after the extracted
         # session, so exactly `s_sessabc123_` with nothing after is rejected.
-        sql = "SELECT x FROM scratch.s_sessabc123_"
+        sql = "SELECT x FROM dbpcm_scratch.s_sessabc123_"
         with pytest.raises(ColumnScopeError) as exc_info:
             _run_with_scope(sql, _FULL_SCOPE, session_id="sessabc123")
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
@@ -214,7 +214,7 @@ class TestScratchNoSessionFailsClosedEvenScopeless:
         # the None session can never prove ownership and the read is rejected.
         sql = (
             "SELECT employee_id "
-            "FROM scratch.s_sessxyz_whatever"
+            "FROM dbpcm_scratch.s_sessxyz_whatever"
         )
         from app.principal import current_scope, current_session_id
         scope_token = current_scope.set(None)
@@ -241,7 +241,7 @@ class TestScratchNoSessionFailsClosedEvenScopeless:
         gate_off = Settings().model_copy(update={"require_session_scratch_gate": False})
         sql = (
             "SELECT employee_id "
-            "FROM scratch.s_sessxyz_whatever"
+            "FROM dbpcm_scratch.s_sessxyz_whatever"
         )
         from app.principal import current_scope, current_session_id
         scope_token = current_scope.set(None)
@@ -289,7 +289,7 @@ class TestScratchNoSessionFailsClosedEvenScopeless:
         """
         sql = (
             "SELECT hire_date_override "
-            "FROM scratch.s_sessabc_data"
+            "FROM dbpcm_scratch.s_sessabc_data"
         )
         with pytest.raises(ColumnScopeError) as exc_info:
             _run_with_scope(sql, _FULL_SCOPE, session_id=None)
@@ -312,7 +312,7 @@ class TestD64ScratchIsolationSurvivesAllowAll:
         """
         sql = (
             "SELECT s.hire_date_override, e.department "
-            "FROM scratch.s_sessotherxyz_onboarding AS s "
+            "FROM dbpcm_scratch.s_sessotherxyz_onboarding AS s "
             "JOIN analytics.employees AS e ON s.employee_id = e.employee_id "
             "WHERE e.status = 'A'"
         )

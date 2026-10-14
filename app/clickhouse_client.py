@@ -423,13 +423,8 @@ def execute_query(
         # DatabaseError covers syntax errors, unknown tables, type mismatches —
         # things the LLM can fix by rewriting the query.
         # Log the full detail server-side (safe; stays in logs, not the response).
-        logger.warning(
-            "ClickHouse query error host=%s port=%s db=%s: %s",
-            settings.clickhouse_host,
-            settings.clickhouse_port,
-            settings.clickhouse_database,
-            exc,
-        )
+        from app.error_logging import log_failure
+        log_failure(logger, "clickhouse.query", exc, code="CLICKHOUSE_QUERY_ERROR")
         # Forward a compacted ClickHouse error to the caller for LLM
         # self-correction: rewrite_clickhouse_error drops the echoed query and
         # version/URL noise and appends a code-specific fix hint (see
@@ -446,12 +441,8 @@ def execute_query(
         ) from exc
     except ClickHouseError as exc:
         # Broader ClickHouseError covers network / server problems.
-        logger.error(
-            "ClickHouse connectivity error host=%s port=%s: %s",
-            settings.clickhouse_host,
-            settings.clickhouse_port,
-            exc,
-        )
+        from app.error_logging import log_failure
+        log_failure(logger, "clickhouse.connect", exc, code="CLICKHOUSE_UNAVAILABLE")
         raise HTTPException(
             status_code=502,
             detail={

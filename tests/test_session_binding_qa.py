@@ -340,16 +340,16 @@ def _sse_result(resp) -> dict:
 
 class TestRejectionOrdering:
     """A mismatched binding is rejected in the middleware — before the tool
-    executes and before the D64 scratch extractor touches scratch."""
+    executes and before the D64 scratch extractor touches dbpcm_scratch."""
 
     def test_mismatch_rejected_before_tool_and_before_scratch_extractor(self):
         catalog = {"analytics.employees": {"employee_id": "UInt64"}}
         # Token bound to A; caller presents B and asks for a runQuery that WOULD
-        # otherwise reach the scratch extractor (references scratch.*).
+        # otherwise reach the scratch extractor (references dbpcm_scratch.*).
         token = make_jwt(
             column_scope=["analytics.employees.employee_id"], session_id=_VALID_UUID_A
         )
-        sql = "SELECT x FROM scratch.s_" + _VALID_UUID_B + "_secret"
+        sql = "SELECT x FROM dbpcm_scratch.s_" + _VALID_UUID_B + "_secret"
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -395,7 +395,7 @@ class TestRejectionOrdering:
 # claim does not hold for scratch references.
 #
 # CLOSED (D92, fix option b): `_validate_scratch_name(session_id=None)` now
-# fail-closes (raises SCRATCH_SESSION_VIOLATION) on any `scratch.*` reference,
+# fail-closes (raises SCRATCH_SESSION_VIOLATION) on any `dbpcm_scratch.*` reference,
 # in every SQL position (find_all(exp.Table)), instead of skipping the owner
 # check — so a bound token cannot read another session's scratch by omitting
 # the header. Option (a) was rejected: it would forbid the legitimate no-header
@@ -414,7 +414,7 @@ class TestOmitHeaderBypass:
             column_scope=["analytics.employees.employee_id"], session_id=_VALID_UUID_A
         )
         # ...and targets the VICTIM's (session B) scratch table.
-        victim_scratch = "scratch.s_" + _VALID_UUID_B + "_payroll"
+        victim_scratch = "dbpcm_scratch.s_" + _VALID_UUID_B + "_payroll"
         sql = f"SELECT secret_col FROM {victim_scratch}"
         payload = {
             "jsonrpc": "2.0",

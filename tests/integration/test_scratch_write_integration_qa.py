@@ -7,7 +7,7 @@ angles that file does not cover:
 
   * WAREHOUSE CONFINEMENT BY CODE (not just grant): under the *fallback* full-grant
     credential (SCRATCH_CH_* unset), a normal materialize creates an object ONLY in
-    the `scratch` database — never in any warehouse database — proving the code is a
+    the `dbpcm_scratch` database — never in any warehouse database — proving the code is a
     wall independent of the ClickHouse grant.
   * ROWS-AS-DATA round-trip for the nastiest cells: NUL byte, unicode/RTL, and a
     1 MB string survive create→read verbatim (never parsed as SQL).
@@ -70,7 +70,7 @@ def admin():
 def scratch_settings():
     """Fallback creds: SCRATCH_CH_* unset → the scratch client IS the full-grant
     'default' account.  This is the deploy where the GRANT is NOT the wall, so these
-    tests exercise the *code* wall (confine to scratch.*)."""
+    tests exercise the *code* wall (confine to dbpcm_scratch.*)."""
     from app.config import Settings
 
     return Settings(
@@ -83,7 +83,7 @@ def scratch_settings():
         oidc_issuer="https://idp.test/",
         oidc_audience="clickhouse-api",
         public_base_url="https://test.example.com",
-        scratch_database="scratch",
+        scratch_database="dbpcm_scratch",
         scratch_ttl_seconds=3600,
         scratch_max_rows=10_000,
     )
@@ -94,7 +94,7 @@ def _sid() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Code (not grant) confines writes to scratch.* — proven under fallback creds
+# Code (not grant) confines writes to dbpcm_scratch.* — proven under fallback creds
 # ---------------------------------------------------------------------------
 
 
@@ -102,7 +102,7 @@ def _sid() -> str:
 class TestCodeConfinesToScratchUnderFallbackCreds:
     def test_materialize_creates_object_only_in_scratch(self, admin, scratch_settings):
         """Even with the full-grant fallback credential, a materialize lands the new
-        table in `scratch` and NOWHERE else (system.tables proves the database)."""
+        table in `dbpcm_scratch` and NOWHERE else (system.tables proves the database)."""
         from app import scratch_ingest
 
         session_id = _sid()
@@ -116,9 +116,9 @@ class TestCodeConfinesToScratchUnderFallbackCreds:
                 parameters={"n": bare},
             ).result_rows
             dbs = {r[0] for r in rows}
-            assert dbs == {"scratch"}, f"table appeared outside scratch: {dbs}"
+            assert dbs == {"dbpcm_scratch"}, f"table appeared outside scratch: {dbs}"
         finally:
-            admin.command(f"DROP TABLE IF EXISTS scratch.`{bare}`")
+            admin.command(f"DROP TABLE IF EXISTS dbpcm_scratch.`{bare}`")
 
     def test_hostile_column_name_creates_no_object_anywhere(self, admin, scratch_settings):
         """A DDL-injecting column name is rejected — and NO object (scratch or
@@ -169,14 +169,14 @@ class TestHostileCellsRoundTrip:
             got = {
                 r[0]: r[1]
                 for r in admin.query(
-                    f"SELECT k, s FROM scratch.`{bare}` ORDER BY k"
+                    f"SELECT k, s FROM dbpcm_scratch.`{bare}` ORDER BY k"
                 ).result_rows
             }
             assert got[1] == nul  # NUL byte preserved verbatim in String storage
             assert got[2] == uni
             assert len(got[3]) == len(big)
         finally:
-            admin.command(f"DROP TABLE IF EXISTS scratch.`{bare}`")
+            admin.command(f"DROP TABLE IF EXISTS dbpcm_scratch.`{bare}`")
 
     def test_wrong_type_cell_lands_as_null(self, admin, scratch_settings):
         """PINNED: a non-numeric string for an Int64 column coerces to NULL (the row
@@ -195,12 +195,12 @@ class TestHostileCellsRoundTrip:
             # k is non-nullable Int64 → coerced None becomes ClickHouse default 0;
             # v is Nullable(Int64) → coerced None stays NULL.
             row = admin.query(
-                f"SELECT k, isNull(v) FROM scratch.`{bare}`"
+                f"SELECT k, isNull(v) FROM dbpcm_scratch.`{bare}`"
             ).result_rows[0]
             assert row[0] == 0
             assert row[1] == 1
         finally:
-            admin.command(f"DROP TABLE IF EXISTS scratch.`{bare}`")
+            admin.command(f"DROP TABLE IF EXISTS dbpcm_scratch.`{bare}`")
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +227,7 @@ class TestHiddenTtlColumn:
                 r[0]
                 for r in admin.query(
                     "SELECT name FROM system.columns "
-                    "WHERE database='scratch' AND table={t:String}",
+                    "WHERE database='dbpcm_scratch' AND table={t:String}",
                     parameters={"t": bare},
                 ).result_rows
             }
@@ -240,7 +240,7 @@ class TestHiddenTtlColumn:
             sess_token = current_session_id.set(session_id)
             try:
                 out = service.run_query(
-                    f"SELECT k FROM scratch.`{bare}` ORDER BY k",
+                    f"SELECT k FROM dbpcm_scratch.`{bare}` ORDER BY k",
                     settings=scratch_settings,
                 )
                 assert out["columns"] == ["k"]
@@ -253,7 +253,7 @@ class TestHiddenTtlColumn:
 
                 try:
                     star = service.run_query(
-                        f"SELECT * FROM scratch.`{bare}`", settings=scratch_settings
+                        f"SELECT * FROM dbpcm_scratch.`{bare}`", settings=scratch_settings
                     )
                 except (ColumnScopeError, Exception):  # noqa: BLE001
                     star = None
@@ -265,4 +265,4 @@ class TestHiddenTtlColumn:
                 current_scope.reset(scope_token)
                 current_session_id.reset(sess_token)
         finally:
-            admin.command(f"DROP TABLE IF EXISTS scratch.`{bare}`")
+            admin.command(f"DROP TABLE IF EXISTS dbpcm_scratch.`{bare}`")

@@ -8,7 +8,7 @@ invariants structurally:
   #4  rows are native-inserted (data=), never string-interpolated into SQL;
   #5  the write route is NOT an MCP tool (absent from list_tools);
   #6  an oversized result fails closed (SCRATCH_TOO_LARGE);
-  scratch-only-schema: every DDL targets the `scratch` database;
+  scratch-only-schema: every DDL targets the `dbpcm_scratch` database;
   identifier/type whitelist: hostile column names/types are rejected.
 
 Endpoint-level tests drive the real custom route behind JWTAuthMiddleware (so the
@@ -180,9 +180,9 @@ class TestColumnValidation:
 class TestScratchDDL:
     def test_ddl_targets_scratch_and_has_ttl(self):
         ddl = build_scratch_create_sql(
-            "scratch", "s_sess_x_bp_abc", [{"name": "k", "type": "Int64"}], 3600
+            "dbpcm_scratch", "s_sess_x_bp_abc", [{"name": "k", "type": "Int64"}], 3600
         )
-        assert "`scratch`.`s_sess_x_bp_abc`" in ddl
+        assert "`dbpcm_scratch`.`s_sess_x_bp_abc`" in ddl
         assert "ENGINE = MergeTree" in ddl
         assert "TTL `_scratch_created_at` + INTERVAL 3600 SECOND" in ddl
 
@@ -196,7 +196,7 @@ class TestScratchDDL:
     def test_ddl_single_node_default_has_no_cluster_clause(self):
         # Default (cluster="") must be byte-for-byte the original node-local shape.
         ddl = build_scratch_create_sql(
-            "scratch", "s_sess_x_bp_abc", [{"name": "k", "type": "Int64"}], 3600
+            "dbpcm_scratch", "s_sess_x_bp_abc", [{"name": "k", "type": "Int64"}], 3600
         )
         assert "ENGINE = MergeTree" in ddl
         assert "ON CLUSTER" not in ddl
@@ -204,7 +204,7 @@ class TestScratchDDL:
 
     def test_ddl_cluster_mode_is_replicated_on_cluster(self):
         ddl = build_scratch_create_sql(
-            "scratch",
+            "dbpcm_scratch",
             "s_sess_x_bp_abc",
             [{"name": "k", "type": "Int64"}],
             3600,
@@ -212,11 +212,11 @@ class TestScratchDDL:
             replica_path_prefix="/clickhouse/tables/{shard}",
             replica_name="{replica}",
         )
-        assert "`scratch`.`s_sess_x_bp_abc` ON CLUSTER 'my_cluster'" in ddl
+        assert "`dbpcm_scratch`.`s_sess_x_bp_abc` ON CLUSTER 'my_cluster'" in ddl
         # Keeper path is <prefix>/<db>/<table>, unique per uuid table name.
         assert (
             "ENGINE = ReplicatedMergeTree("
-            "'/clickhouse/tables/{shard}/scratch/s_sess_x_bp_abc', '{replica}')"
+            "'/clickhouse/tables/{shard}/dbpcm_scratch/s_sess_x_bp_abc', '{replica}')"
         ) in ddl
         assert "TTL `_scratch_created_at` + INTERVAL 3600 SECOND" in ddl
 
@@ -234,7 +234,7 @@ class TestScratchDDL:
         kwargs[field] = "x' , 'y"  # would break out of the single-quoted literal
         with pytest.raises(ScratchWriteError) as exc:
             build_scratch_create_sql(
-                "scratch",
+                "dbpcm_scratch",
                 "s_sess_x_bp_abc",
                 [{"name": "k", "type": "Int64"}],
                 3600,
@@ -258,13 +258,13 @@ class TestMaterialize:
             settings,
         )
         # name derived from session, scratch-qualified
-        assert res["table"].startswith("scratch.s_sessabc123_bp_")
+        assert res["table"].startswith("dbpcm_scratch.s_sessabc123_bp_")
         assert res["row_count"] == 2
 
         # exactly one native insert; rows passed as data=, hostile cell verbatim
         assert len(fake_client.inserts) == 1
         ins = fake_client.inserts[0]
-        assert ins["database"] == "scratch"
+        assert ins["database"] == "dbpcm_scratch"
         assert ins["column_names"] == ["k", "note"]
         assert ins["data"] == [[1, hostile], [2, "b"]]
 
@@ -276,8 +276,8 @@ class TestMaterialize:
         # every DDL command targets the scratch schema only
         create_db = [c for c in fake_client.commands if c.upper().startswith("CREATE DATABASE")]
         create_tbl = [c for c in fake_client.commands if c.upper().startswith("CREATE TABLE")]
-        assert create_db and "scratch" in create_db[0]
-        assert create_tbl and "`scratch`.`s_sessabc123_bp_" in create_tbl[0]
+        assert create_db and "dbpcm_scratch" in create_db[0]
+        assert create_tbl and "`dbpcm_scratch`.`s_sessabc123_bp_" in create_tbl[0]
         assert fake_client.closed is True
 
     def test_body_cannot_override_table_name(self, fake_client, settings):
@@ -285,11 +285,11 @@ class TestMaterialize:
         # extra keys in a column dict they cannot influence the derived name.
         res = scratch_ingest.materialize(
             "sessowner",
-            [{"name": "k", "type": "Int64", "table": "scratch.s_victim_bp_x"}],
+            [{"name": "k", "type": "Int64", "table": "dbpcm_scratch.s_victim_bp_x"}],
             [[1]],
             settings,
         )
-        assert res["table"].startswith("scratch.s_sessowner_bp_")
+        assert res["table"].startswith("dbpcm_scratch.s_sessowner_bp_")
         assert "victim" not in res["table"]
 
     def test_oversized_result_fails_closed(self, fake_client, settings):
@@ -339,12 +339,12 @@ _HEX = "0123456789abcdef0123456789abcdef"  # a valid 32-char bp_ suffix body
 class TestDrop:
     def test_bare_name_own_session(self):
         name = f"s_sess_me_bp_{_HEX}"
-        assert _bare_scratch_name(f"scratch.{name}", "sess_me") == name
+        assert _bare_scratch_name(f"dbpcm_scratch.{name}", "sess_me") == name
         assert _bare_scratch_name(name, "sess_me") == name
 
     def test_cross_session_drop_rejected(self):
         with pytest.raises(ScratchWriteError) as e:
-            _bare_scratch_name(f"scratch.s_sess_other_bp_{_HEX}", "sess_me")
+            _bare_scratch_name(f"dbpcm_scratch.s_sess_other_bp_{_HEX}", "sess_me")
         assert e.value.code == "SCRATCH_SESSION_VIOLATION"
         assert e.value.status_code == 403
 
@@ -357,11 +357,11 @@ class TestDrop:
         """
         neighbor = f"s_a_b_bp_{_HEX}"  # owned by session "a_b"
         with pytest.raises(ScratchWriteError) as e:
-            _bare_scratch_name(f"scratch.{neighbor}", "a")  # bound to session "a"
+            _bare_scratch_name(f"dbpcm_scratch.{neighbor}", "a")  # bound to session "a"
         assert e.value.code == "SCRATCH_SESSION_VIOLATION"
         assert e.value.status_code == 403
         # ...and the true owner ("a_b") CAN drop it.
-        assert _bare_scratch_name(f"scratch.{neighbor}", "a_b") == neighbor
+        assert _bare_scratch_name(f"dbpcm_scratch.{neighbor}", "a_b") == neighbor
 
     def test_malformed_suffix_rejected(self):
         # own prefix but not a bp_<32hex> shape materialize could have produced
@@ -372,15 +372,15 @@ class TestDrop:
 
     def test_drop_targets_scratch_schema(self, fake_client, settings):
         name = f"s_sess_me_bp_{_HEX}"
-        res = scratch_ingest.drop("sess_me", f"scratch.{name}", settings)
+        res = scratch_ingest.drop("sess_me", f"dbpcm_scratch.{name}", settings)
         assert res == {"dropped": True}
         assert len(fake_client.commands) == 1
-        assert f"`scratch`.`{name}`" in fake_client.commands[0]
+        assert f"`dbpcm_scratch`.`{name}`" in fake_client.commands[0]
         assert fake_client.commands[0].upper().startswith("DROP TABLE IF EXISTS")
 
     def test_drop_cross_session_never_touches_ch(self, fake_client, settings):
         with pytest.raises(ScratchWriteError):
-            scratch_ingest.drop("sess_me", f"scratch.s_sess_other_bp_{_HEX}", settings)
+            scratch_ingest.drop("sess_me", f"dbpcm_scratch.s_sess_other_bp_{_HEX}", settings)
         assert fake_client.commands == []
 
 
@@ -424,7 +424,7 @@ class TestClusterMode:
 
     def test_drop_is_on_cluster(self, fake_client, cluster_settings):
         name = f"s_sess_me_bp_{_HEX}"
-        scratch_ingest.drop("sess_me", f"scratch.{name}", cluster_settings)
+        scratch_ingest.drop("sess_me", f"dbpcm_scratch.{name}", cluster_settings)
         assert fake_client.commands[0].upper().startswith("DROP TABLE IF EXISTS")
         assert "ON CLUSTER 'prod_cluster'" in fake_client.commands[0]
 
@@ -494,18 +494,18 @@ class TestMaterializeRoute:
             },
             json={
                 # A body attempt to name a foreign table/session is IGNORED.
-                "table": "scratch.s_victim_bp_x",
+                "table": "dbpcm_scratch.s_victim_bp_x",
                 "session_id": "sessvictim",
                 "columns": [{"name": "k", "type": "Int64"}],
                 "rows": [[1]],
             },
         )
         assert resp.status_code == 200
-        assert resp.json()["table"].startswith("scratch.s_sessowner_bp_")
+        assert resp.json()["table"].startswith("dbpcm_scratch.s_sessowner_bp_")
         assert "victim" not in resp.json()["table"]
         # the DDL executed against the fake client targets the owner's namespace
         create = [c for c in fc.commands if c.upper().startswith("CREATE TABLE")]
-        assert create and "`scratch`.`s_sessowner_bp_" in create[0]
+        assert create and "`dbpcm_scratch`.`s_sessowner_bp_" in create[0]
         assert "victim" not in create[0]
 
     def test_service_error_maps_to_code(self):
@@ -533,7 +533,7 @@ class TestDropRoute:
                 "Authorization": f"Bearer {make_jwt(session_id='sessowner')}",
                 "X-Session-Id": "sessowner",
             },
-            json={"table": "scratch.s_sessvictim_bp_x"},
+            json={"table": "dbpcm_scratch.s_sessvictim_bp_x"},
         )
         assert resp.status_code == 403
         assert resp.json()["code"] == "SCRATCH_SESSION_VIOLATION"

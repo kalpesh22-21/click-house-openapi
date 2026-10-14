@@ -57,7 +57,7 @@ import hmac
 import json
 import logging
 import sys
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 import anyio
 import uvicorn
@@ -71,7 +71,6 @@ from starlette.responses import JSONResponse
 
 from app.auth_jwt import JWTAuthError, validate_token
 from app.config import get_settings
-from app.principal import current_principal, current_scope, current_session_id
 from app.corpus.export import build_blueprints_export, build_knowledge_export
 from app.errors import (
     ArgumentValidationError,
@@ -85,16 +84,28 @@ from app.errors import (
     TableNotAllowedError,
     TableNotFoundError,
 )
+from app.principal import current_principal, current_scope, current_session_id
 from app.semantic_catalog.export import build_catalog_export
-from app.session_binding import sid_hash_matches
 from app.service import (
     explain_query as svc_explain_query,
+)
+from app.service import (
     get_table_schema as svc_get_table_schema,
+)
+from app.service import (
     list_databases as svc_list_databases,
+)
+from app.service import (
     list_tables as svc_list_tables,
+)
+from app.service import (
     run_query as svc_run_query,
+)
+from app.service import (
     sample_rows as svc_sample_rows,
 )
+from app.session_binding import sid_hash_matches
+from app.trino_metadata import discovery_memo
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +119,8 @@ settings = get_settings()
 # startup; restart the server after changing TRINO_ENABLED.
 _SQL_GUIDANCE = (
     "Execution backend: Trino (federated MySQL and ClickHouse). "
+    "Queries using only ClickHouse-source tables execute directly in ClickHouse, "
+    "including native aggregates; MySQL and mixed-source queries execute in Trino. "
     "The API input dialect remains ClickHouse-compatible SQL; the server translates "
     "supported queries to Trino. This is not an unrestricted native-Trino SQL endpoint. "
     "Prefer portable SELECT/WITH SQL, COUNT(*), and single-quoted string literals. "
@@ -170,6 +183,8 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
     ToolError messages are returned to the LLM as tool error content so the
     model can self-correct (e.g. fix bad SQL, choose an allowed database).
     """
+    from app.error_logging import log_failure
+    log_failure(logger, "mcp.tool", exc)
     if isinstance(exc, QueryValidationError):
         if exc.code == "INVALID_COLUMN_REFERENCE":
             return ToolError(f"[{exc.code}] {exc.message}")
@@ -208,9 +223,13 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
         retry = "Apply the hint, then retry." if "Hint:" in exc.message else "Fix the SQL, then retry."
         return ToolError(f"[{exc.code}] {exc.message} {retry}")
     if isinstance(exc, ClickHouseUnavailableError):
+        # Backend-correct guidance: the TRINO_* code is stamped at raise time, so
+        # prefix-matching it stays right even if trino_enabled flips between
+        # import and error (it decorates TRINO_DISCOVERY_UNAVAILABLE / TRINO_UNAVAILABLE).
+        backend = "Trino" if exc.code.startswith("TRINO_") else "ClickHouse"
         return ToolError(
             f"[{exc.code}] {exc.message}. "
-            "The ClickHouse server is temporarily unreachable."
+            f"The {backend} server is temporarily unreachable."
         )
     if isinstance(exc, ColumnScopeError):
         # Forward the service-layer message verbatim: it is an author-controlled
@@ -233,7 +252,6 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
     # Log full detail server-side so operators can investigate, but return a
     # generic message to the LLM to avoid leaking internal stack traces or
     # implementation details to clients.
-    logger.exception("Unexpected error in MCP tool: %s", exc)
     return ToolError("An internal error occurred.")
 
 
@@ -340,7 +358,7 @@ def get_table_schema(
     database: Annotated[str, Field(description="The database containing the table")],
     table: Annotated[str, Field(description="The table to describe")],
     columns: Annotated[
-        Optional[list[str]],
+        list[str] | None,
         Field(
             description=(
                 "Optional: return only these columns, with their full documentation. "
@@ -423,7 +441,7 @@ def run_query(
         ),
     ],
     limit: Annotated[
-        Optional[int],
+        int | None,
         Field(
             description=(
                 "Optional row limit (1–10000). "
@@ -494,7 +512,7 @@ SESSION_ID_HEADER = "x-session-id"
 SERVICE_KEY_HEADER = "x-service-key"
 
 
-def _bearer_from_scope(scope: dict[str, Any]) -> Optional[str]:
+def _bearer_from_scope(scope: dict[str, Any]) -> str | None:
     """Extract the Bearer token from an ASGI scope, or None if absent/malformed."""
     for name, value in scope.get("headers", []):
         if name == b"authorization":
@@ -506,7 +524,7 @@ def _bearer_from_scope(scope: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _session_id_from_scope(scope: dict[str, Any]) -> Optional[str]:
+def _session_id_from_scope(scope: dict[str, Any]) -> str | None:
     """Extract the X-Session-Id header from an ASGI scope, or None if absent/empty."""
     target = SESSION_ID_HEADER.encode("latin-1")
     for name, value in scope.get("headers", []):
@@ -516,7 +534,7 @@ def _session_id_from_scope(scope: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _service_key_from_scope(scope: dict[str, Any]) -> Optional[str]:
+def _service_key_from_scope(scope: dict[str, Any]) -> str | None:
     """Extract the X-Service-Key header from an ASGI scope, or None if absent/empty."""
     target = SERVICE_KEY_HEADER.encode("latin-1")
     for name, value in scope.get("headers", []):
@@ -531,13 +549,16 @@ async def _send_json_response(
     status_code: int,
     payload: dict[str, Any],
     *,
-    www_authenticate: Optional[str] = None,
+    www_authenticate: str | None = None,
 ) -> None:
     """Emit a complete JSON ASGI response (used for auth rejections).
 
     *www_authenticate*, when given, is the full ``WWW-Authenticate`` header value
     (e.g. ``Bearer resource_metadata="…"``) sent verbatim.
     """
+    if status_code >= 400:
+        from app.error_logging import log_failure
+        log_failure(logger, "mcp.http", code=payload.get("code", "HTTP_ERROR"), status=status_code)
     body = json.dumps(payload).encode("utf-8")
     headers = [
         (b"content-type", b"application/json"),
@@ -552,8 +573,8 @@ async def _send_json_response(
 def _www_authenticate(
     settings,
     *,
-    error: Optional[str] = None,
-    description: Optional[str] = None,
+    error: str | None = None,
+    description: str | None = None,
 ) -> str:
     """Build an RFC 6750 / RFC 9728 ``WWW-Authenticate: Bearer`` challenge.
 
@@ -604,9 +625,11 @@ class JWTAuthMiddleware:
         app,
         settings,
         # All three health routes are unauthenticated so k8s probes (and manual
-        # checks) reach them without a token: /health/live (liveness),
-        # /health/ready (readiness), and the legacy combined /health. Matching is
-        # exact (see __call__), so each split path must be listed explicitly.
+        # checks) reach them without a token: /health/ready (drives BOTH the
+        # liveness and readiness probes), /health/live (not wired to any
+        # probe — manual checks / rollback toggle only), and the legacy
+        # combined /health. Matching is exact (see __call__), so each split
+        # path must be listed explicitly.
         public_paths: tuple[str, ...] = ("/health", "/health/live", "/health/ready"),
     ) -> None:
         self.app = app
@@ -756,9 +779,18 @@ class JWTAuthMiddleware:
         ctx_token = current_principal.set(principal)
         scope_token = current_scope.set(principal.column_scope)
         session_token = current_session_id.set(session_id_value)
+        # Per-request Trino discovery memo (app.trino_metadata.discovery_memo):
+        # bound HERE, beside the principal, so one MCP request pays for one live
+        # discovery sweep instead of up to three (scoped getTableSchema /
+        # sampleRows / runQuery all rediscovering identical metadata). MCP-only:
+        # REST requests are never scope-bound, so they already pay at most one
+        # discovery per call — memoizing them would force narrow reads into a
+        # full-catalog sweep with no redundancy to reclaim.
+        memo_token = discovery_memo.set({})
         try:
             await self.app(scope, receive, send)
         finally:
+            discovery_memo.reset(memo_token)
             current_principal.reset(ctx_token)
             current_scope.reset(scope_token)
             current_session_id.reset(session_token)
@@ -767,43 +799,101 @@ class JWTAuthMiddleware:
 # ---------------------------------------------------------------------------
 # Health endpoints (HTTP transport only)
 # ---------------------------------------------------------------------------
-# Split by concern so a slow or unreachable ClickHouse can NEVER cycle the MCP
-# pod and hard-drop live MCP client connections:
+# Split by concern so ClickHouse trouble flaps the MCP pod as little as
+# possible: a slow or unreachable backend only pulls the pod from the Service
+# (readiness) WITHOUT restarting it, and a restart happens ONLY on sustained
+# backend failure (liveness, ~3 min) — a deliberate trade to clear wedged
+# connection state at the cost of in-flight MCP streams on that pod:
 #
-#   /health/live   liveness  — process-alive ONLY, no ClickHouse I/O. A ClickHouse
-#                              blip must not restart the server, because a restart
-#                              hard-drops every in-flight MCP stream on the pod.
-#   /health/ready  readiness — reports ClickHouse reachability; an unreachable
-#                              backend makes the pod NotReady (pulled from the
-#                              Service) but does NOT restart it. Existing streams
-#                              on the pod survive; only new routing stops.
-#   /health        legacy    — full status, always 200, kept for manual checks /
-#                              REST parity with app/routers/health.py.
+#   /health/live   process-alive ONLY, no ClickHouse I/O. Not wired to any
+#                  probe in the MCP-mode chart — liveness deliberately uses
+#                  /health/ready. Kept for manual checks and as a code-free
+#                  toggle back to process-only liveness.
+#   /health/ready  ClickHouse reachability via SELECT 1; drives BOTH probes:
+#                  readiness (10s x 3) pulls the pod from the Service on blips
+#                  without restarting it; liveness (60s x 3) restarts the pod
+#                  after ~3 min of sustained backend failure to clear wedged
+#                  connection state (dropping in-flight streams — deliberate).
+#   /health        legacy — full status, always 200, kept for manual checks /
+#                  REST parity with app/routers/health.py.
 #
-# CRITICAL (why this ever mattered): the ClickHouse ping is BLOCKING (sync
-# urllib3). These routes run on the uvicorn event loop, so calling ping() inline
-# freezes the loop for the whole round-trip — stalling every concurrent MCP
-# request on the pod and, when ClickHouse is slow (e.g. behind CHProxy with a
-# stale pooled socket forcing a TLS reconnect), blowing past the probe
-# timeoutSeconds so k8s marks the pod NotReady / restarts it and clients see a
-# disconnect. We therefore run ping() in a worker thread AND cap it with a cancel
-# scope so the route always answers well inside the probe timeout.
+# CRITICAL (why this ever mattered): ClickHouse connectivity checks are BLOCKING
+# sync I/O (urllib3). These routes run on the uvicorn event loop, so calling
+# them inline freezes the loop for the whole round-trip — stalling every
+# concurrent MCP request on the pod and, when ClickHouse is slow (e.g. behind
+# CHProxy with a stale pooled socket forcing a TLS reconnect), blowing past the
+# probe timeoutSeconds so k8s marks the pod NotReady / restarts it and clients
+# see a disconnect. We therefore run all ClickHouse I/O in a worker thread AND
+# cap it with a cancel scope so the route always answers well inside the probe
+# timeout.
+#
+# /health/ready specifically runs a lightweight ``SELECT 1`` through the cached
+# singleton client, NOT clickhouse_connect.ping(). Some CHProxy/user
+# configurations reject ClickHouse's native ``/ping`` HTTP endpoint (403) even
+# though real ``/query`` requests work, so a successful query is the only correct
+# readiness signal.
 
-# Upper bound on the readiness ping before we report "error". Kept below the
+# Upper bound on the health check before we report "error". Kept below the
 # readiness probe's timeoutSeconds (3s) so the HTTP response always beats the
 # probe deadline even when the backend is hung.
-_HEALTH_PING_TIMEOUT_S = 2.0
+_HEALTH_CHECK_TIMEOUT_S = 2.0
+
+
+def _clickhouse_health_check() -> bool:
+    """Run a lightweight ``SELECT 1`` against the process-wide cached client.
+
+    A single stale-socket retry matches ``app.clickhouse_client.ping()``'s
+    resilience: the singleton urllib3 pool may hand us a connection that the
+    proxy closed while idle, and the first failure evicts it so the second
+    attempt uses a fresh socket.  ``get_client()`` is fetched on every retry so
+    a client-construction failure is also treated as a transient/back-end
+    failure instead of surfacing as a 500.  Failures are logged at ERROR without exception text; the broad ``except`` is
+    confined to this health helper.
+    """
+    for _ in range(2):
+        try:
+            from app.clickhouse_client import get_client
+
+            get_client().query("SELECT 1")
+            return True
+        except Exception as exc:  # noqa: BLE001
+            from app.error_logging import log_failure
+            log_failure(logger, "clickhouse.readiness", exc, code="CLICKHOUSE_UNAVAILABLE")
+    return False
 
 
 async def _clickhouse_ok() -> bool:
-    """Return ClickHouse reachability without ever blocking the event loop.
+    """Return active-backend reachability without blocking the event loop.
 
-    ping() is synchronous blocking I/O, so it runs in a worker thread. A cancel
-    scope caps the wait at ``_HEALTH_PING_TIMEOUT_S``: if the backend is hung
+    The synchronous ``client.query()`` call runs in a worker thread. A cancel
+    scope caps the wait at ``_HEALTH_CHECK_TIMEOUT_S``: if the backend is hung
     (e.g. a blackholed keep-alive socket behind CHProxy), the scope fires, we
     report False, and the orphaned worker thread is abandoned to unwind on its
     own socket timeout (``abandon_on_cancel=True``) instead of holding up the
     probe response.
+    """
+    check = _clickhouse_health_check
+    if get_settings().trino_enabled:
+        from app.trino_client import ping
+
+        check = ping
+    ok = False
+    with anyio.move_on_after(_HEALTH_CHECK_TIMEOUT_S):
+        ok = await anyio.to_thread.run_sync(
+            check, abandon_on_cancel=True
+        )
+    if not ok:
+        from app.error_logging import log_failure
+        log_failure(logger, "mcp.readiness", code="BACKEND_UNAVAILABLE")
+    return ok
+
+
+async def _clickhouse_ping_ok() -> bool:
+    """Legacy ClickHouse reachability check using ``clickhouse_connect.ping()``.
+
+    The legacy combined ``/health`` endpoint keeps using ``ping()`` for backward
+    compatibility. Like ``_clickhouse_ok()``, ping() is synchronous blocking I/O,
+    so it runs in a worker thread bounded by ``_HEALTH_CHECK_TIMEOUT_S``.
     """
     from app.clickhouse_client import ping
 
@@ -811,17 +901,16 @@ async def _clickhouse_ok() -> bool:
         from app.trino_client import ping
 
     ok = False
-    with anyio.move_on_after(_HEALTH_PING_TIMEOUT_S):
-        # ping() takes NO arguments so it reuses the process-wide cached singleton
-        # client; passing settings would rebuild (and re-log) a client per probe.
+    with anyio.move_on_after(_HEALTH_CHECK_TIMEOUT_S):
         ok = await anyio.to_thread.run_sync(ping, abandon_on_cancel=True)
     return ok
 
 
 @mcp.custom_route("/health/live", methods=["GET"])
 async def health_live(request: Request) -> JSONResponse:
-    """Liveness: the process is up and serving. Deliberately no ClickHouse check —
-    a backend outage must never restart the MCP server."""
+    """Process-alive check (no ClickHouse I/O). Not wired to any probe in the
+    MCP-mode chart; retained for manual checks and as a rollback toggle to
+    process-only liveness."""
     return JSONResponse({"status": "ok", "transport": "http"})
 
 
@@ -851,13 +940,13 @@ async def health_check(request: Request) -> JSONResponse:
     """Legacy combined health endpoint (manual checks / REST parity).
 
     Always 200 with ClickHouse status in the body, for backward compatibility
-    with anything still probing /health. Kubernetes liveness/readiness now use the
-    split /health/live and /health/ready routes above. Like those, the ClickHouse
-    ping runs off the event loop so this never blocks the MCP server.
+    with anything still probing /health. Kubernetes liveness and readiness both
+    probe /health/ready above. Like those, the ClickHouse I/O runs off the
+    event loop so this never blocks the MCP server.
 
     Does NOT require authentication.
     """
-    ch_ok = await _clickhouse_ok()
+    ch_ok = await _clickhouse_ping_ok()
     return JSONResponse(
         {
             "status": "ok",
@@ -989,12 +1078,16 @@ if settings.mcp_path not in ("", "/"):
 # app.scratch_ingest.  Row cells are native-bulk-inserted as DATA (invariant #4).
 # ---------------------------------------------------------------------------
 
-from app.scratch_ingest import (  # noqa: E402
+from app.scratch_ingest import (
     ScratchWriteError,
+)
+from app.scratch_ingest import (
     drop as scratch_drop,
+)
+from app.scratch_ingest import (
     materialize as scratch_materialize,
 )
-from app.upload_ingest import (  # noqa: E402
+from app.upload_ingest import (
     UploadMappingError,
     UploadParseError,
     UploadTooLargeError,
@@ -1005,6 +1098,8 @@ from app.upload_ingest import (  # noqa: E402
 
 def _scratch_error(status_code: int, code: str, message: str) -> JSONResponse:
     """Consistent JSON error shape for the scratch routes."""
+    from app.error_logging import log_failure
+    log_failure(logger, "mcp.scratch", code=code, status=status_code)
     return JSONResponse({"error": message, "code": code}, status_code=status_code)
 
 
@@ -1045,8 +1140,8 @@ async def scratch_materialize_route(request: Request) -> JSONResponse:
         )
     except ScratchWriteError as exc:
         return _scratch_error(exc.status_code, exc.code, exc.message)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("scratch materialize failed: %s", exc)
+    except Exception as exc:  # noqa: BLE001 — sanitized response boundary
+        logger.error("scratch materialize failed: failure_class=%s", type(exc).__name__)
         return _scratch_error(
             500, "SCRATCH_MATERIALIZE_REJECTED", "An internal error occurred."
         )
@@ -1079,8 +1174,8 @@ async def scratch_drop_route(request: Request) -> JSONResponse:
         )
     except ScratchWriteError as exc:
         return _scratch_error(exc.status_code, exc.code, exc.message)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("scratch drop failed: %s", exc)
+    except Exception as exc:  # noqa: BLE001 — sanitized response boundary
+        logger.error("scratch drop failed: failure_class=%s", type(exc).__name__)
         return _scratch_error(500, "SCRATCH_MATERIALIZE_REJECTED", "An internal error occurred.")
     return JSONResponse(result)
 
@@ -1171,7 +1266,7 @@ async def _read_upload_part(request: Request, max_bytes: int) -> tuple[bytes, st
                 "Uploaded file exceeds the maximum allowed size."
             ) from exc
         raise UploadParseError("Request must be multipart/form-data.") from exc
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise UploadParseError("Request must be multipart/form-data.") from exc
     upload = form.get("file")
     if upload is None or not hasattr(upload, "read"):
@@ -1217,8 +1312,8 @@ async def scratch_analyze_route(request: Request) -> JSONResponse:
         return _scratch_error(exc.status_code, exc.code, exc.message)
     except UploadParseError as exc:
         return _scratch_error(400, "UPLOAD_PARSE_ERROR", exc.message)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("upload analyze failed: %s", exc)
+    except Exception as exc:  # noqa: BLE001 — sanitized response boundary
+        logger.error("upload analyze failed: failure_class=%s", type(exc).__name__)
         return _scratch_error(500, "UPLOAD_PARSE_ERROR", "An internal error occurred.")
     return JSONResponse(
         {
@@ -1279,8 +1374,8 @@ async def scratch_upload_route(request: Request) -> JSONResponse:
         return _scratch_error(400, "UPLOAD_PARSE_ERROR", exc.message)
     except UploadMappingError as exc:
         return _scratch_error(400, "UPLOAD_MAPPING_INVALID", exc.message)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("upload failed: %s", exc)
+    except Exception as exc:  # noqa: BLE001 — sanitized response boundary
+        logger.error("upload failed: failure_class=%s", type(exc).__name__)
         return _scratch_error(500, "SCRATCH_MATERIALIZE_REJECTED", "An internal error occurred.")
     return JSONResponse(result)
 
@@ -1316,8 +1411,8 @@ async def _run_http() -> None:
     starlette_app = mcp.streamable_http_app()
 
     # Wrap with the JWT auth middleware so every request requires a valid token.
-    # /health is exempted by default so Kubernetes liveness/readiness probes work
-    # without credentials.
+    # The health routes are exempted by default so the Kubernetes probes (both
+    # hit /health/ready) and manual checks work without credentials.
     authed_app = JWTAuthMiddleware(starlette_app, settings=settings)
 
     logger.info(
@@ -1338,14 +1433,11 @@ async def _run_http() -> None:
 
 def main() -> None:
     """Entry point for ``python -m app.mcp_server`` and the MCP_TRANSPORT env var."""
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level, logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        stream=sys.stdout,
-    )
-
     args = _parse_args()
     transport = args.transport
+    from app.error_logging import configure_logging
+    # stdout is the JSON-RPC wire for stdio MCP. HTTP/container logs use stdout.
+    configure_logging(settings.log_level, stdio=transport == "stdio")
 
     if transport == "stdio":
         logger.info("Starting MCP server (stdio transport)")

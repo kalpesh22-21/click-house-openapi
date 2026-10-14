@@ -9,6 +9,8 @@ from typing import Annotated, Dict, List, Literal, Optional
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.constants import SCRATCH_DATABASE
+
 # paycompy is an internal package, only needed when VAULT_ENABLED=true.  Guard the
 # import so the app boots without it (local/dev, or any environment using plain env
 # vars instead of Vault).  load_settings_from_vault() raises clearly if Vault is
@@ -82,17 +84,46 @@ class Settings(BaseSettings):
     trino_user: str = "mcp_backend"
     trino_password: str = Field("", repr=False)
     trino_request_timeout: float = Field(30, gt=0)
+    # MySQL logical schema the MySQL connector catalogs expose. Doubles as the
+    # shard registry's `mysqldb` filter dimension at resolution time (default
+    # dbonline); any registry row whose database differs is ineligible.
     trino_mysql_schema: str = "dbonline"
     trino_clickhouse_catalog: str = "clickhouse"
-    # View-hosting catalog: dbpcm_datawarehouse.mysql_shard_07.employee.
-    # Empty means connector catalogs: mysql_shard_07.dbonline.employee.
+    # View-hosting catalog: dbpcm_datawarehouse.<shard>.employee.
+    # Empty means connector catalogs: <shard>.dbonline.employee.
     trino_mysql_view_catalog: str = "dbpcm_datawarehouse"
+    trino_mysql_source_mode: Literal["views", "system_query"] = "views"
+    # Private, deployment-owned native SQL and projection contracts. Never export
+    # these definitions through the semantic catalog or include them in images.
+    trino_mysql_native_sources_dir: str = "docker/trino/native_sources"
     trino_client_code_claim: str = "clientcode"
     trino_proc_center_claim: str = "proc_center"
     trino_username_claim: str = "user_name"
-    # Placeholder implementation of (processing center, client) -> shard.
-    # No default shard: unknown tenants must never land on an arbitrary source.
-    trino_shard_routes: dict[str, dict[str, str]] = Field(default_factory=dict)
+    # MySQL shard routing (paycompy/DBA shard-registry model): the authenticated
+    # client_code — never proc_center, which stays a required identity claim but
+    # is NOT a routing input — is range-matched (clientstart <= code <= clientend,
+    # inclusive lexicographic) against the snapshot at trino_shard_registry_path,
+    # filtered by env_type == trino_env_type and database == trino_mysql_schema.
+    # Refresh the snapshot with scripts/refresh_shard_registry.py; generate Trino
+    # connector catalogs from it with scripts/setup_trino_catalogs.py. There is no
+    # default shard: unmatched/ambiguous tenants and a missing/invalid snapshot are
+    # all fail-closed — an unknown tenant must never land on an arbitrary source.
+    trino_shard_registry_path: str = Field(
+        "docker/trino/shards.json",
+        description=(
+            "Path to the paycompy/DBA shard-registry snapshot JSON consumed by "
+            "app/shard_routing.py at query time (no live registry fetch). "
+            "Trusted server-side configuration — never caller-supplied."
+        ),
+    )
+    trino_env_type: Literal["PROD", "QA2", "DEV"] = Field(
+        "PROD",
+        description=(
+            "Environment dimension used to filter the shard registry at "
+            "resolution time. Must match the deployment's paycompy env_type; "
+            "only registry rows with this env_type are eligible."
+        ),
+    )
     # Switching drivers cannot preserve ClickHouse getSetting-based RLS by
     # itself. Enable only after deploying equivalent secured views/policies.
     trino_security_ready: bool = False
@@ -114,7 +145,7 @@ class Settings(BaseSettings):
     clickhouse_password: str = Field(
         "", description="ClickHouse password (secret; from Vault when enabled)."
     )
-    clickhouse_database: str = Field("default", description="Default database")
+    clickhouse_database: str = Field("dbpcm_warehouse", description="Default database")
     clickhouse_secure: bool = Field(True, description="Use TLS for ClickHouse connection")
 
     # Max age (seconds) of a pooled HTTP connection before clickhouse-connect
@@ -191,6 +222,8 @@ class Settings(BaseSettings):
             "Pinned to asymmetric algs (RS*/ES*/PS*); 'none' and HMAC (HS*) are rejected."
         ),
     )
+    verify_signature: bool =Field(True, description="Disable verification for DEV")
+
     # --- Query safety limits ---
     max_execution_time: int = Field(30, description="Max query wall-clock time in seconds")
     max_result_rows: int = Field(10_000, ge=1, description="ClickHouse-side hard cap on result rows")
@@ -283,7 +316,7 @@ class Settings(BaseSettings):
         ),
     )
     restrict_to_catalogued_tables: bool = Field(
-        False,
+        True,
         description=(
             "When true, only tables present in the semantic catalog (the "
             "'schema dictionary' under app/semantic_catalog/data/*.yaml) may be "
@@ -413,7 +446,7 @@ class Settings(BaseSettings):
         None, description="TLS for the scratch credential (None → falls back to CLICKHOUSE_SECURE)."
     )
     scratch_database: str = Field(
-        "scratch",
+        SCRATCH_DATABASE,
         description="ClickHouse database that holds session-scoped scratch tables (never the warehouse).",
     )
     scratch_ttl_seconds: int = Field(
@@ -489,19 +522,17 @@ class Settings(BaseSettings):
     )
 
     # --- Employee row-level-security (RLS) access provisioning ---
-    # Populates dbpcm_warehouse_security.user_employee_access, the table the
-    # dbpcm_warehouse.employee row policy reads to scope each tenant (identified by
-    # its stable jti) to only the employees it may see.  See app/employee_access.py
-    # for the full design (ReplacingMergeTree pull_id gate, staleness-gated refresh,
-    # sentinel row, fail-closed-loud).  Disabled by default so existing deploys are
-    # unaffected.
+    # Populates security.user_employee_access, the table the dbpcm_warehouse.employee
+    # row policy reads to scope each tenant (identified by its stable composite JTI)
+    # to only the employees it may see.  See app/employee_access.py for the full
+    # design (ReplacingMergeTree pull_id gate, staleness-gated refresh, sentinel
+    # row, fail-closed-loud).  Disabled by default so existing deploys are unaffected.
     employee_access_enabled: bool = Field(
-        False,
+        True,
         description=(
             "Enable per-request employee-access provisioning for the employee row "
             "policy. When true, EEACCESS_BASE_URL must be set and the tenant-settings "
-            "map should expose paycom_client_code/paycom_proc_center/"
-            "paycom_authenticated_user."
+            "map should expose SQL_TENANT/SQL_CLIENTCODE/SQL_PROCCENTER."
         ),
     )
     employee_access_refresh_seconds: int = Field(
@@ -651,7 +682,7 @@ class Settings(BaseSettings):
     oidc_public_key_vault_path: str = Field(
         "",
         description=(
-            "Vault KV path holding the static OIDC public key (key: OIDC_PUBLIC_KEY). "
+            "Vault KV path holding the static OIDC public key (key: public-key). "
             "Not confidential (it is a public key) — sourced from Vault only for "
             "central management / tamper-resistance. Empty → use env/default."
         ),
@@ -723,6 +754,34 @@ class Settings(BaseSettings):
     def _validate_public_key(cls, v: str) -> str:
         """Normalise and validate a static public key at config time (fail fast)."""
         return _normalise_public_key(v)
+
+    @field_validator(
+        "trino_mysql_schema", "trino_clickhouse_catalog", "trino_mysql_view_catalog"
+    )
+    @classmethod
+    def _validate_trino_routing_identifiers(cls, v: str, info) -> str:
+        """Apply the routing-identifier rule at BOOT, not as a 400 on first request.
+
+        These three values are concatenated into rewritten SQL physical names
+        (catalog/schema positions), so they must satisfy the same identifier
+        grammar app.shard_routing.validate_identifier enforces at query time
+        (``[a-z][a-z0-9_]*``). trino_mysql_view_catalog may legitimately be
+        EMPTY (direct source-catalog routing); the other two always carry an
+        identifier. The import of shard_routing is function-level on purpose:
+        app.shard_routing imports app.config at module scope, so a module-level
+        import here would be a cycle (mirrors _validate_scratch_db_single_source).
+        """
+        if info.field_name == "trino_mysql_view_catalog" and not v.strip():
+            return v
+        from app.errors import QueryValidationError
+        from app.shard_routing import validate_identifier
+
+        try:
+            return validate_identifier(v)
+        except QueryValidationError as exc:
+            raise ValueError(
+                f"{info.field_name}: {exc.message}"
+            ) from exc
 
     @model_validator(mode="after")
     def _validate_clickhouse_connection(self) -> "Settings":
@@ -885,40 +944,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_scratch_db_single_source(self) -> "Settings":
-        """Fail LOUD if SCRATCH_DATABASE diverges from the provenance extractor's
-        hardcoded scratch DB name (single source of truth, ADR-0002 review).
+        """Keep the configured database aligned with SQL authorization.
 
-        Two components must agree on which database is "scratch":
-          - ``_references_scratch_db`` (the ADR-0002 pre-check) scans for THIS
-            configurable ``scratch_database`` to decide whether to run provenance;
-          - the D64 ownership parser (``_validate_scratch_name`` /
-            ``_build_alias_map`` in app/sqlparse/provenance.py) treats the hardcoded
-            module constant ``_SCRATCH_DB`` as THE scratch database.
-
-        If they diverge (e.g. an operator sets ``SCRATCH_DATABASE=sandbox`` while
-        the parser still knows only ``scratch``), the pre-check would trip on
-        ``sandbox.*`` but provenance would treat ``sandbox.*`` as an uncatalogued
-        WAREHOUSE table → ``PARSE_FAILED_CLOSED`` even for the OWNER's own
-        legitimate scratch access (north-star broken), AND the gate would silently
-        stop recognising the real scratch DB. Rather than degrade silently, refuse
-        to boot until the two identifiers agree. (The parser constant is not
-        threaded through as a parameter in this slice — that would touch the whole
-        D64 ownership chain and its tests; this assertion is the low-risk guarantee
-        that the two can never diverge unnoticed.)
+        The provenance parser and scope filter share SCRATCH_DATABASE. Reject
+        an environment override that would make their ownership checks inspect
+        a different database from scratch ingestion and the reference gate.
         """
-        # Lazy import: keeps sqlglot (imported by provenance) off the config
-        # module-import path; this runs once per Settings construction.
-        from app.sqlparse.provenance import _SCRATCH_DB
-
-        if self.scratch_database != _SCRATCH_DB:
+        if self.scratch_database != SCRATCH_DATABASE:
             raise ValueError(
-                f"SCRATCH_DATABASE='{self.scratch_database}' diverges from the "
-                f"provenance extractor's scratch database '{_SCRATCH_DB}' "
-                "(app/sqlparse/provenance.py::_SCRATCH_DB). The scratch-reference "
-                "gate and the D64 ownership parser must name the SAME database, or "
-                "the fail-closed scratch gate silently degrades. Set SCRATCH_DATABASE "
-                f"to '{_SCRATCH_DB}', or update _SCRATCH_DB to match, so there is one "
-                "source of truth."
+                f"SCRATCH_DATABASE must be '{SCRATCH_DATABASE}' to match SQL "
+                "authorization (app.constants.SCRATCH_DATABASE)."
             )
         return self
 
@@ -949,7 +984,7 @@ def _read_vault_secret(vc, key: str, path: str, current):
     try:
         return vc.read_kv_secret(key, path).get_secret_value()
     except Exception as exc:  # noqa: BLE001 - surface as a warning, keep booting
-        logger.warning("Vault: could not read '%s' from '%s': %s", key, path, exc)
+        logger.error("Vault secret read failed: failure_class=%s", type(exc).__name__)
         return current
 
 
@@ -992,6 +1027,9 @@ def load_settings_from_vault() -> Settings:
         settings.clickhouse_password = _read_vault_secret(
             vc, "CLICKHOUSE_PASSWORD", p, settings.clickhouse_password
         )
+        settings.scratch_cluster = _read_vault_secret(
+            vc, "CLUSTER_NAME", p, settings.scratch_cluster
+        )
         port = _read_vault_secret(vc, "CLICKHOUSE_PORT", p, None)
         if port not in (None, ""):
             try:
@@ -1009,7 +1047,7 @@ def load_settings_from_vault() -> Settings:
     # asymmetric verification).
     if settings.oidc_public_key_vault_path:
         raw = _read_vault_secret(
-            vc, "OIDC_PUBLIC_KEY", settings.oidc_public_key_vault_path, settings.oidc_public_key
+            vc, "public-key", settings.oidc_public_key_vault_path, settings.oidc_public_key
         )
         settings.oidc_public_key = _normalise_public_key(raw)
 
@@ -1042,7 +1080,7 @@ def load_settings_from_vault() -> Settings:
     # --- MCP export service key ---
     if settings.mcp_service_key_vault_path:
         settings.mcp_service_key = _read_vault_secret(
-            vc, "MCP_SERVICE_KEY", settings.mcp_service_key_vault_path, settings.mcp_service_key
+            vc, "API_KEY", settings.mcp_service_key_vault_path, settings.mcp_service_key
         )
 
     # Fail closed: Vault is enabled, so the core ClickHouse identity MUST be present.

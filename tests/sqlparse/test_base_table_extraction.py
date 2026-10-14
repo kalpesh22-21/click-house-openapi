@@ -78,11 +78,11 @@ class TestExclusions:
         assert extract_referenced_base_tables("SELECT * FROM numbers(10)") == frozenset()
 
     def test_scratch_database_is_excluded(self):
-        sql = "SELECT * FROM scratch.s_abc_bp_1"
+        sql = "SELECT * FROM dbpcm_scratch.s_abc_bp_1"
         assert extract_referenced_base_tables(sql) == frozenset()
 
     def test_scratch_join_with_warehouse_keeps_only_warehouse(self):
-        sql = "SELECT * FROM employee e JOIN scratch.s_abc_bp_1 s ON e.id = s.id"
+        sql = "SELECT * FROM employee e JOIN dbpcm_scratch.s_abc_bp_1 s ON e.id = s.id"
         assert extract_referenced_base_tables(sql) == frozenset({f"{_DB}.employee"})
 
 

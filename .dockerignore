@@ -20,12 +20,22 @@ env
 
 # Environment / secrets — never bake these into the image
 .env
+.env.*
+secret*
+signing-key*
 *.env
 .env.trino
 docker/trino/catalog/
+docker/trino/mysql_views/
+docker/trino/mysql/views/
+docker/trino/views/
+tests/private/
+docker/trino/shards.json
+docker/trino/shards.json.tmp
 
 # Test artefacts
 .pytest_cache
+docker/trino/native_sources/
 .coverage
 htmlcov/
 .tox/

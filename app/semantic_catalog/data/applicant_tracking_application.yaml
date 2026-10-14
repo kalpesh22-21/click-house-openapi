@@ -1,6 +1,11 @@
 database: dbpcm_warehouse
 table: applicant_tracking_application
 source: mysql
+# Internal join-key contract; physical views must expose this encoding.
+trino_join_keys:
+  employee_code:
+    column: employee_code_num
+    encoding: employee_ascii4_be_v1
 description: Applicant Tracking application table. One row per candidate application, not one row per candidate. Use for application pipeline, status, offer workflow, source attribution, and hired-employee ATS linkage.
 
 grain: [ application_id ]

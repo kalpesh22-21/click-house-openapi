@@ -28,6 +28,58 @@ provenance catalog with this richer YAML catalog is an explicit follow-up, not
 done in this pass (see D83/D84 delivery notes). This loader is additive: it
 feeds ONLY the `getTableSchema` overlay (D83) via `app/semantic_catalog/overlay.py`.
 
+Backend-scoped notes (`trino_notes` / `clickhouse_notes`)
+---------------------------------------------------------
+A table entry may carry the OPTIONAL top-level keys ``trino_notes`` and/or
+``clickhouse_notes`` (each a list of strings) next to the always-on
+``schema_notes``. This loader is deliberately unknown-key tolerant: both keys
+ride through the raw dict UNMATCHED, and the serialized surfaces
+(`app/semantic_catalog/overlay.py::build_table_schema_response` and
+`app/semantic_catalog/export.py::build_catalog_export_from`) are the ONLY
+points that interpret them — emitting shared notes plus the ACTIVE backend's
+scoped notes under a synthesized ``notes`` key, and dropping the inactive
+backend's note ENTIRELY (neither scoped key ever appears in a payload). See
+`scoped_notes_for_backend` below.
+
+Backend-scoped values (`trino_values` / `clickhouse_values`)
+------------------------------------------------------------
+A per-column enumeration field listed in ``BACKEND_SCOPED_VALUE_FIELDS``
+(today: only ``values``) may carry the OPTIONAL sibling keys
+``trino_<field>`` / ``clickhouse_<field>`` next to the always-on plain
+``<field>``. The plain key is the ClickHouse default; a sibling key is a
+per-backend OVERRIDE resolved by the serialization surfaces (never by this
+loader — unknown-key tolerance means the scoped keys ride the raw dict
+untouched here). Resolution rules (see `scoped_field_for_backend`):
+
+  * the ACTIVE backend's ``<backend>_<field>`` wins when present and
+    non-None; a None-valued scoped key is treated as absent and falls back
+    to the plain field;
+  * the inactive backend's scoped key is NEVER serialized;
+  * a scoped override WITHOUT the plain ``<field>`` default (an "orphan"
+    override) is an authoring error and raises ``ValueError`` — checked for
+    BOTH spellings regardless of which backend is active, so an orphan can
+    never hide behind a deployment flag.
+
+``observed_values`` is deliberately NOT part of this machinery: it is a
+plain pass-through field on every backend.
+
+Rule backend membership (`backends:`)
+-------------------------------------
+A ``rules[]`` entry may carry an OPTIONAL ``backends: [clickhouse|trino]``
+list restricting the rule to the named serving backend(s). Absent means the
+rule applies to BOTH backends. The serialized surfaces exclude rules whose
+membership excludes the active backend and strip the ``backends`` key from
+every emitted rule, so the mechanism never appears in a payload. A malformed
+``backends`` value (not a non-empty list, or naming anything outside
+``KNOWN_BACKENDS``) raises ``ValueError`` LOUDLY at resolution time — a rule
+quietly visible on the wrong backend is a semantic-enforcement bug, not a
+cosmetic one. See `rule_applies_to_backend` and `resolve_rules_for_backend`.
+Authored ``description:`` text (table-level, per-column, per-rule, and every
+other ``description:`` field) must stay DATABASE-AGNOSTIC — never naming a
+concrete backend; backend-specific text belongs in the scoped note keys
+above. This is enforced by
+``tests/semantic_catalog/test_description_backend_neutrality.py``.
+
 Caching
 -------
 Unlike `app/catalog.py` (60s TTL, because `system.columns` can change any time
@@ -40,6 +92,8 @@ loaded once and cached indefinitely per process, with an explicit
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -71,9 +125,12 @@ _REQUIRED_RLS_HIDDEN_COLUMNS: dict[str, frozenset[str]] = {
     f"{DEFAULT_DATABASE}.employee": frozenset({"client_code", "proc_center"}),
     f"{DEFAULT_DATABASE}.payroll": frozenset({"client_code", "proc_center"}),
     f"{DEFAULT_DATABASE}.department": frozenset({"client_code", "proc_center"}),
+    f"{DEFAULT_DATABASE}.punch_pair": frozenset({"client_code", "proc_center"}),
+    f"{DEFAULT_DATABASE}.total_earning": frozenset({"client_code", "proc_center"}),
     f"{DEFAULT_DATABASE}.labor_allocation": frozenset(
         {"client_code", "proc_center", "version"}
     ),
+    f"{DEFAULT_DATABASE}.employee_change": frozenset({"client_code", "proc_center"}),
 }
 
 
@@ -85,6 +142,169 @@ class CatalogValidationError(RuntimeError):
     traffic while an RLS table could leak ``client_code`` / ``proc_center`` /
     ``version`` to the model.
     """
+
+
+# ---------------------------------------------------------------------------
+# Backend-scoped notes (`trino_notes` / `clickhouse_notes`)
+# ---------------------------------------------------------------------------
+# The catalog's authored keys. A table entry may carry either/both; the shared,
+# backend-neutral `schema_notes` key is ALWAYS serialized regardless of the
+# active backend. The scoped keys themselves are NEVER serialized — see
+# overlay.py::build_table_schema_response and export.py::build_catalog_export_from.
+BACKEND_SCOPED_NOTE_KEYS: tuple[str, str] = ("trino_notes", "clickhouse_notes")
+
+
+def scoped_notes_for_backend(
+    entry: dict[str, Any] | None, *, trino_enabled: bool
+) -> list[str]:
+    """Return the ACTIVE backend's scoped notes for a catalog table entry.
+
+    ``trino_enabled=True`` reads the entry's ``trino_notes``; ``False`` reads
+    ``clickhouse_notes``. The INACTIVE backend's key is never even consulted.
+    Defensive shape check: a malformed value (not a list of strings) yields an
+    empty list rather than propagating garbage into a serialized payload — the
+    loader's unknown-key tolerance means the authoring surface is not schema-
+    enforced, so the projection fails quietly toward "no note" (notes are
+    documentation; dropping one is never a correctness or RLS issue, unlike the
+    fail-closed hidden-columns invariant above).
+    """
+    if not isinstance(entry, dict):
+        return []
+    raw = entry.get("trino_notes" if trino_enabled else "clickhouse_notes")
+    if not isinstance(raw, list):
+        return []
+    return [note for note in raw if isinstance(note, str) and note]
+
+
+# ---------------------------------------------------------------------------
+# Backend-scoped values (`trino_values` / `clickhouse_values`) + rule backends
+# ---------------------------------------------------------------------------
+# The registry of per-column enumeration fields a backend may override with a
+# sibling key (`<backend>_<field>`). Today only `values` participates;
+# `observed_values` is deliberately a plain pass-through field (see module
+# docstring). The loader itself never interprets these keys — unknown-key
+# tolerance rides them through verbatim; resolution happens ONLY at the
+# serialization surfaces (overlay.py / export.py).
+BACKEND_SCOPED_VALUE_FIELDS: tuple[str, ...] = ("values",)
+
+# The only backend names a `backends:` rule-membership list (or a
+# `<backend>_<field>` override spelling) may name. Anything else is a loud
+# ValueError at resolution time, never a silent drop.
+KNOWN_BACKENDS: tuple[str, str] = ("clickhouse", "trino")
+
+# Every derived override-spelling the serialization surfaces must strip so the
+# mechanism never leaks into a payload (e.g. "clickhouse_values", "trino_values").
+BACKEND_SCOPED_VALUE_KEYS: tuple[str, ...] = tuple(
+    f"{backend}_{field}"
+    for field in BACKEND_SCOPED_VALUE_FIELDS
+    for backend in KNOWN_BACKENDS
+)
+
+
+def _active_backend_name(trino_enabled: bool) -> str:
+    return "trino" if trino_enabled else "clickhouse"
+
+
+def scoped_field_for_backend(
+    mapping: Mapping[str, Any] | None, field: str, *, trino_enabled: bool
+) -> Any:
+    """Resolve *field* of *mapping* for the ACTIVE backend.
+
+    Reads ``<backend>_<field>`` (``trino_values`` when ``trino_enabled`` else
+    ``clickhouse_values``) as an OVERRIDE of the plain ``field`` — the plain
+    value is the ClickHouse default and the fallback when no scoped override
+    applies:
+
+      * the active backend's scoped key wins when present and non-None;
+      * a None-valued scoped key is treated as ABSENT (None is not an
+        override) and falls back to the plain field;
+      * the inactive backend's scoped key is never consulted.
+
+    ORPHAN guard (checked for BOTH spellings regardless of which backend is
+    active, so the error can never hide behind a deployment flag): a
+    non-None scoped override on a mapping with no plain ``field`` default is
+    an authoring error and raises ``ValueError``. A mapping without the
+    concept at all simply yields ``None`` (never raises).
+    """
+    if not isinstance(mapping, Mapping):
+        return None
+    plain = mapping.get(field)
+    for backend in KNOWN_BACKENDS:
+        scoped_key = f"{backend}_{field}"
+        if mapping.get(scoped_key) is not None and plain is None:
+            raise ValueError(
+                f"Backend-scoped override {scoped_key!r} has no plain {field!r} "
+                "default to override; author the plain ClickHouse-default value "
+                f"(or drop the scoped key). Checked for both {KNOWN_BACKENDS} "
+                "spellings regardless of the active backend."
+            )
+    override = mapping.get(f"{_active_backend_name(trino_enabled)}_{field}")
+    if override is not None:
+        return override
+    return plain
+
+
+def rule_applies_to_backend(rule: Mapping[str, Any], *, trino_enabled: bool) -> bool:
+    """True iff a ``rules[]`` entry applies to the ACTIVE backend.
+
+    An absent ``backends`` key means the rule applies to EVERY backend
+    (unchanged, pre-mechanism behaviour). When present, ``backends`` must be a
+    non-empty list drawn from ``KNOWN_BACKENDS`` — anything else (a scalar, a
+    mapping, an empty list, or an unknown backend name) raises ``ValueError``
+    LOUDLY: a rule silently mis-visible on the wrong backend is a semantic-
+    enforcement bug, never a cosmetic one. A non-mapping rule is not this
+    helper's concern (the scope filter owns shape handling) and passes.
+    """
+    if not isinstance(rule, Mapping):
+        return True
+    backends = rule.get("backends")
+    if backends is None:
+        return True
+    if not isinstance(backends, list) or not backends:
+        raise ValueError(
+            f"Rule {rule.get('id')!r} has a malformed 'backends' value "
+            f"{backends!r}: expected a non-empty list drawn from "
+            f"{list(KNOWN_BACKENDS)} (absent means 'applies to every backend')."
+        )
+    unknown = [name for name in backends if name not in KNOWN_BACKENDS]
+    if unknown:
+        raise ValueError(
+            f"Rule {rule.get('id')!r} names unknown backend(s) {unknown!r} in "
+            f"'backends'; known backends are {list(KNOWN_BACKENDS)}. Fix the "
+            "typo or extend KNOWN_BACKENDS deliberately."
+        )
+    return _active_backend_name(trino_enabled) in backends
+
+
+def resolve_rules_for_backend(
+    rules: list[dict[str, Any]] | None, *, trino_enabled: bool
+) -> list[dict[str, Any]] | None:
+    """Apply rule backend membership: exclude rules not applying to the ACTIVE
+    backend and strip the ``backends`` mechanism key from every emitted rule.
+
+    Both serialization surfaces (overlay.py's getTableSchema response and
+    export.py's catalog export) call this BEFORE any other rule processing
+    (e.g. overlay's ``_filter_rules`` scope enforcement), and it runs in EVERY
+    mode — scope enforcement, stdio (``scope=None``), and allow-all alike.
+
+    IDENTITY PASS-THROUGH: a rules list in which NO entry carries a
+    ``backends`` key is returned as-is (the same object), so catalogs without
+    scoped rules serialize exactly as before the mechanism existed. Validation
+    (``rule_applies_to_backend``) only runs on entries that actually declare
+    ``backends`` — unscoped entries can never raise here.
+    """
+    if rules is None:
+        return None
+    if not any(isinstance(rule, Mapping) and "backends" in rule for rule in rules):
+        return rules
+    resolved: list[dict[str, Any]] = []
+    for rule in rules:
+        if not isinstance(rule, Mapping) or "backends" not in rule:
+            resolved.append(rule)
+            continue
+        if rule_applies_to_backend(rule, trino_enabled=trino_enabled):
+            resolved.append({k: v for k, v in rule.items() if k != "backends"})
+    return resolved
 
 
 def _validate_rls_projection(catalog: dict[str, dict[str, Any]]) -> None:
@@ -183,6 +403,18 @@ def _load_raw_table_entries(schema_dir: Path | str) -> dict[str, dict[str, Any]]
             raise CatalogValidationError(
                 f"{qualified_key}: source must be 'clickhouse' or 'mysql'."
             )
+        mappings = entry.get("trino_join_keys", {})
+        if not isinstance(mappings, dict):
+            raise CatalogValidationError(f"{qualified_key}: trino_join_keys must be a mapping.")
+        for logical, mapping in mappings.items():
+            if (
+                entry.get("source") != "mysql"
+                or logical not in raw_columns
+                or not isinstance(mapping, dict)
+                or set(mapping) != {"column", "encoding"}
+                or any(not isinstance(mapping.get(k), str) or not re.fullmatch(r"[a-z][a-z0-9_]*", mapping[k]) for k in ("column", "encoding"))
+            ):
+                raise CatalogValidationError(f"{qualified_key}: invalid internal Trino join-key mapping.")
         entry["database"] = database
         result[qualified_key] = entry
 

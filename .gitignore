@@ -12,8 +12,20 @@ dist/
 # Environment / secrets
 .env
 .env.local
+.env.*
+!.env.example
 .env.trino
 docker/trino/catalog/*.properties
+# Proprietary view definitions and generated SQL stay local.
+/docker/trino/mysql_views/
+/docker/trino/mysql/views/
+/docker/trino/views/
+/docker/trino/native_sources/
+# Local regression checks that reproduce proprietary view logic.
+/tests/private/
+# Deployment-specific shard registry (keep shards.example.json tracked).
+/docker/trino/shards.json
+/docker/trino/shards.json.tmp
 *.local
 
 # Test / coverage
@@ -33,3 +45,4 @@ htmlcov/
 secret*
 signing-key*
 .venv*
+attn.py

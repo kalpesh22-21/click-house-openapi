@@ -1,6 +1,11 @@
 database: dbpcm_warehouse
 table: expense
 source: mysql
+# Internal execution metadata; excluded from model-facing catalog exports.
+trino_join_keys:
+  employee_code:
+    column: employee_code_num
+    encoding: employee_ascii4_be_v1
 region: expense_management
 description: Expense Management line-item table using the new ClickHouse DDL structure with snake_case column names only.
   Contains individual employee expense entries submitted through the Expense Management module, including reimbursable expenses,

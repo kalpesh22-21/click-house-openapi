@@ -1,7 +1,7 @@
 """QA2 — D64 read-gate EXACT-session-extraction matrix (table-intermediate Slice 2).
 
 The tightening under test lives in ``app/sqlparse/provenance._validate_scratch_name``:
-a scratch reference ``scratch.s_<sid>_<suffix>`` is accepted ONLY when the owning
+a scratch reference ``dbpcm_scratch.s_<sid>_<suffix>`` is accepted ONLY when the owning
 session extracted as ``tbl[2:].partition('_')[0]`` equals the bound ``session_id``
 EXACTLY (was: a loose ``startswith(f"s_{session_id}_")`` prefix).
 
@@ -43,11 +43,11 @@ _HEX = "f" * 32  # a `bp_<32hex>` suffix stand-in; the gate does not inspect it
 
 
 def _read(scratch_table: str, session_id: str | None) -> frozenset[tuple[str, str]]:
-    """Extract provenance for a consumer that JOINs ``scratch.<scratch_table>``
+    """Extract provenance for a consumer that JOINs ``dbpcm_scratch.<scratch_table>``
     (aliased ``s``) to the warehouse ``employee`` under *session_id*."""
     sql = (
         f"SELECT s.EmployeeCode, e.Department "
-        f"FROM scratch.{scratch_table} AS s "
+        f"FROM dbpcm_scratch.{scratch_table} AS s "
         f"JOIN dbpcm_warehouse.employee AS e ON s.EmployeeCode = e.EmployeeCode"
     )
     return extract_column_provenance(sql, _CATALOG, session_id=session_id)
@@ -182,7 +182,7 @@ def test_session_with_sql_metachars_denied() -> None:
 
 
 def test_scratch_table_not_starting_s_underscore_denied() -> None:
-    """A ``scratch.*`` table that does not start ``s_`` (no extractable owner) →
+    """A ``dbpcm_scratch.*`` table that does not start ``s_`` (no extractable owner) →
     rejected fail-closed regardless of session (a naming convention is not an
     access boundary without enforcement)."""
     with pytest.raises((ScratchSessionError, ProvenanceExtractionError)):

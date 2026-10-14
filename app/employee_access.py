@@ -278,7 +278,7 @@ def _redis_is_fresh(jti: str, settings: Settings) -> bool:
     try:
         return client.exists(_redis_key(jti, settings)) >= 1
     except Exception as exc:  # noqa: BLE001 — Redis is best-effort; degrade to ClickHouse.
-        logger.warning("Redis freshness read failed (falling back to ClickHouse): %s", exc)
+        logger.error("Redis freshness read failed (falling back to ClickHouse): failure_class=%s", type(exc).__name__)
         _trip_redis_breaker()
         return False
 
@@ -291,7 +291,7 @@ def _redis_mark_fresh(jti: str, settings: Settings, ttl_seconds: int) -> None:
     try:
         client.set(_redis_key(jti, settings), "1", ex=max(1, int(ttl_seconds)))
     except Exception as exc:  # noqa: BLE001 — Redis is best-effort.
-        logger.warning("Redis freshness write failed (ignored): %s", exc)
+        logger.error("Redis freshness write failed (ignored): failure_class=%s", type(exc).__name__)
         _trip_redis_breaker()
 
 
@@ -442,10 +442,7 @@ def _write_pull(jti: str, codes: list[str], settings: Settings) -> None:
         column_names=["jti", "employee_code", "pull_id"],
     )
     logger.info(
-        "employee-access pull written: jti=%s codes=%d pull_id=%d",
-        jti,
-        len(codes),
-        pull_id,
+        "employee-access pull written",
     )
 
 
@@ -459,16 +456,14 @@ def _refresh(jti: str, principal: Principal, settings: Settings, is_cold: bool) 
         if is_cold:
             # No prior set to fall back on — refusing to run a query against an
             # unpopulated access table (which would silently return zero rows).
-            logger.error("employee-access COLD fetch failed jti=%s: %s", jti, exc)
+            logger.error("employee-access COLD fetch failed: failure_class=%s", type(exc).__name__)
             raise EmployeeAccessError(
                 "Could not establish your employee-access list (the access service is "
                 "unavailable). No employee data can be returned until access is provisioned."
             ) from exc
         # Stale-but-present: prefer availability, serve the existing (stale) set,
         # and back off so a down /cl/eeaccess is not re-hit on every request.
-        logger.warning(
-            "employee-access refresh failed jti=%s; serving existing set: %s", jti, exc
-        )
+        logger.error("employee-access refresh failed; serving existing set: failure_class=%s", type(exc).__name__)
         _redis_mark_fresh(jti, settings, settings.employee_access_refresh_backoff_seconds)
         return
 
@@ -476,14 +471,12 @@ def _refresh(jti: str, principal: Principal, settings: Settings, is_cold: bool) 
         _write_pull(jti, codes, settings)
     except ClickHouseError as exc:
         if is_cold:
-            logger.error("employee-access COLD write failed jti=%s: %s", jti, exc)
+            logger.error("employee-access COLD write failed: failure_class=%s", type(exc).__name__)
             raise EmployeeAccessError(
                 "Could not persist your employee-access list. No employee data can be "
                 "returned until access is provisioned."
             ) from exc
-        logger.warning(
-            "employee-access refresh write failed jti=%s; serving existing set: %s", jti, exc
-        )
+        logger.error("employee-access refresh write failed; serving existing set: failure_class=%s", type(exc).__name__)
         _redis_mark_fresh(jti, settings, settings.employee_access_refresh_backoff_seconds)
         return
 

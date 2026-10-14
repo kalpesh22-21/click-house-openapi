@@ -30,7 +30,11 @@ case "$MODE" in
       --log-level "${UVICORN_LOG_LEVEL}"
     ;;
   mcp)
-    echo "Starting MCP server (transport=${MCP_TRANSPORT})"
+    if [ "$MCP_TRANSPORT" = "stdio" ]; then
+      echo "Starting MCP server (transport=${MCP_TRANSPORT})" >&2
+    else
+      echo "Starting MCP server (transport=${MCP_TRANSPORT})"
+    fi
     exec python -m app.mcp_server --transport "${MCP_TRANSPORT}"
     ;;
   token)

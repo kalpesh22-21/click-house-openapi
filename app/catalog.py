@@ -108,8 +108,8 @@ def get_catalog_schema() -> dict[str, dict[str, str]]:
     logger.debug("catalog: rebuilding from system.columns")
     try:
         catalog = _build_catalog()
-    except Exception:
-        logger.exception("catalog: failed to build from system.columns")
+    except Exception as exc:  # noqa: BLE001 — stale-cache fallback
+        logger.error("catalog rebuild failed: failure_class=%s", type(exc).__name__)
         if _cached_catalog is not None:
             # Return stale cache rather than crashing all queries
             logger.warning("catalog: returning stale cache after rebuild failure")

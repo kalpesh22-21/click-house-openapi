@@ -476,14 +476,14 @@ def test_prov_scratch_own_session() -> None:
     """
     sql = """
         SELECT s.employee_id, s.hire_date_override, e.Department
-        FROM scratch.s_sessabc123_onboarding_data AS s
+        FROM dbpcm_scratch.s_sessabc123_onboarding_data AS s
         JOIN employee AS e ON s.employee_id = e.EmployeeCode
         WHERE e.EmployeeStatus = 'A'
     """
     result = extract_column_provenance(sql, CATALOG_SCHEMA, session_id="sessabc123")
     expected = frozenset([
-        ("scratch.s_sessabc123_onboarding_data", "employee_id"),
-        ("scratch.s_sessabc123_onboarding_data", "hire_date_override"),
+        ("dbpcm_scratch.s_sessabc123_onboarding_data", "employee_id"),
+        ("dbpcm_scratch.s_sessabc123_onboarding_data", "hire_date_override"),
         (_E, "Department"),
         (_E, "EmployeeCode"),
         (_E, "EmployeeStatus"),
@@ -754,7 +754,7 @@ def test_prov_scratch_crosssession_rejected() -> None:
     """
     sql = """
         SELECT s.EmployeeCode, s.salary_adjustment, e.Department
-        FROM scratch.s_sessxyz789_compensation_data AS s
+        FROM dbpcm_scratch.s_sessxyz789_compensation_data AS s
         JOIN employee AS e ON s.EmployeeCode = e.EmployeeCode
         WHERE e.EmployeeStatus = 'A'
     """
@@ -766,11 +766,11 @@ def test_prov_scratch_malformed_name_rejected() -> None:
     """A-10 · prov-scratch-malformed-name-rejected — non-prefixed scratch table blocked.
 
     Decision refs: D64, D57
-    Rationale: `scratch.compensation_export` does not follow the `s_<sessionId>_<file>`
+    Rationale: `dbpcm_scratch.compensation_export` does not follow the `s_<sessionId>_<file>`
     naming convention. A naming convention is NOT an access boundary without enforcement.
     """
     sql = """
-        SELECT * FROM scratch.compensation_export
+        SELECT * FROM dbpcm_scratch.compensation_export
         JOIN employee AS e ON compensation_export.EmployeeCode = e.EmployeeCode
     """
     with pytest.raises((ScratchSessionError, ProvenanceExtractionError)):
@@ -1194,7 +1194,7 @@ def test_prov_unqualified_scratch_only_column_not_rejected() -> None:
     """
     sql = (
         "SELECT hire_date_override, salary_adj "
-        "FROM scratch.s_sessabc123_compensation"
+        "FROM dbpcm_scratch.s_sessabc123_compensation"
     )
     result = extract_column_provenance(sql, CATALOG_SCHEMA, session_id="sessabc123")
     assert result == frozenset()
@@ -1332,7 +1332,7 @@ def test_prov_scratch_reference_still_session_gated() -> None:
     """
     with pytest.raises(ScratchSessionError):
         extract_column_provenance(
-            "SELECT c FROM scratch.s_othersession_t",
+            "SELECT c FROM dbpcm_scratch.s_othersession_t",
             CATALOG_SCHEMA,
             session_id="sessabc123",
         )

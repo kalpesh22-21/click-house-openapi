@@ -37,6 +37,10 @@ _TEST_ENV = {
     "DEFAULT_LIMIT": "1000",
     "MAX_RESPONSE_ROWS": "1000",
     "ALLOWED_DATABASES": "*",
+    # Generic service tests use synthetic tables and no employee-access API.
+    # Tests of these features enable them explicitly.
+    "RESTRICT_TO_CATALOGUED_TABLES": "false",
+    "EMPLOYEE_ACCESS_ENABLED": "false",
     "APP_PORT": "8000",
     "LOG_LEVEL": "INFO",
     "PUBLIC_BASE_URL": "https://test.example.com",
@@ -113,6 +117,21 @@ def _reset_mcp_session_manager():
 @pytest.fixture(autouse=False)
 def reset_settings_cache():
     """Clear the lru_cache on get_settings between tests that mutate env vars."""
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_backend_defaults(monkeypatch):
+    # Some legacy fixtures pop environment keys on teardown. Re-establish
+    # synthetic defaults for every test instead of falling through to local .env.
+    for key, value in {
+        "TRINO_ENABLED": "false",
+        "RESTRICT_TO_CATALOGUED_TABLES": "false",
+        "EMPLOYEE_ACCESS_ENABLED": "false",
+    }.items():
+        monkeypatch.setenv(key, value)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

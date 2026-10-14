@@ -61,6 +61,7 @@ for _k, _v in _BASE_ENV.items():
 from app import service  # noqa: E402
 from app.mcp_server import (  # noqa: E402
     JWTAuthMiddleware,
+    _clickhouse_health_check,
     explain_query as mcp_explain_query,
     get_table_schema as mcp_get_table_schema,
     list_databases as mcp_list_databases,
@@ -362,6 +363,21 @@ class TestServiceExplainQuery:
         result = service.explain_query("SELECT 1")
         assert result["truncated"] is False
 
+    def test_explain_splits_a_single_row_trino_plan(self, mock_execute):
+        """Trino's EXPLAIN returns the WHOLE plan tree as ONE row of newline-joined
+        text.  explain_query must split that cell back into plan lines so the leaf
+        scan nodes survive — the lines that prove physical routing."""
+        text = (
+            "Output[a]\n"
+            "  -> Fragment 1\n"
+            "       ScanFilterProject[table = mysql_shard_qa2_01:dbonline.employee]"
+        )
+        mock_execute.return_value = (["explain"], [[text]])
+        result = service.explain_query("SELECT 1")
+        assert result["row_count"] == 1
+        assert result["rows"] == [[text]]
+        assert result["truncated"] is False
+
 
 class TestCollapseExplainPlan:
     """The collapse itself.  Unit-level because the caps are the part that has to be
@@ -400,6 +416,66 @@ class TestCollapseExplainPlan:
         assert truncated is True
         assert "[line truncated]" in plan
         assert "ReadFromMergeTree (db.t)" in plan, "the cap must not touch other lines"
+
+    def test_a_single_row_carrying_embedded_newlines_is_split_into_plan_lines(self):
+        """TRINO SHAPE: the whole plan tree arrives in ONE cell, newline-joined.
+        Splitting embedded newlines BEFORE the caps is what lets the per-line cap and
+        the head/tail budget see real plan lines; un-split, the one over-long cell
+        would eat the 300-char line cap and everything past ~320 chars — the leaf
+        scan lines included — would be gone for good."""
+        text = (
+            "Output[a]\n"
+            "  -> Fragment 1\n"
+            "       ScanFilterProject[table = mysql_shard_qa2_01:dbonline.employee]"
+        )
+        columns, out, truncated = service._collapse_explain_plan(["explain"], [[text]])
+        assert columns == ["explain"]
+        assert out == [[text]]
+        assert truncated is False, "splitting changes framing, not content"
+        assert len(out[0][0].splitlines()) == 3
+
+    def test_the_head_tail_budget_engages_for_a_single_row_plan(self):
+        """A single-cell Trino plan over the line budget must keep HEAD AND TAIL
+        around the elision marker — the same guarantee the multi-row ClickHouse
+        path has — and must report the elision via `truncated`.  Pre-fix this
+        input was one 300-char-capped cell and the budget never ran."""
+        text = "\n".join(f"line {i}" for i in range(service.EXPLAIN_MAX_PLAN_LINES + 25))
+        _cols, out, truncated = service._collapse_explain_plan(["explain"], [[text]])
+        plan = out[0][0]
+        assert truncated is True
+        assert plan.startswith("line 0")
+        assert plan.endswith(f"line {service.EXPLAIN_MAX_PLAN_LINES + 24}")
+        assert "25 plan line(s) elided" in plan
+        assert len(out) == 1
+        assert len(plan.splitlines()) == service.EXPLAIN_MAX_PLAN_LINES + 1
+
+    def test_the_per_line_cap_applies_inside_a_single_row_plan(self):
+        """The line cap applies PER SPLIT LINE: one huge `Output` node inside a Trino
+        cell is capped while its sibling lines are left alone."""
+        long_line = "x" * (service.EXPLAIN_MAX_PLAN_LINE_CHARS + 50)
+        leaf = "  ScanFilterProject[table = mysql_shard_qa2_01:dbonline.employee]"
+        _cols, out, truncated = service._collapse_explain_plan(["explain"], [[f"{long_line}\n{leaf}"]])
+        plan = out[0][0]
+        assert truncated is True
+        assert "[line truncated]" in plan
+        assert leaf in plan, "the cap must not touch other lines"
+
+    def test_the_multi_row_clickhouse_shape_is_unchanged(self):
+        """No cell in ClickHouse's one-row-per-line shape contains a newline, so the
+        split is a no-op there: rows join verbatim, in order, with indentation
+        intact — byte-identical to the pre-split behaviour."""
+        rows = [["Expression (Projection)"], ["  Aggregating"], ["    ReadFromMergeTree (db.t)"]]
+        _cols, out, truncated = service._collapse_explain_plan(["explain"], rows)
+        assert out == [["Expression (Projection)\n  Aggregating\n    ReadFromMergeTree (db.t)"]]
+        assert truncated is False
+
+    def test_splitting_a_plan_that_exactly_fits_the_budget_does_not_set_truncated(self):
+        """`truncated` reports dropped or shortened content, never reshaping: a
+        single-cell plan split into exactly MAX_PLAN_LINES lines is complete."""
+        text = "\n".join(f"line {i}" for i in range(service.EXPLAIN_MAX_PLAN_LINES))
+        _cols, out, truncated = service._collapse_explain_plan(["explain"], [[text]])
+        assert out == [[text]]
+        assert truncated is False
 
     def test_an_unrecognised_shape_is_returned_untouched(self):
         """Fail-soft: only the single-column shape ClickHouse produces for `EXPLAIN` is
@@ -750,10 +826,10 @@ class TestJWTAuthMiddleware:
             ],
             session_id="sess-abc",
         )
-        # SQL references scratch.s_othersession_foo — owned by a DIFFERENT session.
+        # SQL references dbpcm_scratch.s_othersession_foo — owned by a DIFFERENT session.
         # The caller's session (from X-Session-Id) is "sess-abc".
         sql = (
-            "SELECT e.employee_id FROM scratch.s_othersession_foo AS s "
+            "SELECT e.employee_id FROM dbpcm_scratch.s_othersession_foo AS s "
             "JOIN analytics.employees AS e ON s.employee_id = e.employee_id"
         )
         tools_call_payload = {
@@ -1204,7 +1280,7 @@ class TestMcpHealthEndpoints:
 
         from app import mcp_server
 
-        with patch("app.clickhouse_client.ping", return_value=True):
+        with patch.object(mcp_server, "_clickhouse_health_check", return_value=True):
             resp = self._run(lambda: mcp_server.health_ready(self._Req()))
         assert resp.status_code == 200
         body = json.loads(resp.body)
@@ -1218,16 +1294,34 @@ class TestMcpHealthEndpoints:
 
         from app import mcp_server
 
-        with patch("app.clickhouse_client.ping", return_value=False):
+        with patch.object(mcp_server, "_clickhouse_health_check", return_value=False):
             resp = self._run(lambda: mcp_server.health_ready(self._Req()))
         assert resp.status_code == 503
         body = json.loads(resp.body)
         assert body["clickhouse"] == "error"
         assert body["status"] == "unavailable"
 
-    def test_ready_bounded_when_ping_hangs(self):
-        """A hung ping() must not stall the route past the bounded timeout: the
-        cancel scope fires, we report error, and the response still returns fast."""
+    @pytest.mark.parametrize("available", [True, False])
+    def test_trino_readiness_checks_only_trino(self, monkeypatch, available):
+        import json
+
+        from app import mcp_server
+
+        settings = get_settings().model_copy(update={"trino_enabled": True})
+        monkeypatch.setattr(mcp_server, "get_settings", lambda: settings)
+        with patch("app.trino_client.ping", return_value=available) as ping:
+            with patch.object(mcp_server, "_clickhouse_health_check") as ch_check:
+                resp = self._run(lambda: mcp_server.health_ready(self._Req()))
+        ping.assert_called_once_with()
+        ch_check.assert_not_called()
+        assert resp.status_code == (200 if available else 503)
+        body = json.loads(resp.body)
+        assert body["trino"] == ("ok" if available else "error")
+        assert "clickhouse" not in body
+
+    def test_ready_bounded_when_health_check_hangs(self):
+        """A hung health check must not stall the route past the bounded timeout:
+        the cancel scope fires, we report error, and the response still returns fast."""
         import json
         import time
 
@@ -1237,8 +1331,8 @@ class TestMcpHealthEndpoints:
             time.sleep(5)  # far longer than the patched bound below
             return True
 
-        with patch.object(mcp_server, "_HEALTH_PING_TIMEOUT_S", 0.2):
-            with patch("app.clickhouse_client.ping", side_effect=_hang):
+        with patch.object(mcp_server, "_HEALTH_CHECK_TIMEOUT_S", 0.2):
+            with patch.object(mcp_server, "_clickhouse_health_check", side_effect=_hang):
                 start = time.monotonic()
                 resp = self._run(lambda: mcp_server.health_ready(self._Req()))
                 elapsed = time.monotonic() - start
@@ -1268,3 +1362,31 @@ class TestMcpHealthEndpoints:
         assert "/health/live" in mw._public_paths
         assert "/health/ready" in mw._public_paths
         assert "/health" in mw._public_paths
+
+    def test_health_check_query_retries_on_first_failure(self):
+        """A single stale-socket failure is retried and a fresh query succeeds."""
+        client = MagicMock()
+        client.query.side_effect = [ConnectionResetError("stale socket"), None]
+        with patch("app.clickhouse_client.get_client", return_value=client):
+            assert _clickhouse_health_check() is True
+        assert client.query.call_count == 2
+        client.query.assert_called_with("SELECT 1")
+
+    def test_health_check_query_returns_false_after_two_failures(self):
+        """Both retries fail, so the helper reports ClickHouse unavailable."""
+        client = MagicMock()
+        client.query.side_effect = [
+            ConnectionResetError("first"),
+            ConnectionResetError("second"),
+        ]
+        with patch("app.clickhouse_client.get_client", return_value=client):
+            assert _clickhouse_health_check() is False
+        assert client.query.call_count == 2
+
+    def test_health_check_query_returns_false_when_get_client_raises(self):
+        """Client construction failure is guarded and treated as unavailable."""
+        get_client = MagicMock(side_effect=RuntimeError("client construction failed"))
+        with patch("app.clickhouse_client.get_client", get_client):
+            assert _clickhouse_health_check() is False
+        # The route should never surface a 500; get_client is retried once.
+        assert get_client.call_count == 2

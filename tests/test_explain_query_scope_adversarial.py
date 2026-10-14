@@ -3,7 +3,7 @@
 explain_query previously wrapped user SQL in ``EXPLAIN`` after only
 validate_and_sanitize — with NO scratch-session or column-scope enforcement.
 Because ClickHouse must resolve referenced tables/columns to build a plan, a
-scoped caller could ``EXPLAIN SELECT ... FROM scratch.s_<victim>_...`` to
+scoped caller could ``EXPLAIN SELECT ... FROM dbpcm_scratch.s_<victim>_...`` to
 confirm the existence/column structure of another session's scratch table, or
 probe out-of-scope warehouse columns — bypassing the exact gates run_query
 enforces.
@@ -154,7 +154,7 @@ class TestExplainScratchCrossSessionRejected:
         # Table prefix s_sessother_ but caller session is sessmine.
         sql = (
             "SELECT s.employee_id, s.salary_adjustment, e.department "
-            "FROM scratch.s_sessother_compensation AS s "
+            "FROM dbpcm_scratch.s_sessother_compensation AS s "
             "JOIN analytics.employees AS e ON s.employee_id = e.employee_id "
             "WHERE e.status = 'A'"
         )
@@ -168,7 +168,7 @@ class TestExplainScratchCrossSessionRejected:
         self, mock_execute, mock_catalog
     ):
         """Allow-all (empty frozenset) scope must NOT bypass scratch isolation in explain."""
-        sql = "SELECT employee_id FROM scratch.s_sessother_onboarding"
+        sql = "SELECT employee_id FROM dbpcm_scratch.s_sessother_onboarding"
         with pytest.raises(ColumnScopeError) as exc_info:
             _explain_with_scope(sql, frozenset(), session_id="sessmine")
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
@@ -185,7 +185,7 @@ class TestExplainOwnScratchPasses:
     def test_explain_own_scratch_passes(self, mock_execute, mock_catalog):
         sql = (
             "SELECT hire_date_override, salary_adj "
-            "FROM scratch.s_sessmine_compensation"
+            "FROM dbpcm_scratch.s_sessmine_compensation"
         )
         result = _explain_with_scope(sql, _FULL_SCOPE, session_id="sessmine")
         assert result is not None
@@ -221,7 +221,7 @@ class TestExplainRunConsistency:
     """explain-run-consistency — identical violation → identical code on both paths."""
 
     def test_same_scratch_violation_code_on_both_paths(self, mock_execute, mock_catalog):
-        sql = "SELECT employee_id FROM scratch.s_sessother_onboarding"
+        sql = "SELECT employee_id FROM dbpcm_scratch.s_sessother_onboarding"
 
         with pytest.raises(ColumnScopeError) as explain_exc:
             _explain_with_scope(sql, _FULL_SCOPE, session_id="sessmine")
@@ -277,7 +277,7 @@ class TestExplainNoScopeScratchFailsClosed:
     session-less scratch READ must be denied on explain as well."""
 
     def test_explain_no_scope_scratch_fails_closed(self, mock_execute, mock_catalog):
-        sql = "SELECT employee_id FROM scratch.s_sessxyz_whatever"
+        sql = "SELECT employee_id FROM dbpcm_scratch.s_sessxyz_whatever"
         from app.principal import current_scope, current_session_id
         scope_token = current_scope.set(None)
         session_token = current_session_id.set(None)
@@ -297,7 +297,7 @@ class TestExplainNoScopeScratchFailsClosed:
         the scope-less scratch explain reverts to the legacy skip-and-execute path."""
         from app.config import Settings
         gate_off = Settings().model_copy(update={"require_session_scratch_gate": False})
-        sql = "SELECT employee_id FROM scratch.s_sessxyz_whatever"
+        sql = "SELECT employee_id FROM dbpcm_scratch.s_sessxyz_whatever"
         from app.principal import current_scope, current_session_id
         scope_token = current_scope.set(None)
         session_token = current_session_id.set(None)
@@ -379,7 +379,7 @@ class TestExplainScratchNullSessionFailsClosed:
     _HEX32 = "0123456789abcdef0123456789abcdef"
 
     def test_explain_scratch_null_session_fails_closed(self, mock_execute, mock_catalog):
-        sql = f"SELECT employee_id FROM scratch.s_deadbeef_bp_{self._HEX32}"
+        sql = f"SELECT employee_id FROM dbpcm_scratch.s_deadbeef_bp_{self._HEX32}"
         with pytest.raises(ColumnScopeError) as exc_info:
             _explain_with_scope(sql, _FULL_SCOPE, session_id=None)
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
@@ -388,7 +388,7 @@ class TestExplainScratchNullSessionFailsClosed:
     def test_explain_scratch_null_session_backtick_quoted_fails_closed(
         self, mock_execute, mock_catalog
     ):
-        sql = f"SELECT employee_id FROM `scratch`.`s_deadbeef_bp_{self._HEX32}`"
+        sql = f"SELECT employee_id FROM `dbpcm_scratch`.`s_deadbeef_bp_{self._HEX32}`"
         with pytest.raises(ColumnScopeError) as exc_info:
             _explain_with_scope(sql, _FULL_SCOPE, session_id=None)
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
@@ -397,7 +397,7 @@ class TestExplainScratchNullSessionFailsClosed:
 
 # ---------------------------------------------------------------------------
 # ADR-0002 review — REST shape (scope=None, session=None) + the NO-SPACE quoted
-# bypass. Deleting the quote used to fuse `FROM"scratch"` → `FROMscratch`, so the
+# bypass. Deleting the quote used to fuse `FROM"dbpcm_scratch"` → `FROMscratch`, so the
 # scratch-reference pre-check returned False, provenance never ran on the
 # scope-less path, and EXPLAIN of a foreign scratch table EXECUTED. The
 # replace-with-space fix closes it: these must fail closed via explain too.
@@ -407,14 +407,14 @@ class TestExplainRestScratchNoSpaceBypassFailsClosed:
     _HEX32 = "0123456789abcdef0123456789abcdef"
 
     def test_explain_rest_scratch_double_quote_no_space(self, mock_execute, mock_catalog):
-        sql = f'SELECT employee_id FROM"scratch"."s_deadbeef_bp_{self._HEX32}"'
+        sql = f'SELECT employee_id FROM"dbpcm_scratch"."s_deadbeef_bp_{self._HEX32}"'
         with pytest.raises(ColumnScopeError) as exc_info:
             _explain_with_scope(sql, None, session_id=None)
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
         mock_execute.assert_not_called()
 
     def test_explain_rest_scratch_backtick_no_space(self, mock_execute, mock_catalog):
-        sql = f"SELECT employee_id FROM`scratch`.`s_deadbeef_bp_{self._HEX32}`"
+        sql = f"SELECT employee_id FROM`dbpcm_scratch`.`s_deadbeef_bp_{self._HEX32}`"
         with pytest.raises(ColumnScopeError) as exc_info:
             _explain_with_scope(sql, None, session_id=None)
         assert exc_info.value.code == "SCRATCH_SESSION_VIOLATION"
@@ -423,7 +423,7 @@ class TestExplainRestScratchNoSpaceBypassFailsClosed:
     def test_explain_rest_scratch_join_no_space(self, mock_execute, mock_catalog):
         sql = (
             'SELECT e.employee_id FROM analytics.employees e '
-            f'JOIN"scratch"."s_deadbeef_bp_{self._HEX32}" s ON e.employee_id = s.employee_id'
+            f'JOIN"dbpcm_scratch"."s_deadbeef_bp_{self._HEX32}" s ON e.employee_id = s.employee_id'
         )
         with pytest.raises(ColumnScopeError) as exc_info:
             _explain_with_scope(sql, None, session_id=None)

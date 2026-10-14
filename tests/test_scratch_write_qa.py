@@ -5,7 +5,7 @@ file proves the happy-path invariants, this file drives the highest-stakes
 failure modes for a WRITE path into the same ClickHouse the warehouse lives on:
 
   * WAREHOUSE-WRITE (the catastrophe): every body-supplied name/DDL-injection
-    attempt must ALWAYS produce a ``scratch.s_<bound-sid>_*`` object and NEVER a
+    attempt must ALWAYS produce a ``dbpcm_scratch.s_<bound-sid>_*`` object and NEVER a
     warehouse identifier — including when SCRATCH_CH_* is unset (grant absent) so
     the *code* is the only wall.
   * CROSS-SESSION drop/overwrite: the ownership prefix check must bind to the
@@ -153,16 +153,16 @@ class TestWarehouseWriteRefused:
             [[1]],
             settings,
         )
-        assert res["table"].startswith("scratch.s_sessowner_bp_")
+        assert res["table"].startswith("dbpcm_scratch.s_sessowner_bp_")
         sql = _all_sql(fake_client)
         # Nothing the attacker could name appears anywhere in the emitted SQL.
         assert WAREHOUSE not in sql
         assert "victim" not in sql
         create_tbl = [c for c in fake_client.commands if c.upper().startswith("CREATE TABLE")]
-        assert create_tbl and "`scratch`.`s_sessowner_bp_" in create_tbl[0]
+        assert create_tbl and "`dbpcm_scratch`.`s_sessowner_bp_" in create_tbl[0]
         # Every command targets the scratch schema; no other database is named.
         for c in fake_client.commands:
-            assert "`scratch`" in c or c.upper().startswith("CREATE DATABASE")
+            assert "`dbpcm_scratch`" in c or c.upper().startswith("CREATE DATABASE")
 
     @pytest.mark.parametrize(
         "bad_name",
@@ -219,7 +219,7 @@ class TestWarehouseWriteRefused:
     def test_create_sql_always_scratch_qualified_even_with_warehouse_creds(self):
         """With SCRATCH_CH_* UNSET the client falls back to the warehouse creds, so
         the GRANT is no longer the wall — prove the CODE still refuses to name any
-        object outside `scratch.*`.
+        object outside `dbpcm_scratch.*`.
 
         build_scratch_create_sql is *only* ever called with settings.scratch_database
         (see materialize), so a caller cannot steer it at a warehouse db; and the db
@@ -228,7 +228,7 @@ class TestWarehouseWriteRefused:
         never carry a cross-database ``AS SELECT`` because identifiers are validated.
         """
         # Fallback settings: no SCRATCH_CH_* set → scratch_client_params() inherits
-        # the warehouse connection, but scratch_database is still "scratch".
+        # the warehouse connection, but scratch_database is still "dbpcm_scratch".
         s = Settings(
             clickhouse_host="localhost",
             clickhouse_port=9000,
@@ -243,16 +243,16 @@ class TestWarehouseWriteRefused:
         params = s.scratch_client_params()
         # Fallback confirmed: the scratch credential IS the warehouse credential.
         assert params["user"] == "default" and params["password"] == "pw"
-        # Yet the schema the code writes to is still exactly "scratch".
-        assert s.scratch_database == "scratch"
+        # Yet the schema the code writes to is still exactly "dbpcm_scratch".
+        assert s.scratch_database == "dbpcm_scratch"
         ddl = build_scratch_create_sql(
             s.scratch_database, "s_sessx_bp_abc", [{"name": "k", "type": "Int64"}], 3600
         )
-        assert ddl.startswith("CREATE TABLE `scratch`.`s_sessx_bp_abc`")
+        assert ddl.startswith("CREATE TABLE `dbpcm_scratch`.`s_sessx_bp_abc`")
         assert WAREHOUSE not in ddl
 
     def test_materialize_with_fallback_creds_still_targets_scratch(self, fake_client):
-        """End-to-end (fake client) under fallback creds: every command is scratch."""
+        """End-to-end (fake client) under fallback creds: every command is dbpcm_scratch."""
         s = Settings(
             clickhouse_host="localhost",
             clickhouse_port=9000,
@@ -269,10 +269,10 @@ class TestWarehouseWriteRefused:
         )
         for c in fake_client.commands:
             if c.upper().startswith("CREATE DATABASE"):
-                assert "`scratch`" in c
+                assert "`dbpcm_scratch`" in c
             else:
-                assert "`scratch`.`s_sessx_bp_" in c
-        assert fake_client.inserts[0]["database"] == "scratch"
+                assert "`dbpcm_scratch`.`s_sessx_bp_" in c
+        assert fake_client.inserts[0]["database"] == "dbpcm_scratch"
 
 
 # ===========================================================================
@@ -286,7 +286,7 @@ class TestCrossSession:
         table name is the only body-controlled value — a foreign-prefixed name is 403
         and NO DROP reaches ClickHouse."""
         with pytest.raises(ScratchWriteError) as e:
-            scratch_drop("sess_b", "scratch.s_sess_a_bp_x", settings)
+            scratch_drop("sess_b", "dbpcm_scratch.s_sess_a_bp_x", settings)
         assert e.value.code == "SCRATCH_SESSION_VIOLATION"
         assert e.value.status_code == 403
         assert fake_client.commands == []
@@ -295,7 +295,7 @@ class TestCrossSession:
         """Session 'sess_a' must not drop 's_sess_ab_*' (prefix confusion) — the
         trailing underscore in the expected prefix prevents it."""
         with pytest.raises(ScratchWriteError) as e:
-            scratch_drop("sess_a", "scratch.s_sess_ab_bp_x", settings)
+            scratch_drop("sess_a", "dbpcm_scratch.s_sess_ab_bp_x", settings)
         assert e.value.code == "SCRATCH_SESSION_VIOLATION"
         assert fake_client.commands == []
 
@@ -312,7 +312,7 @@ class TestCrossSession:
         with pytest.raises(ScratchWriteError) as e:
             scratch_drop(
                 "sess_b",
-                "scratch.s_sess_b_bp_x`; DROP TABLE dbpcm_warehouse.employee --",
+                "dbpcm_scratch.s_sess_b_bp_x`; DROP TABLE dbpcm_warehouse.employee --",
                 settings,
             )
         assert e.value.code == "SCRATCH_SESSION_VIOLATION"
@@ -320,7 +320,7 @@ class TestCrossSession:
         assert fake_client.commands == []
 
     def test_drop_missing_or_nonstring_table_rejected(self, fake_client, settings):
-        for bad in (None, "", 123, ["scratch.s_sess_b_bp_x"]):
+        for bad in (None, "", 123, ["dbpcm_scratch.s_sess_b_bp_x"]):
             with pytest.raises(ScratchWriteError) as e:
                 scratch_drop("sess_b", bad, settings)
             assert e.value.code == "SCRATCH_MATERIALIZE_REJECTED"
@@ -489,7 +489,7 @@ class TestIdentifierFailClosed:
         res = scratch_ingest.materialize(
             "1leading", [{"name": "k", "type": "Int64"}], [[1]], settings
         )
-        assert res["table"].startswith("scratch.s_1leading_bp_")
+        assert res["table"].startswith("dbpcm_scratch.s_1leading_bp_")
 
 
 # ===========================================================================
@@ -526,7 +526,7 @@ class TestAuthAndBindingRoutes:
 
     def test_drop_unauthenticated_401(self):
         client = TestClient(_authed_app(), raise_server_exceptions=False)
-        resp = client.post("/scratch/v1/drop", json={"table": "scratch.s_x_bp_y"})
+        resp = client.post("/scratch/v1/drop", json={"table": "dbpcm_scratch.s_x_bp_y"})
         assert resp.status_code == 401
 
     def test_materialize_valid_jwt_no_session_header_rejected(self):
@@ -544,7 +544,7 @@ class TestAuthAndBindingRoutes:
         resp = client.post(
             "/scratch/v1/drop",
             headers={"Authorization": f"Bearer {make_jwt()}"},
-            json={"table": "scratch.s_x_bp_y"},
+            json={"table": "dbpcm_scratch.s_x_bp_y"},
         )
         assert resp.status_code == 400
         assert resp.json()["code"] == "SCRATCH_SESSION_MISSING"
@@ -573,7 +573,7 @@ class TestAuthAndBindingRoutes:
                 "Authorization": f"Bearer {make_jwt(session_id='sess_a')}",
                 "X-Session-Id": "sess_b",
             },
-            json={"table": "scratch.s_sess_b_bp_x"},
+            json={"table": "dbpcm_scratch.s_sess_b_bp_x"},
         )
         assert resp.status_code == 403
         assert resp.json()["code"] == "SESSION_BINDING_MISMATCH"
@@ -597,7 +597,7 @@ class TestAuthAndBindingRoutes:
 
     def test_sessionless_token_no_header_cannot_write_scratch(self):
         """...and without the header the same token is SCRATCH_SESSION_MISSING — so
-        there is NO way for a session-less token to write scratch."""
+        there is NO way for a session-less token to write dbpcm_scratch."""
         client = TestClient(_authed_app(), raise_server_exceptions=False)
         resp = client.post(
             "/scratch/v1/materialize",
@@ -630,7 +630,7 @@ class TestMaterializeRouteWarehouseWrite:
     def test_body_table_session_database_ignored_route(self, monkeypatch):
         """Full route: a body that tries to name a warehouse/foreign table, its own
         session_id, AND a database field — all IGNORED.  The created object is
-        scratch.s_<bound-sid>_* and the warehouse name never reaches the DDL."""
+        dbpcm_scratch.s_<bound-sid>_* and the warehouse name never reaches the DDL."""
         fc = FakeCHClient()
         monkeypatch.setattr(scratch_ingest, "build_scratch_client", lambda settings: fc)
         client = TestClient(_authed_app(), raise_server_exceptions=False)
@@ -646,12 +646,12 @@ class TestMaterializeRouteWarehouseWrite:
             },
         )
         assert resp.status_code == 200
-        assert resp.json()["table"].startswith("scratch.s_sessowner_bp_")
+        assert resp.json()["table"].startswith("dbpcm_scratch.s_sessowner_bp_")
         sql = "\n".join(fc.commands)
         assert WAREHOUSE not in sql
         assert "victim" not in sql
         create = [c for c in fc.commands if c.upper().startswith("CREATE TABLE")]
-        assert create and "`scratch`.`s_sessowner_bp_" in create[0]
+        assert create and "`dbpcm_scratch`.`s_sessowner_bp_" in create[0]
 
     def test_ddl_injection_column_name_rejected_route(self, no_connect):
         client = TestClient(_authed_app(), raise_server_exceptions=False)
@@ -712,7 +712,7 @@ class TestDropRouteCrossSession:
         resp = client.post(
             "/scratch/v1/drop",
             headers=_hdrs("sessowner"),
-            json={"table": "scratch.s_sessvictim_bp_x"},
+            json={"table": "dbpcm_scratch.s_sessvictim_bp_x"},
         )
         assert resp.status_code == 403
         assert resp.json()["code"] == "SCRATCH_SESSION_VIOLATION"
@@ -727,7 +727,7 @@ class TestDropRouteCrossSession:
         resp = client.post(
             "/scratch/v1/drop",
             headers=_hdrs("sessowner"),
-            json={"table": "scratch.s_sessowner_bp_x`; DROP TABLE dbpcm_warehouse.employee --"},
+            json={"table": "dbpcm_scratch.s_sessowner_bp_x`; DROP TABLE dbpcm_warehouse.employee --"},
         )
         assert resp.status_code == 403
         assert resp.json()["code"] == "SCRATCH_SESSION_VIOLATION"

@@ -60,7 +60,7 @@ def _read_allowed(full_or_bare_table: str, session_id: str) -> bool:
     bare = full_or_bare_table.split(".", 1)[1] if "." in full_or_bare_table else full_or_bare_table
     sql = (
         f"SELECT s.EmployeeCode, e.Department "
-        f"FROM scratch.{bare} AS s "
+        f"FROM dbpcm_scratch.{bare} AS s "
         f"JOIN dbpcm_warehouse.employee AS e ON s.EmployeeCode = e.EmployeeCode"
     )
     try:

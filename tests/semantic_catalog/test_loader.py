@@ -73,3 +73,144 @@ class TestCatalogSha:
         assert len(sha) == 40
         assert sha == sha.strip()
         assert all(c in "0123456789abcdef" for c in sha)
+
+
+class TestValidateRlsProjection:
+    """Fail-closed RLS guard tests (A-M1)."""
+
+    def test_missing_mcp_projection_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            loader,
+            "_REQUIRED_RLS_HIDDEN_COLUMNS",
+            {f"{loader.DEFAULT_DATABASE}.test_rls": frozenset({"client_code", "proc_center"})},
+        )
+        (tmp_path / "test_rls.yaml").write_text(
+            "table: test_rls\ncolumns:\n  a: { type: String }\n", encoding="utf-8"
+        )
+        catalog = loader.load_semantic_catalog(tmp_path)
+        with pytest.raises(loader.CatalogValidationError) as exc_info:
+            loader._validate_rls_projection(catalog)
+        assert "empty/missing mcp_projection.hidden_columns" in str(exc_info.value)
+
+    def test_incomplete_hidden_columns_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            loader,
+            "_REQUIRED_RLS_HIDDEN_COLUMNS",
+            {f"{loader.DEFAULT_DATABASE}.test_rls": frozenset({"client_code", "proc_center"})},
+        )
+        (tmp_path / "test_rls.yaml").write_text(
+            "table: test_rls\ncolumns:\n  a: { type: String }\n"
+            "mcp_projection:\n  hidden_columns: [client_code]\n",
+            encoding="utf-8",
+        )
+        catalog = loader.load_semantic_catalog(tmp_path)
+        with pytest.raises(loader.CatalogValidationError) as exc_info:
+            loader._validate_rls_projection(catalog)
+        assert "proc_center" in str(exc_info.value)
+
+    def test_real_catalog_passes_validation(self):
+        """Every required RLS table is present and hides its enforced columns."""
+        catalog = loader.get_semantic_catalog()
+        assert len(catalog) >= 6
+        for key in loader._REQUIRED_RLS_HIDDEN_COLUMNS:
+            assert key in catalog
+
+
+class TestBackendScopedMachinery:
+    """Registry + helper contract for the backend-scoped values / rule-backends
+    mechanism (the sibling-key convention documented in the loader docstring).
+
+    The full per-surface behavior (substitution / exclusion / no-leak /
+    byte-identity / real-catalog canary) lives in
+    tests/semantic_catalog/test_backend_scoped_fields.py; this class pins the
+    loader-level registry and the loud error paths, plus the loader's
+    unknown-key tolerance for the mechanism keys.
+    """
+
+    def test_registries(self):
+        assert loader.BACKEND_SCOPED_VALUE_FIELDS == ("values",)
+        assert loader.KNOWN_BACKENDS == ("clickhouse", "trino")
+        assert set(loader.BACKEND_SCOPED_VALUE_KEYS) == {
+            "clickhouse_values",
+            "trino_values",
+        }
+
+    def test_loader_passes_mechanism_keys_through_untouched(self, tmp_path):
+        """Unknown-key tolerance: scoped values keys and rule ``backends`` ride
+        the raw entry verbatim; interpretation happens only at serialization."""
+        (tmp_path / "t.yaml").write_text(
+            "table: t\n"
+            "columns:\n"
+            "  a:\n"
+            "    type: String\n"
+            "    values: [A, B]\n"
+            "    trino_values: [X]\n"
+            "rules:\n"
+            "- id: r\n"
+            "  predicate: a IS NOT NULL\n"
+            "  backends: [clickhouse]\n",
+            encoding="utf-8",
+        )
+        entry = loader.load_semantic_catalog(tmp_path)["dbpcm_warehouse.t"]
+        assert entry["columns"]["a"]["values"] == ["A", "B"]
+        assert entry["columns"]["a"]["trino_values"] == ["X"]
+        assert entry["rules"][0]["backends"] == ["clickhouse"]
+
+    def test_scoped_field_helper_plain_default(self):
+        mapping = {"values": ["A"]}
+        assert loader.scoped_field_for_backend(
+            mapping, "values", trino_enabled=True
+        ) == ["A"]
+        assert loader.scoped_field_for_backend(
+            mapping, "values", trino_enabled=False
+        ) == ["A"]
+
+    def test_rule_applies_unknown_backend_is_loud(self):
+        with pytest.raises(ValueError, match="db2"):
+            loader.rule_applies_to_backend(
+                {"id": "r", "backends": ["db2"]}, trino_enabled=True
+            )
+
+    def test_rule_applies_mis_shaped_is_loud(self):
+        with pytest.raises(ValueError, match="'backends'"):
+            loader.rule_applies_to_backend(
+                {"id": "r", "backends": "trino"}, trino_enabled=True
+            )
+
+
+class TestAccrualBalancesYaml:
+    """Loader/projection contract for the view-first accrual_balances table
+    (authored with the four-template Trino view conversion; no ClickHouse ETL
+    counterpart exists yet)."""
+
+    def test_loads_with_mysql_source_and_grain(self):
+        catalog = loader.load_semantic_catalog()
+        entry = catalog["dbpcm_warehouse.accrual_balances"]
+        assert entry["source"] == "mysql"
+        assert entry["database"] == "dbpcm_warehouse"
+        assert entry["table"] == "accrual_balances"
+        assert entry["grain"] == ["employee_code", "accrual_code"]
+        assert entry["grain_verifiable"] is True
+        # 17 catalogued business columns (the view additionally emits the
+        # hidden client_code/proc_center identity pins).
+        assert len(entry["columns"]) == 17
+
+    def test_hidden_identity_pins_and_row_scope(self):
+        catalog = loader.load_semantic_catalog()
+        entry = catalog["dbpcm_warehouse.accrual_balances"]
+        hidden = set(entry["mcp_projection"]["hidden_columns"])
+        assert {"client_code", "proc_center"} <= hidden
+        # The pins are hidden and NOT declared as columns (house pattern).
+        assert "client_code" not in entry["columns"]
+        assert "proc_center" not in entry["columns"]
+        assert set(entry["row_scope"]["implicit_filters"]) >= {"client_code", "proc_center"}
+
+    def test_accrual_events_yaml_rls_projection_matches_house_pattern(self):
+        """accrual_events.yaml hid client_code as a column pre-view-work; it now
+        follows the hidden-pin pattern (proc_center added, client_code moved)."""
+        catalog = loader.load_semantic_catalog()
+        entry = catalog["dbpcm_warehouse.accrual_events"]
+        hidden = set(entry["mcp_projection"]["hidden_columns"])
+        assert {"client_code", "proc_center"} <= hidden
+        assert "client_code" not in entry["columns"]
+        assert entry["source"] == "mysql"

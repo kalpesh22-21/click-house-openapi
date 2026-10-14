@@ -3,7 +3,7 @@
 These run against the REAL l2 ClickHouse (localhost:8123 by default) and prove
 the hard security invariants end-to-end:
 
-  #1  the scratch credential can write/read ONLY `scratch.*` — a warehouse
+  #1  the scratch credential can write/read ONLY `dbpcm_scratch.*` — a warehouse
       CREATE/INSERT/SELECT with it is denied by the ClickHouse grant;
   #2/#3  isolation, enforced twice: a table materialized as session A carries the
       s_<A>_ prefix (write-side), and session B cannot READ it (the D64 read gate,
@@ -107,7 +107,7 @@ def scratch_settings():
         oidc_issuer="https://idp.test/",
         oidc_audience="clickhouse-api",
         public_base_url="https://test.example.com",
-        scratch_database="scratch",
+        scratch_database="dbpcm_scratch",
         scratch_ttl_seconds=3600,
         scratch_max_rows=10_000,
     )
@@ -142,14 +142,14 @@ class TestMaterializeAndReadBack:
             [[1, hostile], [2, "b"], [3, "c"]],
             scratch_settings,
         )
-        table = res["table"]  # scratch.s_<sid>_bp_<uuid>
+        table = res["table"]  # dbpcm_scratch.s_<sid>_bp_<uuid>
         bare = table.split(".", 1)[1]
         assert res["row_count"] == 3
 
         try:
             # (a) direct read: the hostile cell round-tripped as DATA (invariant #4)
             rows = admin.query(
-                f"SELECT k, note FROM scratch.`{bare}` ORDER BY k"
+                f"SELECT k, note FROM dbpcm_scratch.`{bare}` ORDER BY k"
             ).result_rows
             assert rows == [(1, hostile), (2, "b"), (3, "c")]
 
@@ -160,7 +160,7 @@ class TestMaterializeAndReadBack:
             sess_token = current_session_id.set(session_id)
             try:
                 out = service.run_query(
-                    f"SELECT k, note FROM scratch.`{bare}` ORDER BY k",
+                    f"SELECT k, note FROM dbpcm_scratch.`{bare}` ORDER BY k",
                     settings=scratch_settings,
                 )
             finally:
@@ -169,7 +169,7 @@ class TestMaterializeAndReadBack:
             assert out["row_count"] == 3
             assert [r[0] for r in out["rows"]] == [1, 2, 3]
         finally:
-            admin.command(f"DROP TABLE IF EXISTS scratch.`{bare}`")
+            admin.command(f"DROP TABLE IF EXISTS dbpcm_scratch.`{bare}`")
 
     def test_two_materializations_distinct_names(self, admin, scratch_settings):
         from app import scratch_ingest
@@ -183,11 +183,11 @@ class TestMaterializeAndReadBack:
         )
         try:
             assert a["table"] != b["table"]
-            assert a["table"].startswith(f"scratch.s_{session_id}_bp_")
-            assert b["table"].startswith(f"scratch.s_{session_id}_bp_")
+            assert a["table"].startswith(f"dbpcm_scratch.s_{session_id}_bp_")
+            assert b["table"].startswith(f"dbpcm_scratch.s_{session_id}_bp_")
         finally:
             for r in (a, b):
-                admin.command(f"DROP TABLE IF EXISTS scratch.`{r['table'].split('.',1)[1]}`")
+                admin.command(f"DROP TABLE IF EXISTS dbpcm_scratch.`{r['table'].split('.',1)[1]}`")
 
 
 # ---------------------------------------------------------------------------
@@ -217,14 +217,14 @@ class TestIsolationLive:
             try:
                 with pytest.raises(ColumnScopeError) as e:
                     service.run_query(
-                        f"SELECT k FROM scratch.`{bare}`", settings=scratch_settings
+                        f"SELECT k FROM dbpcm_scratch.`{bare}`", settings=scratch_settings
                     )
                 assert e.value.code == "SCRATCH_SESSION_VIOLATION"
             finally:
                 current_scope.reset(scope_token)
                 current_session_id.reset(sess_token)
         finally:
-            admin.command(f"DROP TABLE IF EXISTS scratch.`{bare}`")
+            admin.command(f"DROP TABLE IF EXISTS dbpcm_scratch.`{bare}`")
 
     def test_write_is_bound_a_cannot_name_b(self, admin, scratch_settings):
         """A caller acting as session A can only ever produce an s_<A>_ table.
@@ -244,11 +244,11 @@ class TestIsolationLive:
             assert bare.startswith(f"s_{sid_a}_")
             assert sid_b not in bare
         finally:
-            admin.command(f"DROP TABLE IF EXISTS scratch.`{bare}`")
+            admin.command(f"DROP TABLE IF EXISTS dbpcm_scratch.`{bare}`")
 
 
 # ---------------------------------------------------------------------------
-# Invariant #1 — the scratch credential is confined to scratch.* by the grant
+# Invariant #1 — the scratch credential is confined to dbpcm_scratch.* by the grant
 # ---------------------------------------------------------------------------
 
 
@@ -271,7 +271,7 @@ class TestScratchGrantConfinement:
             # scratch-only grant — NO warehouse grant of any kind
             admin.command(
                 f"GRANT CREATE TABLE, INSERT, DROP TABLE, SELECT, CREATE DATABASE "
-                f"ON scratch.* TO {user}"
+                f"ON dbpcm_scratch.* TO {user}"
             )
 
             su = clickhouse_connect.get_client(
@@ -280,9 +280,9 @@ class TestScratchGrantConfinement:
             # Allowed: a scratch write.
             tname = "s_grant_probe_bp_" + uuid.uuid4().hex
             su.command(
-                f"CREATE TABLE scratch.`{tname}` (a Int64) ENGINE=MergeTree ORDER BY tuple()"
+                f"CREATE TABLE dbpcm_scratch.`{tname}` (a Int64) ENGINE=MergeTree ORDER BY tuple()"
             )
-            su.insert(table=tname, data=[[1]], column_names=["a"], database="scratch")
+            su.insert(table=tname, data=[[1]], column_names=["a"], database="dbpcm_scratch")
 
             # Denied: every warehouse operation is refused by the grant.
             for label, fn in [
@@ -306,7 +306,7 @@ class TestScratchGrantConfinement:
                     e.value
                 ), f"{label} was not denied"
 
-            admin.command(f"DROP TABLE IF EXISTS scratch.`{tname}`")
+            admin.command(f"DROP TABLE IF EXISTS dbpcm_scratch.`{tname}`")
         finally:
             admin.command(f"DROP DATABASE IF EXISTS {wh_db}")
             admin.command(f"DROP USER IF EXISTS {user}")
@@ -330,16 +330,16 @@ class TestScratchTTL:
         bare = res["table"].split(".", 1)[1]
         try:
             assert (
-                admin.query(f"SELECT count() FROM scratch.`{bare}`").result_rows[0][0]
+                admin.query(f"SELECT count() FROM dbpcm_scratch.`{bare}`").result_rows[0][0]
                 == 3
             )
             time.sleep(2)
             # Force the TTL merge (background merges are timer-driven; OPTIMIZE FINAL
             # applies the wall-clock row TTL deterministically).
-            admin.command(f"OPTIMIZE TABLE scratch.`{bare}` FINAL")
+            admin.command(f"OPTIMIZE TABLE dbpcm_scratch.`{bare}` FINAL")
             assert (
-                admin.query(f"SELECT count() FROM scratch.`{bare}`").result_rows[0][0]
+                admin.query(f"SELECT count() FROM dbpcm_scratch.`{bare}`").result_rows[0][0]
                 == 0
             )
         finally:
-            admin.command(f"DROP TABLE IF EXISTS scratch.`{bare}`")
+            admin.command(f"DROP TABLE IF EXISTS dbpcm_scratch.`{bare}`")

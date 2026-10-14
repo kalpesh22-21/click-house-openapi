@@ -1,0 +1,200 @@
+database: dbpcm_warehouse
+table: employee_change
+region: workforce_employee
+description: >
+  NOT a current-state table — use the employee table for current values. Field-level audit trail
+  of employee master-data changes. Each row captures one field-level update on an employee record:
+  which field changed, the old and new descriptions, the actor who made the change, and timing.
+
+grain: []
+grain_verifiable: false
+grain_note: >
+  Physical storage key is (proc_center, client_code, id). Analytic grain is one row per
+  field-level change event per employee. This grain is unverifiable against live data while
+  the MCP is down.
+
+primary_key: []
+primary_key_note: >
+  No business primary key is exposed. The physical ORDER BY key is (proc_center, client_code, id).
+
+temporal:
+  dimensions:
+    - name: change_time_added
+      role: event
+      date_col: change_time_added
+    - name: effective_date
+      role: as_of
+      date_col: effective_date
+  default_pin: effective_date
+  note: >
+    change_time_added is when the change was recorded in the system; effective_date is when the
+    change takes effect. These are distinct — do not treat them interchangeably.
+
+join_keys:
+  - column: employee_code
+    joins: employee.employee_code
+    join_on: [employee_code]
+    cardinality: N:1
+    implicit_join_scope: [client_code, proc_center]
+
+columns:
+  id:
+    type: UInt64
+    description: >
+      Internal storage row id (deduplication); part of the physical ORDER BY key. Use FINAL to
+      collapse duplicate versions and retrieve the latest record per (proc_center, client_code, id).
+
+  employee_code:
+    type: FixedString(4)
+    description: Unique employee identifier in Paycom. Canonical join key to employee table.
+
+  changed_field:
+    type: String
+    description: >
+      Name of the field that was updated on the data source. Values are UNOBSERVED (dev MCP is
+      down) and client-defined. Interpret via resolveValues(changed_field, <concept>) against the
+      client's configured field label space. Examples of common changed fields include:
+      "Position Seat ID", "Location", "Pay Basis", "Rate 1", "Address", "Hourly Salary", "Last Pay Change", "Salary".
+      Do not hardcode a fixed enum of values.
+
+  change_description:
+    type: String
+    description: >
+      Free-text description of the record change that occurred.
+
+  old_value_description:
+    type: String
+    sensitive: true
+    description: >
+      Description of the old (previous) value before the change. This field may contain sensitive
+      data such as address or salary information.
+
+  new_value_description:
+    type: String
+    sensitive: true
+    description: >
+      Description of the new value after the change. This field may contain sensitive data such as
+      address or salary information.
+
+  change_time_added:
+    type: DateTime64(6)
+    description: >
+      Timestamp when the change was recorded in the system. Row visibility is governed by row policy.
+
+  change_by_username:
+    type: String
+    description: >
+      Username of the user who made the change. Row visibility is governed by row policy.
+
+  change_by_usertype:
+    type: LowCardinality(String)
+    description: >
+      Type of user who made the change. Dictionary semantics: values represent roles such as
+      employee, client admin, or regular user. Values are UNOBSERVED in the dev MCP. Interpret
+      via resolveValues(change_by_usertype, <concept>) against the client's configured user types.
+      Do not hardcode enum values.
+
+  effective_date:
+    type: Nullable(Date32)
+    description: >
+      Date when the change goes into effect. Use for as-of analysis of when a change took effect,
+      distinct from when it was recorded (change_time_added).
+
+measures:
+  change_events:
+    column: "*"
+    agg: count
+    defined_over: deduplicated rows (apply dedup_first rule before aggregation)
+
+  employees_changed:
+    column: employee_code
+    agg: count_distinct
+    defined_over: deduplicated rows (apply dedup_first rule before aggregation)
+
+rules:
+  - id: dedup_first
+    predicate: "FROM employee_change FINAL"
+    applies_when: any aggregation or analysis on this table
+    description: >
+      The ONLY canonical deduplication pattern is `FROM employee_change FINAL`. The
+      ReplicatedReplacingMergeTree('{__version__}') requires FINAL to deliver correct state.
+      Aggregation without FINAL is INCORRECT — it can include stale duplicate versions. Note
+      that replica convergence after merges means non-FINAL reads may see divergent counts
+      across replicas.
+
+  - id: effective_changes_only
+    predicate: "is_effective = 1"
+    applies_when: analyzing changes that took effect
+    description: >
+      Filter to effective changes only. This is a data-team-defined flag. Use when the question
+      concerns changes that have taken effect, not all recorded changes.
+
+  - id: changes_after_reference_event
+    predicate: >
+      effective_date > toDateTime64({reference_effective_date}, 6)
+    applies_when: analyzing changes after a reference point (e.g., a termination date or audit cutoff)
+    description: >
+      Use a bound parameter (never interpolate values directly) to ask for effective changes
+      occurring after a specific date. Always prefer using named parameters — e.g.,
+      toDateTime64({reference_effective_date}, 6) — through the MCP's parameter binding.
+
+ambiguities:
+  - term: pay_hike
+    resolves_to:
+      - "Rows where changed_field identifies a salary/rate field (e.g., 'Salary', 'Rate 1', 'Hourly Salary')"
+      - "Old and new value descriptions carry the before/after salary details"
+    default: resolveValues(changed_field, 'salary rate pay')
+    clarify_if: client's changed_field label space is unobserved; may differ across tenants
+
+  - term: position_change
+    resolves_to:
+      - "Rows where changed_field identifies a position/role/title field"
+    default: resolveValues(changed_field, 'position role title')
+    clarify_if: client's changed_field label space is unobserved; may differ across tenants
+
+  - term: became_role
+    resolves_to:
+      - "Rows where changed_field identifies a role or title field"
+    default: resolveValues(changed_field, 'role title')
+    clarify_if: client's changed_field label space is unobserved; may differ across tenants
+
+  - term: audit_history
+    resolves_to:
+      - "All rows in the table represent the full change history"
+      - "For history vs what-took-effect, additionally filter is_effective = 1"
+    default: all_rows
+    clarify_if: user wants changes that took effect vs all recorded changes (includes non-effective)
+
+schema_notes:
+  - "Table and employee_change_rls row policy ship together in schema MR !9 (V4-551040)."
+  - "Table uses ReplicatedReplacingMergeTree with __version only (no __deleted column in DDL). FINAL collapses versions; there are no tombstone semantics."
+  - "Descriptions derived from schema DDL + data-team dictionary without live data verification (provisional pending MCP restoration). Value spaces are UNOBSERVED."
+  - "The `sensitive` flag on old_value_description and new_value_description is metadata-only today (no consumer-side masking is enforced)."
+  - "Results are additionally employee-filtered per principal via user_employee_access, beyond the tenant scope expressed in row_scope."
+  - "Table is partitioned by toYYYYMM(change_time_added)."
+  - "2026-10-07 hygiene: removed the stale is_effective column entry (absent from the live ClickHouse table; never served on either backend's discovery surface) and corrected the effective_date type to Nullable(Date32) (live DDL truth)."
+
+# Backend-scoped notes convention (see app/semantic_catalog/loader.py::scoped_notes_for_backend):
+# entries under trino_notes surface ONLY when the serving deployment runs with
+# TRINO_ENABLED=true; entries under schema_notes (above) always surface.
+trino_notes:
+- "Trino's ClickHouse connector surfaces DateTime64(6) columns as timestamp(3): microsecond values
+  read correctly, but the connector caps TIMESTAMP at millisecond precision, so sub-millisecond
+  comparisons are not available through the Trino path (affected: change_time_added). The authored
+  `type` values above remain faithful to the ClickHouse DDL (DateTime64(6)); the differing
+  spelling is expected and is not catalog drift."
+
+mcp_projection:
+  hidden_columns:
+    - client_code
+    - proc_center
+    - __version
+  notes:
+    - client_code and proc_center are enforced by row-level policy and omitted from exposed columns and joins.
+    - __version is the ReplacingMergeTree version column and is omitted from the model-facing schema.
+
+row_scope:
+  implicit_filters:
+    - client_code
+    - proc_center
+  enforced_by: ClickHouse row policy
