@@ -113,6 +113,8 @@ def _check_table_allowed(database: str, table: str, settings: Settings) -> None:
     that composes with — it does not replace — the ALLOWED_DATABASES allowlist;
     callers apply ``_check_database_allowed`` first.
     """
+    if table == "etl_product_refresh_status":
+        raise TableNotAllowedError(message="Table is not available.", code="TABLE_NOT_ALLOWED")
     if not settings.restrict_to_catalogued_tables:
         return
     if database == settings.scratch_database:
@@ -443,7 +445,7 @@ def list_tables(
 
     tables = [
         {"database": row[0], "name": row[1], "engine": row[2]}
-        for row in rows
+        for row in rows if row[1] != "etl_product_refresh_status"
     ]
 
     if database == settings.scratch_database:
@@ -668,7 +670,9 @@ def get_table_schema(
     return response
 
 
-def _with_provenance(result: dict[str, Any], uses: frozenset[tuple[str, str]]) -> dict[str, Any]:
+def _with_provenance(
+    result: dict[str, Any], uses: frozenset[tuple[str, str]], *, sql: str, settings: Settings
+) -> dict[str, Any]:
     """Return the access dependencies validated for this response by the API.
 
     Hidden policy columns are enforced by the API, not caller column scope. Match
@@ -677,10 +681,18 @@ def _with_provenance(result: dict[str, Any], uses: frozenset[tuple[str, str]]) -
     """
     catalog = get_semantic_catalog()
     columns = sorted(
-        (table, column) for table, column in uses
+        (table, column)
+        for table, column in uses
         if column not in hidden_columns_for(catalog, table)
     )
-    return {**result, "provenance": {"version": 1, "columns": [list(pair) for pair in columns]}}
+    from app.data_freshness import data_as_of
+
+    stamp = data_as_of(sql, settings)
+    return {
+        **result,
+        "provenance": {"version": 1, "columns": [list(pair) for pair in columns]},
+        **({"data_as_of": stamp} if stamp is not None else {}),
+    }
 
 
 def sample_rows(
@@ -870,7 +882,7 @@ def sample_rows(
     columns, rows = _execute(sql, settings)
 
     result = _compact_result(columns, rows, settings.max_response_rows, truncated_override=False)
-    return _with_provenance(result, uses) if include_provenance else result
+    return _with_provenance(result, uses, sql=sql, settings=settings) if include_provenance else result
 
 
 def _enforce_query_guardrails(
@@ -920,6 +932,11 @@ def _enforce_query_guardrails(
     provenance even without a bound column scope; legacy REST shapes are unchanged.
     """
     # ---------------------------------------------------------------------------
+    if "etl_product_refresh_status" in clean_sql.lower():
+        for ref in extract_referenced_base_tables(clean_sql):
+            if ref.rsplit(".", 1)[-1] == "etl_product_refresh_status":
+                raise TableNotAllowedError(message="Table is not available.", code="TABLE_NOT_ALLOWED")
+
     # Cartesian-join guardrail (applies to EVERY caller — scoped HTTP/JWT AND the
     # no-scope/stdio path — so the block cannot be bypassed by dropping the scope).
     # NOTE: this parses clean_sql once here even though the scoped column-provenance
@@ -1142,7 +1159,7 @@ def run_query(
     columns, rows = _execute(clean_sql, settings)
 
     result = _compact_result(columns, rows, settings.max_response_rows)
-    return _with_provenance(result, uses) if include_provenance else result
+    return _with_provenance(result, uses, sql=clean_sql, settings=settings) if include_provenance else result
 
 
 def explain_query(
@@ -1217,4 +1234,4 @@ def explain_query(
     result = _compact_result(
         columns, rows, settings.max_response_rows, truncated_override=plan_truncated
     )
-    return _with_provenance(result, uses) if include_provenance else result
+    return _with_provenance(result, uses, sql=inner_sql, settings=settings) if include_provenance else result
