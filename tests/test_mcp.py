@@ -1082,18 +1082,15 @@ class TestAuthConfigContract:
         get_settings.cache_clear()
 
     def test_mcp_stdio_import_succeeds_without_oidc(self):
+        import subprocess
         import sys
 
-        with patch.dict(os.environ):
-            for k in ("OIDC_JWKS_URL", "OIDC_ISSUER", "OIDC_AUDIENCE"):
-                os.environ.pop(k, None)
-            sys.modules.pop("app.mcp_server", None)
-            get_settings.cache_clear()
-            try:
-                import app.mcp_server  # noqa: F401
-            finally:
-                get_settings.cache_clear()
-                import app.mcp_server  # noqa: F401,F811
+        # Registrations hold references to module globals. Reimporting in the
+        # test process splits the server and mocks into different module instances.
+        env = dict(os.environ)
+        for key in ("OIDC_JWKS_URL", "OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_PUBLIC_KEY"):
+            env[key] = ""
+        subprocess.run([sys.executable, "-c", "import app.mcp_server"], env=env, check=True, capture_output=True, text=True)
 
 
 # ===========================================================================

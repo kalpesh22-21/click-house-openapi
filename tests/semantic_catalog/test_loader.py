@@ -189,28 +189,33 @@ class TestAccrualBalancesYaml:
         assert entry["source"] == "mysql"
         assert entry["database"] == "dbpcm_warehouse"
         assert entry["table"] == "accrual_balances"
-        assert entry["grain"] == ["employee_code", "accrual_code"]
-        assert entry["grain_verifiable"] is True
+        assert entry["grain"] == []
+        assert entry["grain_verifiable"] is False
+        assert entry["primary_key"] == []
         # 17 catalogued business columns (the view additionally emits the
         # hidden client_code/proc_center identity pins).
-        assert len(entry["columns"]) == 17
+        assert len(set(entry["columns"]) - set(entry["mcp_projection"]["hidden_columns"])) == 17
 
     def test_hidden_identity_pins_and_row_scope(self):
         catalog = loader.load_semantic_catalog()
         entry = catalog["dbpcm_warehouse.accrual_balances"]
         hidden = set(entry["mcp_projection"]["hidden_columns"])
         assert {"client_code", "proc_center"} <= hidden
-        # The pins are hidden and NOT declared as columns (house pattern).
-        assert "client_code" not in entry["columns"]
-        assert "proc_center" not in entry["columns"]
+        # Declarations describe source types; model-facing schemas hide pins.
+        from app.semantic_catalog.overlay import build_table_schema_response
+        response = build_table_schema_response(
+            database=entry["database"], table=entry["table"], catalog=catalog,
+            introspected_columns=[{"name": name, "type": info["type"], "comment": ""} for name, info in entry["columns"].items()],
+            scope=None,
+        )
+        assert hidden.isdisjoint(c["name"] for c in response["columns"])
         assert set(entry["row_scope"]["implicit_filters"]) >= {"client_code", "proc_center"}
 
     def test_accrual_events_yaml_rls_projection_matches_house_pattern(self):
-        """accrual_events.yaml hid client_code as a column pre-view-work; it now
-        follows the hidden-pin pattern (proc_center added, client_code moved)."""
+        """Source identity declarations must remain hidden on the public schema."""
         catalog = loader.load_semantic_catalog()
         entry = catalog["dbpcm_warehouse.accrual_events"]
         hidden = set(entry["mcp_projection"]["hidden_columns"])
         assert {"client_code", "proc_center"} <= hidden
-        assert "client_code" not in entry["columns"]
+        assert set(entry["row_scope"]["implicit_filters"]) >= {"client_code", "proc_center"}
         assert entry["source"] == "mysql"

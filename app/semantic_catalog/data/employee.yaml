@@ -7,7 +7,7 @@ trino_join_keys:
     column: employee_code_num
     encoding: employee_ascii4_be_v1
 region: workforce_employee
-description: Current-state employee reporting relation with snake_case column names. MySQL-backed Trino views must expose the normalized reporting columns.
+description: Current-state employee reporting relation with normalized snake_case column names.
 grain:
 - employee_code
 grain_verifiable: false
@@ -471,8 +471,8 @@ columns:
     unit: USD
   annual_salary:
     type: Nullable(Decimal(18, 6))
-    description: Reported or annualized salary. The source fallback can produce zero for non-exempt employees; do not assume it estimates hourly employees' annual earnings. For a MEDIAN of this column,
-      ClickHouse quantileExact(0.5) returns the UPPER middle value when the group has an even number of rows, not the average
+    description: Reported or annualized salary; the default basis for unqualified salary questions. The source fallback can produce zero for non-exempt employees; do not assume it estimates hourly employees' annual earnings. For a MEDIAN of this column,
+      quantileExact(0.5) returns the UPPER middle value when the group has an even number of rows, not the average
       of the two middle values; for a true median use (quantileExactLow(0.5)(annual_salary) + quantileExactHigh(0.5)(annual_salary))
       / 2.
     unit: USD
@@ -656,6 +656,10 @@ rules:
   applies_when: Filtering for populated employee dates on fields that use default date sentinels.
   description: Several nullable DateTime64 fields use 1900-01-01 00:00:00.000000 as a missing/default date rather than NULL.
 ambiguities:
+- term: salary_basis
+  resolves_to: [annual_salary, hourly_salary, rate_1]
+  default: Use annual_salary for unqualified salary questions. Values may be zero or NULL; do not infer a salary population solely from positive amounts.
+  clarify_if: The question asks for an hourly rate (distinguish hourly_salary from rate_1) or a per-period amount (confirm pay_frequency and scheduled_pay_period_hours).
 - term: hire_date
   resolves_to:
   - hire_date

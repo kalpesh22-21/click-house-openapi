@@ -63,8 +63,8 @@ class TestExportPayloadOverMcp:
 
     def test_all_catalogued_tables_present(self):
         catalog = _client().get("/catalog/export", headers=AUTH).json()["catalog"]
-        # 9 original tables + department + labor_allocation (snake_case migration).
-        assert len(catalog) == 11
+        from app.semantic_catalog.loader import load_semantic_catalog
+        assert set(catalog) == set(load_semantic_catalog())
         assert "dbpcm_warehouse.employee" in catalog
         assert "dbpcm_warehouse.payroll" in catalog
 

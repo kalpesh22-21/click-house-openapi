@@ -7,7 +7,7 @@ trino_join_keys:
     column: employee_code_num
     encoding: employee_ascii4_be_v1
 region: expense_management
-description: Expense Management line-item table using the new ClickHouse DDL structure with snake_case column names only.
+description: Expense Management line-item table with snake_case column names.
   Contains individual employee expense entries submitted through the Expense Management module, including reimbursable expenses,
   corporate card purchases, mileage and trip details, and per diem payments. One row represents one individual expense line
   item; an expense report can contain many line items, and one payroll transaction can pay many expense line items.

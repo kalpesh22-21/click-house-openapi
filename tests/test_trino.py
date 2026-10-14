@@ -1501,6 +1501,11 @@ def test_get_table_schema_gates_backend_notes_per_active_backend(
     """Service-level wiring: getTableSchema carries expense's trino_notes only
     when the serving deployment's active backend IS Trino. The reverse leg
     (trino disabled) uses the overlay directly — no live ClickHouse needed."""
+    # Synthetic note: test service routing without requiring production prose.
+    from copy import deepcopy
+    catalog = deepcopy(load_semantic_catalog())
+    catalog["dbpcm_warehouse.expense"]["trino_notes"] = ["Synthetic physical type note."]
+    monkeypatch.setattr(service, "get_semantic_catalog", lambda: catalog)
     # Trino deployment: the trino-scoped note surfaces.
     schema = service.get_table_schema("dbpcm_datawarehouse", "expense", trino_settings)
     assert "notes" in schema
@@ -1521,7 +1526,7 @@ def test_get_table_schema_gates_backend_notes_per_active_backend(
         database="dbpcm_warehouse",
         table="expense",
         introspected_columns=[{"name": "expense_id", "type": "UInt64", "comment": ""}],
-        catalog=load_semantic_catalog(),
+        catalog=catalog,
         scope=None,
         trino_enabled=ch_settings.trino_enabled,
     )

@@ -13,6 +13,9 @@ def fixture():
         TABLE: {name: column['type'] for name, column in entry['columns'].items()},
         'dbpcm_warehouse.employee': {'employee_code': 'String'},
     }
+    # The deployed schema includes optimizer-only columns omitted from public
+    # business-column metadata. Keep validating them rather than weakening the checker.
+    physical[TABLE].update({mapping['column']: 'Int64' for mapping in entry.get('trino_join_keys', {}).values()})
     return {TABLE: deepcopy(entry)}, physical
 
 
@@ -46,3 +49,9 @@ def test_bad_resolver_cannot_silently_pass():
     assert any('missing' in e for e in check_schema(catalog, physical))
     catalog[TABLE]['rules'][0]['resolve_via'] = 'nonsense'
     assert any('invalid resolveValues target' in e for e in check_schema(catalog, physical))
+
+
+def test_missing_internal_join_key_is_reported():
+    catalog, physical = fixture()
+    del physical[TABLE]['employee_code_num']
+    assert any('.trino_join_keys.' in e and 'employee_code_num' in e for e in check_schema(catalog, physical))

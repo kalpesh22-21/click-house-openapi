@@ -122,6 +122,8 @@ DEFAULT_DATABASE = "dbpcm_warehouse"
 # unrelated catalog files keep their existing "silently skip a non-table file"
 # behaviour.
 _REQUIRED_RLS_HIDDEN_COLUMNS: dict[str, frozenset[str]] = {
+    f"{DEFAULT_DATABASE}.accrual_events": frozenset({"client_code", "proc_center", "employee_code_num"}),
+    f"{DEFAULT_DATABASE}.accrual_balances": frozenset({"client_code", "proc_center", "employee_code_num"}),
     f"{DEFAULT_DATABASE}.employee": frozenset({"client_code", "proc_center"}),
     f"{DEFAULT_DATABASE}.payroll": frozenset({"client_code", "proc_center"}),
     f"{DEFAULT_DATABASE}.department": frozenset({"client_code", "proc_center"}),

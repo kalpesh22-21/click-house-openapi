@@ -30,7 +30,6 @@ import re
 import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
 if __package__ in (None, ""):  # pragma: no cover - direct script run
@@ -116,17 +115,16 @@ class TestDescriptionBackendNeutrality:
         )
 
     def test_trip_expenses_rule_description_is_normalized(self):
-        """The one fix the machinery-restoration task DID make: the
-        trip_expenses rule description keeps its technical content (NULL sole
-        absent marker, plain numeric comparison) without naming a backend."""
+        """Mileage guidance remains backend-neutral and matches its predicate."""
         violations = _scan_all_catalog_descriptions()
         assert "expense.yaml::rules::trip_expenses" not in violations
         expense = loader.load_semantic_catalog()["dbpcm_warehouse.expense"]
         rule = next(r for r in expense["rules"] if r["id"] == "trip_expenses")
         description = rule["description"]
-        assert "Nullable(Decimal(19, 2))" in description
-        assert "NULL as the only absent marker" in description
-        assert "numeric comparison" in description
+        assert "mileage" in description and "greater than zero" in description
+        # The machine predicate is the contract; don't freeze prose or claim
+        # that a nullable numeric source can never use zero as an absent value.
+        assert rule["predicate"] == "submitted_miles > 0 OR approved_miles > 0"
 
 
 if __name__ == "__main__":  # pragma: no cover - ad-hoc scan helper

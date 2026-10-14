@@ -80,3 +80,6 @@ columns:
   accrual_schedule_type:
     type: Nullable(String)
     description: Display string of schedule types; not a numeric measure.
+
+row_scope:
+  implicit_filters: [client_code, proc_center]

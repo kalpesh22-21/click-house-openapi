@@ -200,3 +200,8 @@ ambiguities:
     resolves_to: [ "COUNT(*) grouped by status, usually with event_type = 'Time Off Request'" ]
     default: status_scoped_request_count
     clarify_if: user wants only approved/taken hours instead of workflow volume
+# Identity and optimizer fields remain server-side.
+mcp_projection:
+  hidden_columns: [client_code, proc_center, employee_code_num, client_code_key]
+row_scope:
+  implicit_filters: [client_code, proc_center]

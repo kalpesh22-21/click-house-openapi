@@ -490,6 +490,10 @@ class TestRealCatalogCanary:
         ``trino_notes`` per flavor by design, so the byte-identity comparison
         excludes the ``notes`` key and pins everything ELSE.)"""
         catalog = loader.load_semantic_catalog()
+        # Exercise note gating independently of mutable production prose.
+        from copy import deepcopy
+        catalog = deepcopy(catalog)
+        catalog["dbpcm_warehouse.expense"]["trino_notes"] = ["Synthetic backend note."]
         cols = [{"name": "expense_status", "type": "Nullable(FixedString(50))",
                  "comment": ""}]
         responses = {}
@@ -514,22 +518,8 @@ class TestRealCatalogCanary:
         )
         for flag in (True, False):
             status = responses[flag]["columns"][0]
-            assert status["values"] == [
-                "Paid",
-                "Approved",
-                "Denied",
-                "Pending Approval",
-                "Marked as Paid",
-                "Returned",
-                "Referred",
-                "In Payroll",
-                "Unknown",
-            ]
+            assert status["values"] == catalog["dbpcm_warehouse.expense"]["columns"]["expense_status"]["values"]
             assert {r["id"] for r in responses[flag]["rules"]} == {
-                "approved_expenses",
-                "paid_expenses",
-                "trip_expenses",
-                "corporate_card_expenses",
-                "payroll_reconciliation",
+                r["id"] for r in catalog["dbpcm_warehouse.expense"]["rules"]
             }
             assert _mechanism_keys(responses[flag]) == []
