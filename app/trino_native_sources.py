@@ -34,9 +34,11 @@ def _literal(value: str, dialect: str) -> str:
 
 
 def _passthrough(catalog: str, sql: str) -> exp.Table:
+    # Preserve DBA catalog casing while applying the existing identifier grammar.
+    validate_identifier(catalog.lower())
     # SQL string rendering must happen a second time for the Trino envelope.
     query = sqlglot.parse_one(
-        f'SELECT * FROM TABLE("{validate_identifier(catalog)}".system.query('
+        f'SELECT * FROM TABLE("{catalog}".system.query('
         f"query => {_literal(sql, 'trino')}))",
         read="trino",
     )

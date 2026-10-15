@@ -9,7 +9,7 @@ rejected" class of problems. It does two things:
      comparing ``iss``/``aud`` against the configured ``OIDC_ISSUER`` /
      ``OIDC_AUDIENCE``. This needs no network and is the fastest way to spot the
      classic v1/v2 issuer split or an App-ID-URI / audience domain mismatch
-     (e.g. ``paycomhq.com`` vs ``paycomonline.com``).
+     (e.g. ``example.org`` vs ``example.com``).
 
   2. **Real validation** — runs the token through this app's actual
      :func:`app.auth_jwt.validate_token` against the current environment, so you

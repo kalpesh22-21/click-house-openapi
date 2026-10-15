@@ -65,7 +65,9 @@ def physical_target(
         )
     else:
         catalog, schema = settings.trino_clickhouse_catalog, entry["database"]
-    return tuple(validate_identifier(x) for x in (catalog, schema, entry["table"]))
+    validate_identifier(catalog.lower())
+    validate_identifier(schema.lower())
+    return catalog, schema, validate_identifier(entry["table"])
 
 
 def _project(full: dict, database: str | None, table: str | None) -> dict:

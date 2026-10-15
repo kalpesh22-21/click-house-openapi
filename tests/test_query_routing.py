@@ -22,7 +22,7 @@ def routing(monkeypatch):
     monkeypatch.setattr(trino_client, "execute_query", trino)
     monkeypatch.setattr(service, "ensure_employee_access_fresh", fresh)
     settings = Settings(
-        _env_file=None, trino_enabled=True, employee_access_enabled=False
+        _env_file=None, trino_enabled=True, trino_host="localhost", employee_access_enabled=False
     )
     return settings, direct, trino, fresh
 

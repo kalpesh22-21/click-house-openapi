@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
+from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
@@ -35,29 +37,16 @@ from app.shard_routing import (
     invalidate_shard_registry_cache,
     resolve_mysql_shard,
 )
-from scripts import setup_trino_catalogs
-from tests.view_fixtures import TINY_VIEW
-from scripts.setup_trino_catalogs import (
-    load_env_file,
-    load_view_templates,
-    render_catalogs,
-    render_view_catalog,
-    render_views,
-    write_catalogs,
-    write_view_catalog,
-    write_views,
-)
-
 # Trusted server-side snapshot fixture. Two non-adjacent PROD ranges exercise
 # in-range and out-of-range resolution; QA2 and dbpcm entries exercise the
 # env_type/mysqldb filter dimensions (they overlap the PROD ranges and would
 # make routing ambiguous if the filters were dropped).
 SHARD_SNAPSHOT = {
     "generated_at": "2026-01-01T00:00:00+00:00",
-    "source": "tests/test_trino.py fixture",
-    "mysql_shards": [
+    "source": "itdba",
+    "entries": [
         {
-            "catalog": "mysql_shard_prod_01",
+            "name": "online", "site": "okc", "level": "01",
             "host": "mysql-a.internal",
             "port": 3306,
             "database": "dbonline",
@@ -66,7 +55,7 @@ SHARD_SNAPSHOT = {
             "clientend": "10ZZZ",
         },
         {
-            "catalog": "mysql_shard_prod_02",
+            "name": "online", "site": "okc", "level": "02",
             "host": "mysql-b.internal",
             "port": 3306,
             "database": "dbonline",
@@ -75,7 +64,7 @@ SHARD_SNAPSHOT = {
             "clientend": "1ZZZZ",
         },
         {
-            "catalog": "mysql_shard_qa2_01",
+            "name": "online", "site": "qa", "level": "01",
             "host": "mysql-qa.internal",
             "port": 3306,
             "database": "dbonline",
@@ -84,7 +73,7 @@ SHARD_SNAPSHOT = {
             "clientend": "ZZZZZ",
         },
         {
-            "catalog": "mysql_shard_prod_03",
+            "name": "online", "site": "okc", "level": "03",
             "host": "mysql-c.internal",
             "port": 3307,
             "database": "dbpcm",
@@ -103,13 +92,26 @@ def _write_snapshot(path, snapshot=None):
 
 
 @pytest.fixture
-def shard_registry_path(tmp_path):
+def shard_registry_path(tmp_path, monkeypatch):
+    _patch_registry_fetch(monkeypatch)
+    invalidate_shard_registry_cache()
     return _write_snapshot(tmp_path / "shards.json")
 
 
+def _patch_registry_fetch(monkeypatch):
+    def fetch(url, timeout):
+        from app.shard_routing import ShardRegistryError
+        try:
+            payload = json.loads(Path(urlsplit(url).path).read_text())
+            return [dict(e, mysqldb=e["database"], mysqlhost=e["host"], mysqlport=e["port"], active="true") for e in payload["entries"]]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ShardRegistryError("invalid test inventory") from exc
+    monkeypatch.setattr("app.shard_routing._fetch_itdba_rows", fetch)
+
+
 @pytest.fixture(autouse=True)
-def _fresh_registry_cache():
-    """Registry snapshots are process-cached per path; reset around each test."""
+def _fresh_registry_cache(monkeypatch):
+    _patch_registry_fetch(monkeypatch)
     invalidate_shard_registry_cache()
     yield
     invalidate_shard_registry_cache()
@@ -122,7 +124,12 @@ def make_settings(registry_path: str, **overrides) -> Settings:
         trino_mysql_view_catalog="",
         trino_security_ready=True,
         trino_http_scheme="http",
-        trino_shard_registry_path=registry_path,
+        trino_itdba_url=(registry_path if registry_path.startswith("https://") else "https://registry.test" + registry_path),
+        trino_host="localhost",
+        trino_user="",
+        trino_password="",
+        trino_mysql_source_mode="views",
+        trino_catalog_check_enabled=False,
         employee_access_enabled=False,
         allowed_databases="dbpcm_warehouse",
     )
@@ -167,7 +174,7 @@ def test_mixed_sources_and_qualified_columns(trino_settings, principal):
         trino_settings,
     )
     assert tables(sql) == {
-        ("mysql_shard_prod_01", "dbonline", "employee"),
+        ("online__okc__01__dbonline", "dbonline", "employee"),
         ("", "", ""),  # Trusted TABLE(clickhouse.system.query(...)).
     }
     assert '"clickhouse".system.query' in sql
@@ -184,7 +191,7 @@ def test_cte_shadowing_nested_union_and_strings(trino_settings, principal):
         "(SELECT employee_code FROM dbpcm_warehouse.employee) x",
         trino_settings,
     )
-    assert sql.count('"mysql_shard_prod_01"."dbonline".employee') == 2
+    assert sql.count('"online__okc__01__dbonline"."dbonline".employee') == 2
     assert "FROM employee AS employee" in sql
     assert sql.count("'employee'") == 2
 
@@ -196,14 +203,14 @@ def test_self_join_preserves_aliases(trino_settings, principal):
         trino_settings,
     )
     assert "AS a" in sql and "AS b" in sql
-    assert sql.count('"mysql_shard_prod_01"') == 2
+    assert sql.count('"online__okc__01__dbonline"') == 2
 
 
 def test_view_catalog_mode(trino_settings, principal):
     trino_settings.trino_mysql_view_catalog = "dbpcm_datawarehouse"
     assert tables(
         trino_client.rewrite_query("SELECT * FROM employee", trino_settings)
-    ) == {("dbpcm_datawarehouse", "mysql_shard_prod_01", "employee")}
+    ) == {("dbpcm_datawarehouse", "online__okc__01__dbonline", "employee")}
 
 
 def test_explain_and_count_translation(trino_settings, principal):
@@ -211,7 +218,7 @@ def test_explain_and_count_translation(trino_settings, principal):
         "EXPLAIN SELECT count() FROM employee", trino_settings
     )
     assert sql.startswith("EXPLAIN SELECT COUNT(*)")
-    assert "mysql_shard_prod_01" in sql
+    assert "online__okc__01__dbonline" in sql
 
 
 # --- ClickHouse -> Trino function mapping (uniqExact -> COUNT(DISTINCT)) -----
@@ -422,7 +429,7 @@ def test_nonmedian_quantile_rejected_before_dispatch(trino_settings, principal):
 @pytest.mark.parametrize(
     "sql",
     [
-        "SELECT * FROM mysql_shard_prod_02.dbonline.employee",
+        "SELECT * FROM online__okc__02__dbonline.dbonline.employee",
         "SELECT * FROM unknown",
         "SELECT * FROM dbpcm_scratch.upload",
         "SELECT * FROM system.tables",
@@ -455,15 +462,15 @@ def test_source_flag_validation_and_legacy_default(tmp_path):
 
 
 def test_in_range_client_code_routes_to_its_catalog(trino_settings):
-    assert resolve_mysql_shard("10R37", trino_settings) == "mysql_shard_prod_01"
-    assert resolve_mysql_shard("12ABC", trino_settings) == "mysql_shard_prod_02"
+    assert resolve_mysql_shard("10R37", trino_settings) == "online__okc__01__dbonline"
+    assert resolve_mysql_shard("12ABC", trino_settings) == "online__okc__02__dbonline"
 
 
 def test_range_boundaries_are_inclusive(trino_settings):
-    assert resolve_mysql_shard("00000", trino_settings) == "mysql_shard_prod_01"
-    assert resolve_mysql_shard("10ZZZ", trino_settings) == "mysql_shard_prod_01"
-    assert resolve_mysql_shard("11000", trino_settings) == "mysql_shard_prod_02"
-    assert resolve_mysql_shard("1ZZZZ", trino_settings) == "mysql_shard_prod_02"
+    assert resolve_mysql_shard("00000", trino_settings) == "online__okc__01__dbonline"
+    assert resolve_mysql_shard("10ZZZ", trino_settings) == "online__okc__01__dbonline"
+    assert resolve_mysql_shard("11000", trino_settings) == "online__okc__02__dbonline"
+    assert resolve_mysql_shard("1ZZZZ", trino_settings) == "online__okc__02__dbonline"
 
 
 def test_outside_all_ranges_fails_closed(trino_settings):
@@ -499,14 +506,14 @@ def test_env_type_filter(trino_settings):
         resolve_mysql_shard("ZZZZZ", trino_settings)
     assert exc.value.code == "MYSQL_SHARD_NOT_FOUND"
     trino_settings.trino_env_type = "QA2"
-    assert resolve_mysql_shard("ZZZZZ", trino_settings) == "mysql_shard_qa2_01"
+    assert resolve_mysql_shard("ZZZZZ", trino_settings) == "online__qa__01__dbonline"
 
 
 def test_mysqldb_filter(trino_settings):
     # Default dbonline routing; switching the schema filter switches the shard.
-    assert resolve_mysql_shard("10R37", trino_settings) == "mysql_shard_prod_01"
+    assert resolve_mysql_shard("10R37", trino_settings) == "online__okc__01__dbonline"
     trino_settings.trino_mysql_schema = "dbpcm"
-    assert resolve_mysql_shard("10R37", trino_settings) == "mysql_shard_prod_03"
+    assert resolve_mysql_shard("10R37", trino_settings) == "online__okc__03__dbpcm"
 
 
 def test_null_clientstart_entries_are_skipped():
@@ -520,7 +527,7 @@ def test_null_clientstart_entries_are_skipped():
 
 def test_empty_range_strings_never_match(tmp_path):
     snapshot = json.loads(json.dumps(SHARD_SNAPSHOT))
-    snapshot["mysql_shards"] = [
+    snapshot["entries"] = [
         {
             "catalog": "empty_range",
             "host": "mysql-x.internal",
@@ -535,12 +542,12 @@ def test_empty_range_strings_never_match(tmp_path):
     settings = make_settings(str(path))
     with pytest.raises(QueryValidationError) as exc:
         resolve_mysql_shard("10R37", settings)
-    assert exc.value.code == "MYSQL_SHARD_NOT_FOUND"
+    assert exc.value.code == "MYSQL_SHARD_REGISTRY_INVALID"
 
 
 def test_malicious_catalog_name_rejected(tmp_path):
     snapshot = json.loads(json.dumps(SHARD_SNAPSHOT))
-    snapshot["mysql_shards"][0]["catalog"] = "mysql_bad; DROP TABLE x"
+    snapshot["entries"][0]["site"] = "mysql_bad; DROP TABLE x"
     path = _write_snapshot(tmp_path / "shards.json", snapshot)
     settings = make_settings(str(path))
     with pytest.raises(QueryValidationError) as exc:
@@ -569,7 +576,7 @@ def test_missing_or_invalid_registry_fails_closed(tmp_path, contents):
     settings = make_settings(str(path))
     with pytest.raises(QueryValidationError) as exc:
         resolve_mysql_shard("10R37", settings)
-    assert exc.value.code == "MYSQL_SHARD_REGISTRY_INVALID"
+    assert exc.value.code == ("MYSQL_SHARD_REGISTRY_UNAVAILABLE" if contents is None else "MYSQL_SHARD_REGISTRY_INVALID")
 
 
 def test_proc_center_is_not_a_routing_input(trino_settings):
@@ -581,7 +588,7 @@ def test_proc_center_is_not_a_routing_input(trino_settings):
         sql = trino_client.rewrite_query("SELECT * FROM employee", trino_settings)
     finally:
         current_principal.reset(token)
-    assert '"mysql_shard_prod_02"' in sql
+    assert '"online__okc__02__dbonline"' in sql
 
 
 def test_rewrite_fails_closed_for_unrouted_tenant(trino_settings):
@@ -624,7 +631,7 @@ def test_parallel_requests_do_not_share_route(trino_settings):
     with ThreadPoolExecutor(2) as pool:
         results = list(pool.map(run, ["10R37", "12ABC"] * 5))
     for i, sql in enumerate(results):
-        assert ("mysql_shard_prod_01" if i % 2 == 0 else "mysql_shard_prod_02") in sql
+        assert ("online__okc__01__dbonline" if i % 2 == 0 else "online__okc__02__dbonline") in sql
 
 
 def mock_connection(monkeypatch, batches):
@@ -705,8 +712,8 @@ def test_blueprint_active_headcount_transpiles_to_exact_count_distinct(
     assert "COUNT(DISTINCT employee_code)" in physical
     assert "UNIQEXACT" not in physical.upper()
     assert tables(physical) == {
-        ("dbpcm_datawarehouse", "mysql_shard_prod_01", "department"),
-        ("dbpcm_datawarehouse", "mysql_shard_prod_01", "employee"),
+        ("dbpcm_datawarehouse", "online__okc__01__dbonline", "department"),
+        ("dbpcm_datawarehouse", "online__okc__01__dbonline", "employee"),
     }
 
 
@@ -933,6 +940,7 @@ def test_trino_provenance_uses_logical_names(
 def test_tls_and_authenticated_user_configuration(monkeypatch, trino_settings):
     connect = MagicMock()
     monkeypatch.setattr("trino.dbapi.connect", connect)
+    trino_settings.trino_user = "service-user"
     trino_settings.trino_password = "test-only"
     with pytest.raises(QueryValidationError) as exc:
         trino_client._connect(trino_settings, "pc1|10R37|alice")
@@ -941,552 +949,9 @@ def test_tls_and_authenticated_user_configuration(monkeypatch, trino_settings):
     trino_settings.trino_http_scheme = "https"
     trino_client._connect(trino_settings, "pc1|10R37|alice")
     kwargs = connect.call_args.kwargs
-    assert kwargs["user"] == "pc1|10R37|alice"
+    assert kwargs["user"] == "service-user"
     assert kwargs["auth"] is not None
     assert kwargs["session_properties"]["query_max_run_time"] == "30s"
-
-
-def test_catalog_generator(tmp_path):
-    inventory = {
-        "generated_at": "2026-01-01T00:00:00+00:00",
-        "source": "tests/test_trino.py fixture",
-        "mysql_shards": [
-            {
-                "catalog": "mysql_shard_prod_01",
-                "host": "mysql.example",
-                "port": 3306,
-                "database": "dbonline",
-                "env_type": "PROD",
-                "clientstart": "00000",
-                "clientend": "0A000",
-            }
-        ],
-    }
-    rendered = render_catalogs(inventory)["mysql_shard_prod_01"]
-    assert "jdbc:mysql://mysql.example:3306" in rendered
-    assert "${ENV:TRINO_MYSQL_PASSWORD}" in rendered
-    paths = write_catalogs(inventory, tmp_path)
-    with pytest.raises(ValueError, match="already exists"):
-        write_catalogs(inventory, tmp_path)
-    assert write_catalogs(inventory, tmp_path, overwrite=True) == paths
-
-
-@pytest.mark.parametrize(
-    "patch",
-    [
-        {"catalog": "../escape"},
-        {"host": "host\nconnection-user=root"},
-        {"port": 0},
-        {"port": True},
-        {"password_env": "BAD}\nfoo"},
-    ],
-)
-def test_generator_rejects_injection(patch):
-    source = {"catalog": "mysql_shard_prod_01", "host": "localhost", **patch}
-    with pytest.raises(ValueError):
-        render_catalogs({"mysql_shards": [source]})
-
-
-def test_mysql_catalog_url_converts_zero_dates_to_null():
-    # QA2 rows carry '0000-00-00' date/datetime values; without this JDBC
-    # query param the MySQL connector aborts any query materializing them with
-    # "Zero date value prohibited". Mapping them to NULL preserves the row.
-    inventory = {
-        "mysql_shards": [
-            {"catalog": "mysql_shard_qa2_01", "host": "mysql.example", "port": 3306}
-        ]
-    }
-    rendered = render_catalogs(inventory)["mysql_shard_qa2_01"]
-    url_line = next(
-        line for line in rendered.splitlines() if line.startswith("connection-url=")
-    )
-    assert "zeroDateTimeBehavior=convertToNull" in url_line
-    # The URL must stay a well-formed jdbc:mysql://host:port?... line.
-    assert re.fullmatch(
-        r"connection-url=jdbc:mysql://[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]+"
-        r"\?zeroDateTimeBehavior=convertToNull",
-        url_line,
-    )
-    # The param belongs to the MySQL branch only: clickhouse URLs keep their
-    # own inventory/.env-derived shape.
-    ch = render_catalogs(
-        {**inventory, "clickhouse": {"catalog": "clickhouse", "host": "ch.internal"}}
-    )["clickhouse"]
-    assert "zeroDateTimeBehavior" not in ch
-
-
-# --- clickhouse catalog .env derivation --------------------------------------
-# render_catalogs(inventory, env) derives the clickhouse connection-url from
-# CLICKHOUSE_HOST/PORT/SECURE/DATABASE (per-key override of the inventory
-# clickhouse block). Only those four keys are consumed — everything else in
-# .env, credentials above all, must never reach generated files.
-
-CH_INVENTORY = {
-    "clickhouse": {"catalog": "clickhouse", "host": "ch.internal", "port": 8123}
-}
-
-
-def test_clickhouse_catalog_env_override_wins(tmp_path):
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "CLICKHOUSE_HOST=ch.env.internal\nCLICKHOUSE_PORT=9440\n", encoding="utf-8"
-    )
-    env = load_env_file(env_file)
-    inventory = {
-        "mysql_shards": [
-            {"catalog": "mysql_shard_prod_01", "host": "mysql.inv.internal", "port": 3306}
-        ],
-        **CH_INVENTORY,
-    }
-    rendered = render_catalogs(inventory, env=env)
-    ch = rendered["clickhouse"]
-    assert "connection-url=jdbc:clickhouse://ch.env.internal:9440\n" in ch
-    assert "derived from .env" in ch
-    # The env file must not disturb MySQL catalogs.
-    assert (
-        "connection-url=jdbc:mysql://mysql.inv.internal:3306"
-        "?zeroDateTimeBehavior=convertToNull\n"
-    ) in rendered["mysql_shard_prod_01"]
-
-
-@pytest.mark.parametrize(
-    "secure,expected_query",
-    [
-        ("true", "?ssl=true&sslmode=none"),
-        ("TRUE", "?ssl=true&sslmode=none"),
-        ("1", "?ssl=true&sslmode=none"),
-        ("yes", "?ssl=true&sslmode=none"),
-        ("on", "?ssl=true&sslmode=none"),
-        ("false", ""),
-        ("0", ""),
-        ("no", ""),
-        ("off", ""),
-    ],
-)
-def test_clickhouse_catalog_secure_variants(secure, expected_query):
-    env = {"CLICKHOUSE_DATABASE": "dbpcm_warehouse", "CLICKHOUSE_SECURE": secure}
-    ch = render_catalogs(CH_INVENTORY, env=env)["clickhouse"]
-    # JDBC URL form: path first, then query.
-    expected = (
-        f"connection-url=jdbc:clickhouse://ch.internal:8123/dbpcm_warehouse{expected_query}"
-    )
-    assert f"{expected}\n" in ch
-
-
-def test_clickhouse_catalog_secure_toggle_without_database():
-    env = {"CLICKHOUSE_SECURE": "true"}
-    ch = render_catalogs(CH_INVENTORY, env=env)["clickhouse"]
-    assert "connection-url=jdbc:clickhouse://ch.internal:8123?ssl=true&sslmode=none\n" in ch
-
-
-def test_clickhouse_catalog_database_only_when_non_empty():
-    ch = render_catalogs(CH_INVENTORY, env={"CLICKHOUSE_DATABASE": "dbpcm_warehouse"})[
-        "clickhouse"
-    ]
-    assert "connection-url=jdbc:clickhouse://ch.internal:8123/dbpcm_warehouse\n" in ch
-    for blank in ("", "   "):
-        ch = render_catalogs(CH_INVENTORY, env={"CLICKHOUSE_DATABASE": blank})["clickhouse"]
-        assert "connection-url=jdbc:clickhouse://ch.internal:8123\n" in ch
-
-
-def test_clickhouse_catalog_inventory_fallback():
-    # No env at all, an empty env, and an env file lacking the CLICKHOUSE_*
-    # keys all render straight from inventory with the inventory header note.
-    for env in (None, {}, {"UNRELATED_KEY": "x"}):
-        ch = render_catalogs(CH_INVENTORY, env=env)["clickhouse"]
-        assert "connection-url=jdbc:clickhouse://ch.internal:8123\n" in ch
-        assert "derived from the inventory clickhouse block" in ch
-        assert "derived from .env" not in ch
-
-
-@pytest.mark.parametrize(
-    "env,label",
-    [
-        ({"CLICKHOUSE_HOST": "bad host.internal"}, "CLICKHOUSE_HOST"),
-        ({"CLICKHOUSE_HOST": "ch.internal/evil"}, "CLICKHOUSE_HOST"),
-        ({"CLICKHOUSE_PORT": "8123?x=y"}, "CLICKHOUSE_PORT"),
-        ({"CLICKHOUSE_PORT": "abc"}, "CLICKHOUSE_PORT"),
-        ({"CLICKHOUSE_PORT": "0"}, "CLICKHOUSE_PORT"),
-        ({"CLICKHOUSE_PORT": "65536"}, "CLICKHOUSE_PORT"),
-        ({"CLICKHOUSE_DATABASE": "bad-name"}, "CLICKHOUSE_DATABASE"),
-        ({"CLICKHOUSE_DATABASE": "9lives"}, "CLICKHOUSE_DATABASE"),
-    ],
-)
-def test_clickhouse_catalog_rejects_env_garbage(env, label):
-    with pytest.raises(ValueError, match=f"Invalid {label} in .env"):
-        render_catalogs(CH_INVENTORY, env=env)
-
-
-def test_clickhouse_catalog_never_writes_secrets(tmp_path):
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "\n".join(
-            [
-                "CLICKHOUSE_HOST=ch.env.internal",
-                "CLICKHOUSE_PASSWORD=t0p-secret-ch-pw",
-                "TRINO_CLICKHOUSE_PASSWORD=an0ther-secret-pw",
-                "API_KEY=yet-an0ther-secret",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    ch = render_catalogs(CH_INVENTORY, env=load_env_file(env_file))["clickhouse"]
-    assert "jdbc:clickhouse://ch.env.internal:8123" in ch
-    for secret in ("t0p-secret-ch-pw", "an0ther-secret-pw", "yet-an0ther-secret"):
-        assert secret not in ch
-    # Credential lines remain Trino environment references, never literals.
-    assert "${ENV:TRINO_CLICKHOUSE_USER}" in ch
-    assert "${ENV:TRINO_CLICKHOUSE_PASSWORD}" in ch
-
-
-def test_load_env_file_parser(tmp_path):
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "\n".join(
-            [
-                "# a comment line",
-                "",
-                "   ",
-                "export CLICKHOUSE_HOST=\"quoted-host\"",
-                "CLICKHOUSE_PORT='9090'",
-                "CLICKHOUSE_HOST=last-wins",
-                "CLICKHOUSE_SECURE= true ",
-                "NO_EQUALS_LINE",
-                "=orphan-value",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    env = load_env_file(env_file)
-    assert env == {
-        "CLICKHOUSE_HOST": "last-wins",  # duplicate keys: last occurrence wins
-        "CLICKHOUSE_PORT": "9090",
-        "CLICKHOUSE_SECURE": "true",
-    }
-
-
-def test_write_catalogs_passes_env_through(tmp_path):
-    rendered = write_catalogs(
-        CH_INVENTORY,
-        tmp_path,
-        env={"CLICKHOUSE_HOST": "ch.env.internal", "CLICKHOUSE_PORT": "9440"},
-    )
-    assert len(rendered) == 1
-    assert "jdbc:clickhouse://ch.env.internal:9440" in rendered[0].read_text(
-        encoding="utf-8"
-    )
-
-
-# Synthetic templates keep provisioning tests independent of private views.
-VIEW_TEMPLATE = TINY_VIEW.replace(".mini AS", ".employee AS")
-
-VIEW_INVENTORY = {
-    "mysql_shards": [
-        {
-            "catalog": "mysql_shard_qa2_01",
-            "host": "mysql-qa.internal",
-            "port": 3306,
-            "proc_center": "pc_a",
-        },
-        {
-            "catalog": "mysql_shard_qa2_02",
-            "host": "mysql-qa2.internal",
-            "port": 3306,
-            "proc_center": "pc_b",
-        },
-    ],
-    "clickhouse": {"catalog": "clickhouse", "host": "ch.internal", "port": 8123},
-}
-
-
-def test_views_render_two_shards_differ_only_by_identity():
-    rendered = render_views(VIEW_INVENTORY, {"employee": VIEW_TEMPLATE})
-    a = rendered[("mysql_shard_qa2_01", "employee")]
-    b = rendered[("mysql_shard_qa2_02", "employee")]
-    assert a != b
-    # Every difference between the two renders is the shard catalog or the
-    # proc-center literal — the SQL body (and its RLS) is identical.
-    assert a.replace("mysql_shard_qa2_01", "@").replace("pc_a", "#") == b.replace(
-        "mysql_shard_qa2_02", "@"
-    ).replace("pc_b", "#")
-    for sql in (a, b):
-        assert "split_part(CURRENT_USER, '|', 1)" not in sql
-        assert "split_part(CURRENT_USER, '|', 2)" in sql
-        assert "split_part(CURRENT_USER, '|', 3)" in sql
-        assert "dbpcm_datawarehouse.mysql_shard_qa2_" in sql
-
-
-def test_views_placeholders_fully_substituted():
-    a = render_views(VIEW_INVENTORY, {"employee": VIEW_TEMPLATE})[
-        ("mysql_shard_qa2_01", "employee")
-    ]
-    assert "{{" not in a and "}}" not in a
-    assert "mysql_shard_07" not in a
-    # Exact occurrence counts: substitution is global (comments included).
-    assert a.count("mysql_shard_qa2_01") == VIEW_TEMPLATE.count("{{SHARD_CATALOG}}")
-    assert a.count("pc_a") == VIEW_TEMPLATE.count("{{PROC_CENTER}}")
-    # The proc-center literal lands exactly in the output column.
-    assert a.count("'pc_a'") == 1
-    assert "'pc_a' AS proc_center" in a
-
-
-def test_views_proc_center_entry_beats_flag_flag_fills_missing():
-    rendered = render_views(
-        VIEW_INVENTORY, {"employee": VIEW_TEMPLATE}, proc_center="pc_flag"
-    )
-    assert "'pc_a' AS proc_center" in rendered[("mysql_shard_qa2_01", "employee")]
-    assert "'pc_b' AS proc_center" in rendered[("mysql_shard_qa2_02", "employee")]
-    no_keys = {
-        "mysql_shards": [
-            {"catalog": entry["catalog"], "host": entry["host"], "port": 3306}
-            for entry in VIEW_INVENTORY["mysql_shards"]
-        ]
-    }
-    rendered = render_views(no_keys, {"employee": VIEW_TEMPLATE}, proc_center="pc_flag")
-    for shard in ("mysql_shard_qa2_01", "mysql_shard_qa2_02"):
-        sql = rendered[(shard, "employee")]
-        assert sql.count("'pc_flag'") == 1 and "'pc_flag' AS proc_center" in sql
-
-
-def test_views_missing_proc_center_fails_loud_naming_shard():
-    inventory = {
-        "mysql_shards": [
-            {"catalog": "mysql_shard_qa2_01", "host": "mysql-qa.internal", "port": 3306}
-        ]
-    }
-    with pytest.raises(ValueError) as exc:
-        render_views(inventory, {"employee": VIEW_TEMPLATE})
-    assert "mysql_shard_qa2_01" in str(exc.value)
-    assert "proc_center" in str(exc.value)
-
-
-@pytest.mark.parametrize(
-    "key,value",
-    [
-        ("view_catalog", "Reporting"),  # must be [a-z][a-z0-9_]*
-        ("view_catalog", "dbpcm_datawarehouse;drop"),
-        ("proc_center", "pc-1"),
-        ("proc_center", "1pc"),
-        ("proc_center", "pc one"),
-    ],
-)
-def test_views_invalid_identifiers_rejected(key, value):
-    inventory = VIEW_INVENTORY
-    if key == "proc_center":
-        # Per-entry keys would win over the flag; strip them so the render-time
-        # default is the value under test.
-        inventory = {
-            "mysql_shards": [
-                {"catalog": e["catalog"], "host": e["host"], "port": e["port"]}
-                for e in VIEW_INVENTORY["mysql_shards"]
-            ]
-        }
-    with pytest.raises(ValueError, match="Invalid"):
-        render_views(inventory, {"employee": VIEW_TEMPLATE}, **{key: value})
-
-
-def test_views_invalid_shard_catalog_rejected():
-    inventory = {
-        "mysql_shards": [
-            {"catalog": "MySQL_shard", "host": "h", "port": 3306, "proc_center": "pc1"}
-        ]
-    }
-    with pytest.raises(ValueError, match="shard catalog"):
-        render_views(inventory, {"employee": VIEW_TEMPLATE})
-
-
-@pytest.mark.parametrize(
-    "stale",
-    ["mysql_shard_07", "'pc1'", "split_part(CURRENT_USER, '|', 1)"],
-    ids=["old-catalog", "old-proc-literal", "dropped-guard"],
-)
-def test_views_stale_template_rejected(stale):
-    with pytest.raises(ValueError, match="template"):
-        render_views(
-            VIEW_INVENTORY, {"employee": VIEW_TEMPLATE + "\n" + stale + "\n"}
-        )
-
-
-def test_views_missing_rls_pin_rejected():
-    mini = (
-        "CREATE VIEW dbpcm_datawarehouse.{{SHARD_CATALOG}}.e AS "
-        "SELECT '{{PROC_CENTER}}' AS proc_center;"
-    )
-    with pytest.raises(ValueError, match="RLS pin"):
-        render_views(VIEW_INVENTORY, {"employee": mini})
-
-
-def test_views_view_catalog_must_match_template_ddl():
-    # Advisory guard: a --view-catalog the template DDL does not target would
-    # emit a <catalog>.properties the rendered views never land in — fail loud
-    # at render time naming the mismatch instead of drifting silently.
-    with pytest.raises(ValueError) as exc:
-        render_views(
-            VIEW_INVENTORY, {"employee": VIEW_TEMPLATE}, view_catalog="analytics"
-        )
-    message = str(exc.value)
-    assert "analytics" in message and "employee" in message
-    assert "CREATE SCHEMA IF NOT EXISTS analytics." in message
-    # The committed template targets `dbpcm_datawarehouse`, so the default still renders.
-    assert render_views(VIEW_INVENTORY, {"employee": VIEW_TEMPLATE})[
-        ("mysql_shard_qa2_01", "employee")
-    ]
-
-
-def test_views_unresolved_placeholder_rejected():
-    with pytest.raises(ValueError, match="unresolved placeholders"):
-        render_views(
-            VIEW_INVENTORY, {"employee": VIEW_TEMPLATE + "\n-- {{UNKNOWN}}\n"}
-        )
-
-
-def test_render_view_catalog_memory_connector():
-    props = render_view_catalog("dbpcm_datawarehouse")
-    assert "connector.name=memory" in props
-    assert "DEV-ONLY" in props and "RAM" in props
-    with pytest.raises(ValueError):
-        render_view_catalog("Reporting-Up")
-
-
-def test_write_views_and_view_catalog(tmp_path):
-    inventory = {
-        "mysql_shards": [
-            {"catalog": "mysql_shard_qa2_01", "host": "h", "port": 3306}
-        ]
-    }
-    rendered_root = tmp_path / "views" / "rendered"
-    paths = write_views(
-        inventory,
-        {"employee": VIEW_TEMPLATE},
-        rendered_root,
-        proc_center="pc1",
-    )
-    assert paths == [rendered_root / "mysql_shard_qa2_01" / "employee.sql"]
-    sql = paths[0].read_text(encoding="utf-8")
-    assert "'pc1' AS proc_center" in sql and sql.count("'pc1'") == 1
-    assert "split_part(CURRENT_USER, '|', 1)" not in sql
-    assert sql.count("split_part(CURRENT_USER, '|', 2)") == 1
-    with pytest.raises(ValueError, match="already exist"):
-        write_views(
-            inventory, {"employee": VIEW_TEMPLATE}, rendered_root, proc_center="pc1"
-        )
-    write_views(
-        inventory,
-        {"employee": VIEW_TEMPLATE},
-        rendered_root,
-        proc_center="pc1",
-        overwrite=True,
-    )
-    props = write_view_catalog("dbpcm_datawarehouse", tmp_path / "catalog")
-    assert props.name == "dbpcm_datawarehouse.properties"
-    assert "connector.name=memory" in props.read_text(encoding="utf-8")
-    with pytest.raises(ValueError, match="already exists"):
-        write_view_catalog("dbpcm_datawarehouse", tmp_path / "catalog")
-
-
-def test_views_empty_or_absent_views_dir_renders_nothing(tmp_path):
-    assert load_view_templates(tmp_path / "missing") == {}
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    assert load_view_templates(empty) == {}
-    assert (
-        write_views(VIEW_INVENTORY, {}, tmp_path / "rendered", proc_center="pc1")
-        == []
-    )
-
-
-def _run_setup(tmp_path, inventory, *extra, out_name="catalog"):
-    snapshot = tmp_path / "shards.json"
-    snapshot.write_text(json.dumps(inventory), encoding="utf-8")
-    setup_trino_catalogs.main(
-        [
-            "--inventory",
-            str(snapshot),
-            "--output-dir",
-            str(tmp_path / out_name),
-            "--env-file",
-            str(tmp_path / "absent.env"),
-            *extra,
-        ]
-    )
-    return tmp_path / out_name
-
-
-def test_main_renders_views_and_view_catalog(tmp_path):
-    views_src = tmp_path / "views"
-    views_src.mkdir()
-    (views_src / "employee.txt").write_text(VIEW_TEMPLATE, encoding="utf-8")
-    catalog_dir = _run_setup(
-        tmp_path,
-        {
-            "mysql_shards": [
-                {"catalog": "mysql_shard_qa2_01", "host": "mysql-qa.internal", "port": 3306}
-            ],
-            **CH_INVENTORY,
-        },
-        "--views-dir",
-        str(views_src),
-        "--proc-center",
-        "pc1",
-    )
-    sql_path = views_src / "rendered" / "mysql_shard_qa2_01" / "employee.sql"
-    sql = sql_path.read_text(encoding="utf-8")
-    assert "'pc1' AS proc_center" in sql
-    assert "split_part(CURRENT_USER, '|', 1)" not in sql
-    assert "dbpcm_datawarehouse.mysql_shard_qa2_01.employee" in sql
-    props = (catalog_dir / "dbpcm_datawarehouse.properties").read_text(encoding="utf-8")
-    assert "connector.name=memory" in props
-    # Source catalogs are unaffected by view rendering.
-    assert (catalog_dir / "mysql_shard_qa2_01.properties").is_file()
-    assert (catalog_dir / "clickhouse.properties").is_file()
-
-
-def test_main_views_dir_absent_or_empty_skips_views(tmp_path):
-    inventory = {
-        "mysql_shards": [
-            {"catalog": "mysql_shard_qa2_01", "host": "mysql-qa.internal", "port": 3306}
-        ],
-        **CH_INVENTORY,
-    }
-    # Absent views dir: rc 0, source catalogs only, NO view catalog — and
-    # no --proc-center needed (nothing renders, so nothing resolves it).
-    catalog_dir = _run_setup(
-        tmp_path, inventory, "--views-dir", str(tmp_path / "nope"), out_name="catalog_a"
-    )
-    assert (catalog_dir / "mysql_shard_qa2_01.properties").is_file()
-    assert (catalog_dir / "clickhouse.properties").is_file()
-    assert not (catalog_dir / "dbpcm_datawarehouse.properties").exists()
-    assert not (tmp_path / "nope" / "rendered").exists()
-    # Empty views dir behaves identically.
-    empty = tmp_path / "views_empty"
-    empty.mkdir()
-    catalog_dir = _run_setup(
-        tmp_path, inventory, "--views-dir", str(empty), out_name="catalog_b"
-    )
-    assert not (catalog_dir / "dbpcm_datawarehouse.properties").exists()
-
-
-def test_main_missing_proc_center_exits_1_naming_shard(tmp_path, capsys):
-    views_src = tmp_path / "views"
-    views_src.mkdir()
-    (views_src / "employee.txt").write_text(VIEW_TEMPLATE, encoding="utf-8")
-    with pytest.raises(SystemExit) as exc:
-        _run_setup(
-            tmp_path,
-            {
-                "mysql_shards": [
-                    {
-                        "catalog": "mysql_shard_qa2_01",
-                        "host": "mysql-qa.internal",
-                        "port": 3306,
-                    }
-                ]
-            },
-            "--views-dir",
-            str(views_src),
-        )
-    assert exc.value.code == 1
-    assert "mysql_shard_qa2_01" in capsys.readouterr().err
 
 
 def test_get_table_schema_gates_backend_notes_per_active_backend(
@@ -1512,7 +977,7 @@ def test_get_table_schema_gates_backend_notes_per_active_backend(
 
     # ClickHouse deployment (unit-test-style Settings; no live CH I/O): the
     # expense catalog projection must contain NO trace of the trino note.
-    ch_settings = make_settings(trino_settings.trino_shard_registry_path, trino_enabled=False)
+    ch_settings = make_settings(trino_settings.trino_itdba_url, trino_enabled=False)
     assert ch_settings.trino_enabled is False
     from app.semantic_catalog.overlay import build_table_schema_response
 
@@ -1592,10 +1057,10 @@ def test_live_discovery_intersects_and_probes(monkeypatch, trino_settings, princ
     connect.assert_called_once_with(trino_settings, "pc1|10R37|alice")
     calls = cursor.execute.call_args_list
     assert calls[0].args == ("SELECT 1",)
-    assert calls[1].args[1] == ["mysql_shard_prod_01", "employee"]
+    assert calls[1].args[1] == ["online__okc__01__dbonline", "employee"]
     assert '"dbpcm_datawarehouse".information_schema.columns' in calls[1].args[0]
     assert (
-        '"dbpcm_datawarehouse"."mysql_shard_prod_01".employee AS metadata_source LIMIT 0'
+        '"dbpcm_datawarehouse"."online__okc__01__dbonline".employee AS metadata_source LIMIT 0'
         in calls[2].args[0]
     )
     cursor.close.assert_called_once()
@@ -1622,9 +1087,9 @@ def test_discovery_resolves_before_network(monkeypatch, tmp_path, principal):
     connect = MagicMock()
     monkeypatch.setattr(trino_client, "_connect", connect)
     settings = make_settings(
-        str(_write_snapshot(tmp_path / "empty.json", {"mysql_shards": []}))
+        str(_write_snapshot(tmp_path / "empty.json", {"entries": []}))
     )
-    with pytest.raises(QueryValidationError, match="No MySQL shard"):
+    with pytest.raises(QueryValidationError, match="MySQL shard routing is unavailable"):
         service.list_databases(settings)
     connect.assert_not_called()
 
@@ -1655,7 +1120,7 @@ def test_public_alias_routes_with_default_view_catalog(trino_settings, principal
             "SELECT dbpcm_datawarehouse.employee.employee_code FROM dbpcm_datawarehouse.employee",
             trino_settings,
         )
-    ) == {("dbpcm_datawarehouse", "mysql_shard_prod_01", "employee")}
+    ) == {("dbpcm_datawarehouse", "online__okc__01__dbonline", "employee")}
 
 
 def test_public_alias_preserves_scope_checks(
@@ -1696,8 +1161,8 @@ def test_discovery_is_fresh_for_each_tenant(monkeypatch, trino_settings):
     # Routing diversity comes from client_code alone (proc_center is NOT a
     # routing input): 10R37 -> prod_01, 12ABC -> prod_02 per the registry ranges.
     for pc, code, shard in [
-        ("pc1", "10R37", "mysql_shard_prod_01"),
-        ("pc2", "12ABC", "mysql_shard_prod_02"),
+        ("pc1", "10R37", "online__okc__01__dbonline"),
+        ("pc2", "12ABC", "online__okc__02__dbonline"),
     ]:
         token = current_principal.set(
             Principal(
@@ -1723,7 +1188,7 @@ def test_public_alias_allowlist_and_explain(
         trino_client.rewrite_query(
             "SELECT employee_code FROM dbpcm_datawarehouse.employee", trino_settings
         )
-    ) == {("dbpcm_datawarehouse", "mysql_shard_prod_01", "employee")}
+    ) == {("dbpcm_datawarehouse", "online__okc__01__dbonline", "employee")}
     assert service.list_tables("dbpcm_datawarehouse", trino_settings)
     execute = MagicMock(return_value=(["plan"], [["plan text"]]))
     monkeypatch.setattr(trino_client, "execute_query", execute)
@@ -1738,7 +1203,7 @@ def test_public_alias_allowlist_and_explain(
 def test_physical_view_cannot_bypass_routing(trino_settings, principal):
     with pytest.raises(QueryValidationError):
         trino_client.rewrite_query(
-            "SELECT * FROM dbpcm_datawarehouse.mysql_shard_prod_02.employee",
+            "SELECT * FROM dbpcm_datawarehouse.online__okc__02__dbonline.employee",
             trino_settings,
         )
 
@@ -1755,7 +1220,7 @@ def test_discovery_resolves_shard_lazily_for_clickhouse_only_schema(
 ):
     """Empty mysql_shards + clickhouse-source table: discovery succeeds, no lockout."""
     settings = make_settings(
-        str(_write_snapshot(tmp_path / "empty.json", {"mysql_shards": []}))
+        str(_write_snapshot(tmp_path / "empty.json", {"entries": []}))
     )
     connect, _, cursor = discovery_connection(
         monkeypatch,
@@ -1780,7 +1245,7 @@ def test_discovery_resolves_shard_lazily_for_clickhouse_only_schema(
     connect.reset_mock()
     with pytest.raises(QueryValidationError) as exc:
         service.get_table_schema("dbpcm_datawarehouse", "employee", settings)
-    assert exc.value.code == "MYSQL_SHARD_NOT_FOUND"
+    assert exc.value.code == "MYSQL_SHARD_REGISTRY_INVALID"
     connect.assert_not_called()
 
 
@@ -1918,8 +1383,8 @@ def test_memo_preserves_identity_isolation(monkeypatch, trino_settings):
         connect, _, cursor = discovery_connection(monkeypatch, rows)
         # Routing diversity comes from client_code: 10R37 -> prod_01, 12ABC -> prod_02.
         for code, shard in [
-            ("10R37", "mysql_shard_prod_01"),
-            ("12ABC", "mysql_shard_prod_02"),
+            ("10R37", "online__okc__01__dbonline"),
+            ("12ABC", "online__okc__02__dbonline"),
         ]:
             principal_token = current_principal.set(
                 Principal(
@@ -1945,8 +1410,8 @@ def test_memo_preserves_identity_isolation(monkeypatch, trino_settings):
             if "information_schema" in c.args[0] and c.args[1][0] != "dbpcm_warehouse"
         ]
         assert [c.args[1][0] for c in mysql_info_calls] == [
-            "mysql_shard_prod_01",
-            "mysql_shard_prod_02",
+            "online__okc__01__dbonline",
+            "online__okc__02__dbonline",
         ]
         # A repeat under the FIRST identity is memo-served (same request, same identity).
         principal_token = current_principal.set(
@@ -2023,7 +1488,7 @@ def test_scalar_constant_routing(trino_settings, principal):
     )
     assert "WITH" not in sql
     assert "SELECT 25000, employee_code" in sql
-    assert '"mysql_shard_prod_01"' in sql
+    assert '"online__okc__01__dbonline"' in sql
 
 
 def test_date_and_array_composition_routing(trino_settings, principal):
@@ -2040,7 +1505,7 @@ def test_exact_median_keeps_shard_routing(function, trino_settings, principal):
     args = 'annual_salary, annual_salary > 0' if function.endswith('If') else 'annual_salary'
     rewritten = trino_client.rewrite_query(f'SELECT {function}(0.5)({args}) FROM employee', trino_settings)
     assert 'ELEMENT_AT(ARRAY_SORT(ARRAY_AGG(' in rewritten
-    assert 'mysql_shard_prod_01' in rewritten
+    assert 'online__okc__01__dbonline' in rewritten
     assert 'APPROX_PERCENTILE' not in rewritten
 
 

@@ -128,6 +128,7 @@ from app.clickhouse_client import readonly_settings
 from app.config import Settings, get_settings
 from app.errors import ClickHouseUnavailableError
 from app.principal import Principal, get_current_principal
+from app.http_security import validate_https_endpoint, verified_opener
 
 logger = logging.getLogger(__name__)
 
@@ -393,6 +394,7 @@ def _fetch_employee_codes(principal: Principal, settings: Settings) -> list[str]
             "EEACCESS_BASE_URL is not configured but employee-access is enabled.",
             code="EMPLOYEE_ACCESS_MISCONFIGURED",
         )
+    validate_https_endpoint(base)
     token = principal.token.strip()
     if not token:
         # HTTP transports always carry the raw token; its absence means we cannot
@@ -409,7 +411,7 @@ def _fetch_employee_codes(principal: Principal, settings: Settings) -> list[str]
         "Authorization": f"Bearer {token}",
     }
     req = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(req, timeout=settings.eeaccess_timeout_seconds) as resp:
+    with verified_opener().open(req, timeout=settings.eeaccess_timeout_seconds) as resp:
         raw = resp.read()
     payload = json.loads(raw.decode("utf-8"))
     return _parse_codes(payload)

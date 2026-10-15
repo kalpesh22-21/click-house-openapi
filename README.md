@@ -4,8 +4,8 @@ A read-only REST API **and MCP server** that sits in front of ClickHouse and is 
 
 ## Experimental Trino backend
 
-An opt-in Trino execution layer, MySQL shard routing stub, and standalone Docker
-Compose setup are available. See [Trino setup and migration scope](docs/trino.md).
+An opt-in Trino execution layer routes MySQL queries to pre-existing cluster
+catalogs using a configurable shard registry. See [Trino configuration](docs/trino.md).
 The existing ClickHouse backend remains the default.
 
 ## OpenAI Agent Examples

@@ -142,16 +142,3 @@ def test_framework_traceback_does_not_echo_cause_or_sql():
     assert "secret-native-sql" not in result.stdout
     assert "private" not in result.stdout
     assert result.stderr == ""
-
-
-def test_view_apply_error_summaries_never_echo_private_sql():
-    from scripts.apply_mysql_views import _error_summary as mysql
-    from scripts.apply_trino_views import _error_summary as trino
-
-    for summarize in (mysql, trino):
-        assert (
-            summarize(
-                RuntimeError("CREATE VIEW proprietary AS SELECT private_password")
-            )
-            == "RuntimeError"
-        )

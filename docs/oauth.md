@@ -187,32 +187,32 @@ App registration: **Clickhouse_MCP**.
 
 | Source value | Value | Used as |
 |---|---|---|
-| Tenant ID (from the OpenID URL) | `a7628d74-52e2-4cf6-9aed-f7ae60fac663` | builds issuer / JWKS URLs |
+| Tenant ID (from the OpenID URL) | `YOUR_TENANT_ID` | builds issuer / JWKS URLs |
 | Application (client) ID | `3be17ac5-d4b5-4a82-9cd3-868750845ea8` | the client's `client_id` |
-| App ID URI | `api://paycomonline.com/clickhouse-mcp` | audience (`OIDC_AUDIENCE` / `OAUTH_RESOURCE`) |
-| API scope | `api://paycomonline.com/clickhouse-mcp/mcp.access` | scope the client requests |
+| App ID URI | `api://example.com/clickhouse-mcp` | audience (`OIDC_AUDIENCE` / `OAUTH_RESOURCE`) |
+| API scope | `api://example.com/clickhouse-mcp/mcp.access` | scope the client requests |
 | Client secret | *(omitted — server does not use it)* | only a confidential client / `client_credentials` flow |
 
 > ⚠️ **Domain mismatch to resolve first.** The App ID URI domain
-> (`paycomonline.com`) and the scope's domain (`paycomhq.com`, as originally
+> (`example.com`) and the scope's domain (`example.org`, as originally
 > provided) differ. A scope MUST be `<App ID URI>/<scope-name>`, so confirm the
 > real App ID URI in **Entra → Expose an API** and make both use the same domain.
 > The token `aud` equals the App ID URI, so that exact string is the audience below.
 
 ```bash
 # --- MCP server .env (derived from the tenant + App ID URI above) ---
-OIDC_ISSUER=https://login.microsoftonline.com/a7628d74-52e2-4cf6-9aed-f7ae60fac663/v2.0
-OIDC_JWKS_URL=https://login.microsoftonline.com/a7628d74-52e2-4cf6-9aed-f7ae60fac663/discovery/v2.0/keys
-OAUTH_AUTHORIZATION_SERVERS=https://login.microsoftonline.com/a7628d74-52e2-4cf6-9aed-f7ae60fac663/v2.0
+OIDC_ISSUER=https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0
+OIDC_JWKS_URL=https://login.microsoftonline.com/YOUR_TENANT_ID/discovery/v2.0/keys
+OAUTH_AUTHORIZATION_SERVERS=https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0
 JWT_ALGORITHMS=RS256
 
-OIDC_AUDIENCE=api://paycomonline.com/clickhouse-mcp
-OAUTH_RESOURCE=api://paycomonline.com/clickhouse-mcp
+OIDC_AUDIENCE=api://example.com/clickhouse-mcp
+OAUTH_RESOURCE=api://example.com/clickhouse-mcp
 # MUST be the FULLY-QUALIFIED scope (App ID URI + "/" + scope name), and its
 # prefix MUST equal OAUTH_RESOURCE. A bare "mcp.access" here makes Entra reject
 # the authorize request with AADSTS9010010 (resource param doesn't match scopes),
 # because the MCP client sends both `resource=OAUTH_RESOURCE` and `scope=this`.
-OAUTH_SCOPES_SUPPORTED=api://paycomonline.com/clickhouse-mcp/mcp.access
+OAUTH_SCOPES_SUPPORTED=api://example.com/clickhouse-mcp/mcp.access
 
 PUBLIC_BASE_URL=https://mcp.your-host.example.com   # set to the real public MCP URL
 CLICKHOUSE_TENANT_SETTINGS={"SQL_tenant": "oid"}    # Entra has no user_name claim
@@ -220,8 +220,8 @@ CLICKHOUSE_TENANT_SETTINGS={"SQL_tenant": "oid"}    # Entra has no user_name cla
 
 Client-side values (for the MCP *client* / OAuth flow — NOT the server env):
 `client_id = 3be17ac5-d4b5-4a82-9cd3-868750845ea8`, tenant
-`a7628d74-52e2-4cf6-9aed-f7ae60fac663`, scope
-`api://paycomonline.com/clickhouse-mcp/mcp.access`.
+`YOUR_TENANT_ID`, scope
+`api://example.com/clickhouse-mcp/mcp.access`.
 
 > **Verify before trusting the above.** Set the API app manifest
 > `requestedAccessTokenVersion: 2` (otherwise `iss` is the v1
@@ -296,7 +296,7 @@ ChatGPT ──DCR + auth-code+PKCE──▶ Keycloak ──OIDC brokering──�
 > ```bash
 > helm install keycloak ./helm/keycloak \
 >   --set hostname=kc.your-host.example.com \
->   --set entra.tenantId=a7628d74-52e2-4cf6-9aed-f7ae60fac663 \
+>   --set entra.tenantId=YOUR_TENANT_ID \
 >   --set entra.clientId=3be17ac5-d4b5-4a82-9cd3-868750845ea8 \
 >   --set secrets.entraClientSecret=<entra-client-secret> \
 >   --set secrets.adminPassword=$(openssl rand -hex 24) \
@@ -311,7 +311,7 @@ ChatGPT ──DCR + auth-code+PKCE──▶ Keycloak ──OIDC brokering──�
 > open DCR). The manual walkthrough below is the same config done by hand.
 
 1. **Keycloak → Identity Providers → Add → OpenID Connect / Microsoft.**
-   - Discovery URL: `https://login.microsoftonline.com/a7628d74-52e2-4cf6-9aed-f7ae60fac663/v2.0/.well-known/openid-configuration`
+   - Discovery URL: `https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0/.well-known/openid-configuration`
    - Client ID / secret: the Entra app (`3be17ac5-…`) + its secret.
    - Add Entra's redirect URI for this broker (Keycloak shows it on the IdP page) to the Entra app's **Authentication → Redirect URIs**.
    - **Attribute importer mappers**: import Entra `oid` (and `email`/`preferred_username`) onto the brokered user.

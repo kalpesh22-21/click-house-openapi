@@ -15,10 +15,10 @@ config:
   # param) has iss=https://sts.windows.net/<tenant>/ and NO `scp` — it will fail.
   # The CLIENT must therefore use the v2 endpoints and request a `scope`, not a
   # `resource`:  .../oauth2/v2.0/authorize  +  .../oauth2/v2.0/token  with
-  # scope="openid profile email api://paycomhq.com/clickhouse-mcp/mcp.access".
-  OIDC_JWKS_URL: "https://login.microsoftonline.com/a7628d74-52e2-4cf6-9aed-f7ae60fac663/discovery/v2.0/keys"
-  OIDC_ISSUER: "https://login.microsoftonline.com/a7628d74-52e2-4cf6-9aed-f7ae60fac663/v2.0"
-  OIDC_AUDIENCE: "api://paycomhq.com/clickhouse-mcp"
+  # scope="openid profile email api://example.org/clickhouse-mcp/mcp.access".
+  OIDC_JWKS_URL: "https://login.microsoftonline.com/YOUR_TENANT_ID/discovery/v2.0/keys"
+  OIDC_ISSUER: "https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0"
+  OIDC_AUDIENCE: "api://example.org/clickhouse-mcp"
   # Entra has no user_name claim — use the stable Microsoft object id as tenant key.
   CLICKHOUSE_TENANT_SETTINGS: '{"SQL_tenant":"oid"}'
 
@@ -27,12 +27,12 @@ config:
   # PRM `resource` value. A wrong host here also makes ChatGPT report "no OAuth".
   PUBLIC_BASE_URL: "https://mcp.example.com"
   # OAUTH_RESOURCE MUST equal OIDC_AUDIENCE (the token `aud`).
-  OAUTH_RESOURCE: "api://paycomhq.com/clickhouse-mcp"
+  OAUTH_RESOURCE: "api://example.org/clickhouse-mcp"
   # OAUTH_AUTHORIZATION_SERVERS defaults to OIDC_ISSUER; set explicitly if different.
   # OAUTH_SCOPES_SUPPORTED must be the FULLY-QUALIFIED Entra scope (App ID URI +
   # "/" + scope name) sharing OAUTH_RESOURCE's prefix — a bare "mcp.access" makes
   # Entra reject the login with AADSTS9010010 (resource doesn't match scopes).
-  OAUTH_SCOPES_SUPPORTED: "api://paycomhq.com/clickhouse-mcp/mcp.access"
+  OAUTH_SCOPES_SUPPORTED: "api://example.org/clickhouse-mcp/mcp.access"
 
 # mcp.example.com is dedicated to the MCP server, so route the whole host to the
 # pod with a single `/` Prefix. This deliberately includes the public OAuth

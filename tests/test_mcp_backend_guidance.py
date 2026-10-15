@@ -16,7 +16,7 @@ import app.config
 # employee_access_enabled=False mirrors the trino test-suite convention: bare
 # Settings() construction validates EEACCESS_BASE_URL otherwise.
 settings = app.config.Settings(
-    _env_file=None, trino_enabled=ENABLED, employee_access_enabled=False
+    _env_file=None, trino_enabled=ENABLED, trino_host="localhost", employee_access_enabled=False
 )
 app.config.get_settings = lambda: settings
 from app.mcp_server import mcp

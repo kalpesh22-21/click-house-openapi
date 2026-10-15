@@ -11,35 +11,72 @@ With `TRINO_ENABLED=true`, ClickHouse-only queries still execute directly in
 ClickHouse; MySQL and mixed-source queries use Trino. Restart the API/MCP process
 when changing configuration. Logical names and authorization remain unchanged.
 
-MySQL routing matches the authenticated tenant against the trusted local shard
-registry configured by `TRINO_SHARD_REGISTRY_PATH` (default
-`docker/trino/shards.json`). `TRINO_ENV_TYPE` selects the environment and
-`TRINO_MYSQL_SCHEMA` selects the source schema. Missing or ambiguous routes fail
-closed. Neither SQL nor caller headers may override the registry or identity.
+MySQL routing reads the operator-configured HTTPS endpoint in `TRINO_ITDBA_URL`.
+There is no built-in infrastructure URL and no runtime `shards.json` fallback.
+An unset endpoint leaves MySQL routing unavailable unless an allowed, validated
+file cache is available. ClickHouse-only execution does not need this endpoint.
+`TRINO_ENV_TYPE` selects PROD, QA2 or DEV; `TRINO_MYSQL_SCHEMA` and
+`TRINO_ITDBA_NAME` select the source database and application.
 
-`TRINO_MYSQL_VIEW_CATALOG` selects the secured-view catalog in view mode.
-`TRINO_SECURITY_READY=true` must only be set once connector accounts and source
-policies are provisioned. Trino credentials require TLS when a password is set.
-Direct ClickHouse credentials are required separately for direct execution.
+Active rows are grouped by environment, database and inclusive client-code range.
+Replicas must agree on name, site and level; conflicting groups fail closed.
+Catalog names are derived as `name__site__level__database`, replacing hyphens
+with underscores and preserving case and leading zeroes. Catalogs must already
+exist on the cluster. The API never creates catalogs or views. Optional cached
+`SHOW CATALOGS` checks repair a unique case mismatch and exclude `err__` catalogs;
+check failures warn and preserve the derived name.
 
-## Provisioning
+Inventory is memoized per process for `TRINO_ITDBA_CACHE_TTL_SECONDS` (300 by
+default). Successful fetches atomically write `TRINO_ITDBA_CACHE_PATH` when set,
+with owner-only file permissions. On transport failure, an optional validated
+file cache may be served with a stale-age warning. Expired process entries alone
+are not a fallback. Set `TRINO_ITDBA_ALLOW_STALE=false` to refuse stale data.
+Malformed live routing entries and conflicting groups fail closed. Cache files
+must satisfy the same entry validation, filter matching and 1–10,000 entry band.
+Keep the cache directory writable only by the service account; stale entries can
+outlive a range reassignment when stale serving is enabled.
 
-Use `scripts/refresh_shard_registry.py --help` to refresh the private registry
-from an operator-provided endpoint or saved export, and
-`scripts/setup_trino_catalogs.py --help` to generate connector catalogs and render
-private templates. The runtime range resolver and generator use the same snapshot.
+Registry requests use verified TLS, reject credentials embedded in URLs, refuse
+redirects and cap responses at 16 MiB. Errors do not echo identities, SQL, endpoint
+URLs or registry payloads. Routing errors are:
 
-The local coordinator is defined by `docker-compose.trino.yml`. Connector
-catalogs are loaded at startup. Secured views in the memory catalog must be
-reapplied after a coordinator restart. Use
-`scripts/apply_mysql_views.py --help` and `scripts/apply_trino_views.py --help`
-for their dry-run/apply options. Dry-run SQL output is private operational data;
-do not commit it or attach it to public logs.
+- `MYSQL_SHARD_NOT_FOUND`: no range matches.
+- `MYSQL_SHARD_AMBIGUOUS`: multiple ranges match.
+- `MYSQL_SHARD_REGISTRY_INVALID`: malformed or conflicting live inventory.
+- `MYSQL_SHARD_REGISTRY_UNAVAILABLE`: fetch failed with no permitted usable cache.
+- `INVALID_TRINO_ROUTING`: invalid server-side SQL identifier.
 
-The MySQL view, Trino view and native-source directories, generated connector
-properties, credentials and runtime shard registry are ignored by Git and the
-Docker build context. Mount the required private configuration separately.
-Tests must use synthetic definitions and require no private view files.
+Configure `TRINO_HOST`, `TRINO_USER` and `TRINO_PASSWORD` through deployment
+secrets (the deployment may source these from Vault key `trino`). HTTPS and port
+443 are the defaults. User and password must be supplied together; password
+authentication refuses HTTP. One connection helper is shared by execution,
+metadata and catalog checks. Direct ClickHouse credentials remain separate.
+
+Cluster execution uses `TRINO_MYSQL_SOURCE_MODE=system_query` (the default) and
+private native-source contracts. `views` remains an explicit compatibility mode
+for pre-existing secured views in local development; its provisioning scripts
+and Docker coordinator have been removed. Use unauthenticated local connections
+for this mode so the composite request identity remains the Trino user.
+`TRINO_SECURITY_READY=true` must only be set after source row policies and native
+contracts are provisioned. Caller JWT claims continue to supply tenant identity
+and processing center; the registry never supplies authorization identity.
+
+## Cache operations
+
+Warm the optional cache using the same normalization and validation as runtime:
+
+```sh
+python scripts/refresh_shard_registry.py --output /writable/private/registry-cache.json
+```
+
+The command reads `TRINO_ITDBA_URL`; `--url` can override it, or `--input` can
+supply a saved API export. It performs no DDL. Restart API workers after warming
+if they must discard an existing process memo immediately; otherwise the memo
+expires naturally. A refresh failure preserves the previous file.
+
+Mount native policy contracts read-only and the optional cache on a private
+writable volume. Do not commit credentials, inventory snapshots or private SQL.
+There is no rollback to the removed local snapshot-based routing implementation.
 
 ## Metadata and hidden join keys
 
@@ -74,8 +111,8 @@ The model continues to see logical tables, not native SQL or hidden join metadat
 
 MySQL source selection is controlled by `TRINO_MYSQL_SOURCE_MODE`:
 
-- `views` (default): existing shard routing and secured Trino-view substitution.
-- `system_query`: shard routing followed by a private native SELECT containing
+- `views` (local compatibility only): existing shard routing and secured Trino-view substitution.
+- `system_query` (default): shard routing followed by a private native SELECT containing
   tenant and employee authorization. Trino applies the original wrapper projection
   above it to preserve column names, casts and placeholders.
 

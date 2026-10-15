@@ -78,10 +78,10 @@ class Settings(BaseSettings):
     # Experimental federation. Logical SQL/column permissions remain unchanged;
     # physical names are resolved only after the service guardrails run.
     trino_enabled: bool = False
-    trino_host: str = "localhost"
-    trino_port: int = Field(8080, ge=1, le=65535)
+    trino_host: str = ""
+    trino_port: int = Field(443, ge=1, le=65535)
     trino_http_scheme: Literal["http", "https"] = "https"
-    trino_user: str = "mcp_backend"
+    trino_user: str = ""
     trino_password: str = Field("", repr=False)
     trino_request_timeout: float = Field(30, gt=0)
     # MySQL logical schema the MySQL connector catalogs expose. Doubles as the
@@ -92,30 +92,22 @@ class Settings(BaseSettings):
     # View-hosting catalog: dbpcm_datawarehouse.<shard>.employee.
     # Empty means connector catalogs: <shard>.dbonline.employee.
     trino_mysql_view_catalog: str = "dbpcm_datawarehouse"
-    trino_mysql_source_mode: Literal["views", "system_query"] = "views"
+    trino_mysql_source_mode: Literal["views", "system_query"] = "system_query"
     # Private, deployment-owned native SQL and projection contracts. Never export
     # these definitions through the semantic catalog or include them in images.
     trino_mysql_native_sources_dir: str = "docker/trino/native_sources"
     trino_client_code_claim: str = "clientcode"
     trino_proc_center_claim: str = "proc_center"
     trino_username_claim: str = "user_name"
-    # MySQL shard routing (paycompy/DBA shard-registry model): the authenticated
-    # client_code — never proc_center, which stays a required identity claim but
-    # is NOT a routing input — is range-matched (clientstart <= code <= clientend,
-    # inclusive lexicographic) against the snapshot at trino_shard_registry_path,
-    # filtered by env_type == trino_env_type and database == trino_mysql_schema.
-    # Refresh the snapshot with scripts/refresh_shard_registry.py; generate Trino
-    # connector catalogs from it with scripts/setup_trino_catalogs.py. There is no
-    # default shard: unmatched/ambiguous tenants and a missing/invalid snapshot are
-    # all fail-closed — an unknown tenant must never land on an arbitrary source.
-    trino_shard_registry_path: str = Field(
-        "docker/trino/shards.json",
-        description=(
-            "Path to the paycompy/DBA shard-registry snapshot JSON consumed by "
-            "app/shard_routing.py at query time (no live registry fetch). "
-            "Trusted server-side configuration — never caller-supplied."
-        ),
-    )
+    # Runtime inventory comes from ITDBA; cluster catalogs already exist.
+    trino_itdba_url: str = ""
+    trino_itdba_name: str = "online"
+    trino_itdba_timeout_seconds: float = Field(30.0, gt=0)
+    trino_itdba_cache_ttl_seconds: int = Field(300, ge=1)
+    trino_itdba_cache_path: str = ""
+    trino_itdba_allow_stale: bool = True
+    trino_catalog_check_enabled: bool = True
+    trino_catalog_check_ttl_seconds: int = Field(300, ge=1)
     trino_env_type: Literal["PROD", "QA2", "DEV"] = Field(
         "PROD",
         description=(
@@ -756,7 +748,7 @@ class Settings(BaseSettings):
         return _normalise_public_key(v)
 
     @field_validator(
-        "trino_mysql_schema", "trino_clickhouse_catalog", "trino_mysql_view_catalog"
+        "trino_mysql_schema", "trino_clickhouse_catalog", "trino_mysql_view_catalog", "trino_itdba_name"
     )
     @classmethod
     def _validate_trino_routing_identifiers(cls, v: str, info) -> str:
@@ -782,6 +774,20 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"{info.field_name}: {exc.message}"
             ) from exc
+
+    @field_validator("trino_itdba_url", "eeaccess_base_url")
+    @classmethod
+    def _validate_registry_endpoint(cls, value: str) -> str:
+        from app.http_security import validate_https_endpoint
+        return validate_https_endpoint(value)
+
+    @model_validator(mode="after")
+    def _validate_trino_connection(self) -> "Settings":
+        if self.trino_enabled and not self.trino_host.strip():
+            raise ValueError("TRINO_HOST is required when Trino is enabled")
+        if bool(self.trino_user.strip()) != bool(self.trino_password):
+            raise ValueError("TRINO_USER and TRINO_PASSWORD must be configured together")
+        return self
 
     @model_validator(mode="after")
     def _validate_clickhouse_connection(self) -> "Settings":

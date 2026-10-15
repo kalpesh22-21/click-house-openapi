@@ -560,14 +560,14 @@ def _connect(settings: Settings, user: str):
         )
     auth = (
         BasicAuthentication(settings.trino_user, settings.trino_password)
-        if settings.trino_password
+        if settings.trino_user and settings.trino_password
         else None
     )
     return connect(
         host=settings.trino_host,
         port=settings.trino_port,
         http_scheme=settings.trino_http_scheme,
-        user=user,
+        user=settings.trino_user if auth else user,
         auth=auth,
         source="clickhouse-api-mcp",
         request_timeout=settings.trino_request_timeout,

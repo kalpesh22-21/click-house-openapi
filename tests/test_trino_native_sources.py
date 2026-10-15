@@ -75,7 +75,7 @@ def test_clickhouse_settings_and_mysql_modes(native_setup, trino_settings, princ
     assert "paycom_client_code = '10R37'" in ch
     assert "readonly = 2" in ch and "`final` = 1" in ch
     assert "result_overflow_mode = 'throw'" in ch
-    assert '"mysql_shard_prod_01"."dbonline".employee' in old
+    assert '"online__okc__01__dbonline"."dbonline".employee' in old
     trino_settings.trino_mysql_source_mode = "system_query"
     new = trino_client.rewrite_query(query, trino_settings)
     assert len(native_strings(new)) == 2

@@ -68,6 +68,7 @@ GRANT SELECT ON dbpcm_warehouse_security.user_employee_access TO mcp_user;
 ```bash
 EMPLOYEE_ACCESS_ENABLED=true
 EMPLOYEE_ACCESS_REFRESH_SECONDS=600          # N: refresh window / revocation latency / Redis marker TTL
+# HTTPS is required; redirects are rejected to protect the bearer token.
 EEACCESS_BASE_URL=https://<access-api-host>  # {system}/eeaccess is appended; caller's JWT forwarded as Bearer
 
 # Security-writer ClickHouse credential (distinct from the main query account)

@@ -219,7 +219,8 @@ class TestFetch:
             captured["auth"] = req.headers.get("Authorization")
             return _FakeResp(b'["E1","E2"]')
 
-        with patch("urllib.request.urlopen", fake_urlopen):
+        with patch.object(ea, "verified_opener") as opener:
+            opener.return_value.open.side_effect = fake_urlopen
             codes = ea._fetch_employee_codes(p, _settings())
         assert captured["url"] == "https://api.test/cl/eeaccess"
         assert captured["auth"] == "Bearer THE.JWT"
@@ -362,3 +363,15 @@ class TestRedis:
         s = _settings(redis_url="redis://fake/0")
         ea._redis_clients[s.redis_url.strip()] = _BrokenRedis()
         ea._redis_mark_fresh("J", s, 300)  # must not raise
+
+
+@pytest.mark.parametrize("endpoint", ["http://api.test", "https://user:secret@api.test", "file:///tmp/data"])
+def test_employee_access_rejects_unsafe_endpoint(endpoint):
+    with pytest.raises(ValueError):
+        _settings(eeaccess_base_url=endpoint)
+
+
+def test_employee_access_redirect_is_not_followed():
+    from app.http_security import NoRedirects
+    with pytest.raises(OSError):
+        NoRedirects().redirect_request(None, None, 302, "", {}, "https://other.test")
