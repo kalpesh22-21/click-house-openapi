@@ -1,30 +1,40 @@
 id: bp-average-salary-by-department
-intent: Average annual salary by department
-slots_summary: department
+intent: Average annual salary and employee headcount by department; optional employee status and department; omitted
+  filters include all accessible employees. Average excludes NULL salaries; headcount includes them.
+slots_summary: department, employee_status
 status: validated
 drift_status: clean
-catalog_sha: ''
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.annual_salary
+- dbpcm_warehouse.employee.employee_status
 resolves:
   salary: annual_salary
 slots:
-# `department` is OPTIONAL: when omitted, the runtime applies `optional_pattern`,
-# collapsing the `department_name = {department}` predicate to TRUE (average
-# salary for ALL departments, grouped); when supplied, it filters to that department.
 - name: department
   type: string
   required: false
   binds_to: dbpcm_warehouse.employee.department_name
   optional_pattern: 'TRUE'
+- name: employee_status
+  type: enum
+  required: false
+  enum_values:
+  - Active
+  - Deceased
+  - Inactive
+  - Retired
+  - Terminated
+  - On Leave
+  - Not Hired
+  - Prehire
+  - Unknown
+  binds_to: dbpcm_warehouse.employee.employee_status
+  optional_pattern: 'TRUE'
 result_grain:
 - Department
-sql_template: |
-  SELECT department_name AS department,
-         AVG(annual_salary) AS avg_salary,
-         COUNT(DISTINCT employee_code) AS headcount
-  FROM dbpcm_warehouse.employee
-  WHERE department_name = {department}
-  GROUP BY department_name
+sql_template: "SELECT department_name AS department,\n       AVG(annual_salary) AS avg_salary,\n       COUNT(DISTINCT\
+  \ employee_code) AS headcount\nFROM dbpcm_warehouse.employee\nWHERE department_name = {department}\n  AND employee_status\
+  \ = {employee_status}\nGROUP BY department_name\n"

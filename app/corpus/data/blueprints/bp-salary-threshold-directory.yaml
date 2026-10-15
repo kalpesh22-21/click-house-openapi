@@ -1,0 +1,71 @@
+id: bp-salary-threshold-directory
+intent: Show all employees who earn over a salary amount; list employees earning above, below or exactly a specified
+  annual salary. Top N highest paid employees. Returns employee records, not just a count. List employee codes,
+  department, current status and annual salary above/at least/equal/below a whole-currency threshold, ordered by
+  salary descending then employee code. Configurable result limit; top N uses a threshold of at least zero and excludes
+  missing salaries. Ties are broken by employee code; no within-department ranking. Result limit is not a completeness
+  guarantee.
+slots_summary: comparison, salary, row_limit, employee_status, department, employee
+status: validated
+drift_status: clean
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+uses:
+- dbpcm_warehouse.employee.annual_salary
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status
+slots:
+- name: comparison
+  type: enum
+  required: true
+  enum_values:
+  - above
+  - at_least
+  - equal
+  - below
+- name: salary
+  type: nonnegative_integer
+  required: true
+  min_value: 0
+  max_value: 1000000000
+- name: row_limit
+  type: positive_integer
+  required: true
+  min_value: 1
+  max_value: 1000
+- name: employee_status
+  type: enum
+  required: false
+  enum_values:
+  - Active
+  - Deceased
+  - Inactive
+  - Retired
+  - Terminated
+  - On Leave
+  - Not Hired
+  - Prehire
+  - Unknown
+  binds_to: dbpcm_warehouse.employee.employee_status
+  optional_pattern: 'TRUE'
+- name: department
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: employee
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.employee.employee_code
+  optional_pattern: 'TRUE'
+result_grain:
+- Employee Code
+sql_template: 'SELECT e.employee_code AS `Employee Code`, e.department_name AS `Department`, e.employee_status AS
+  `Status`, e.annual_salary AS `Annual Salary`
+
+  FROM dbpcm_warehouse.employee e WHERE e.employee_status = {employee_status} AND e.department_name = {department}
+  AND e.employee_code = {employee} AND (({comparison} = ''above'' AND e.annual_salary > {salary}) OR ({comparison}
+  = ''at_least'' AND e.annual_salary >= {salary}) OR ({comparison} = ''equal'' AND e.annual_salary = {salary}) OR
+  ({comparison} = ''below'' AND e.annual_salary < {salary}))
+
+  ORDER BY e.annual_salary DESC, e.employee_code LIMIT {row_limit}'

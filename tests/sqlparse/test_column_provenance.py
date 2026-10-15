@@ -1645,3 +1645,22 @@ def test_prov_alias_shadows_unread_column_of_same_table() -> None:
         (_AE, "employee_code"),
         (_AE, "status"),
     ])
+
+
+@pytest.mark.parametrize("clause", ['ORDER BY "Code"', 'GROUP BY "Code"'])
+def test_case_only_output_alias_preserves_provenance(clause):
+    schema = {"dbpcm_warehouse.labor_allocation": {"code": "String"}}
+    result = extract_column_provenance(
+        'SELECT code AS "Code" FROM dbpcm_warehouse.labor_allocation ' + clause,
+        schema,
+    )
+    assert result == frozenset({("dbpcm_warehouse.labor_allocation", "code")})
+
+
+def test_case_mismatched_source_is_still_rejected():
+    schema = {"dbpcm_warehouse.labor_allocation": {"code": "String"}}
+    with pytest.raises(ProvenanceExtractionError):
+        extract_column_provenance(
+            'SELECT "Code" FROM dbpcm_warehouse.labor_allocation ORDER BY "Code"',
+            schema,
+        )

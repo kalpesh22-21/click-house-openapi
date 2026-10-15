@@ -1,9 +1,10 @@
 id: bp-active-headcount-by-department
-intent: Active employee headcount by department, including departments with no active employees
+intent: Active employee headcount by department, including departments with no active employees (active-only; for
+  other/all statuses use bp-employee-summary)
 slots_summary: department
 status: validated
 drift_status: clean
-catalog_sha: ''
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_code
@@ -11,8 +12,6 @@ uses:
 - dbpcm_warehouse.department.department_code
 - dbpcm_warehouse.department.department_name
 slots:
-# Omitting `department` includes all accessible departments, including zero counts.
-# Apply the optional name filter to the directory, not to joined employee rows.
 - name: department
   type: string
   required: false
@@ -22,17 +21,8 @@ uses_rules:
 - active_employee
 result_grain:
 - department_code
-sql_template: |
-  SELECT
-      d.department_code AS department_code,
-      d.department_name AS department,
-      coalesce(e.active_count, 0) AS headcount
-  FROM dbpcm_warehouse.department AS d
-  LEFT JOIN (
-      SELECT department_code, uniqExact(employee_code) AS active_count
-      FROM dbpcm_warehouse.employee
-      WHERE employee_status = 'A'
-      GROUP BY department_code
-  ) AS e ON d.department_code = e.department_code
-  WHERE d.department_name = {department}
-  ORDER BY headcount, department, department_code
+sql_template: "SELECT\n    d.department_code AS department_code,\n    d.department_name AS department,\n    coalesce(e.active_count,\
+  \ 0) AS headcount\nFROM dbpcm_warehouse.department AS d\nLEFT JOIN (\n    SELECT department_code, uniqExact(employee_code)\
+  \ AS active_count\n    FROM dbpcm_warehouse.employee\n    WHERE employee_status = 'Active'\n    GROUP BY department_code\n\
+  ) AS e ON d.department_code = e.department_code\nWHERE d.department_name = {department}\nORDER BY headcount, department,\
+  \ department_code\n"

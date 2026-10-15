@@ -96,3 +96,13 @@ def test_empty_result_still_carries_validated_dependencies(environment):
     result = service.run_query("SELECT gross_pay FROM analytics.orders", include_provenance=True)
     assert result["row_count"] == 0
     assert result["provenance"]["columns"] == [["analytics.orders", "gross_pay"]]
+
+
+@pytest.mark.parametrize("method", [service.run_query, service.explain_query])
+def test_known_source_missing_live_metadata_stops_without_sql_retry(environment, method):
+    from app.errors import ClickHouseUnavailableError
+    with patch("app.service.get_catalog_schema", return_value={}), patch("app.service.get_semantic_catalog", return_value={"analytics.orders": {}}):
+        with pytest.raises(ClickHouseUnavailableError) as caught:
+            method("SELECT count(*) FROM analytics.orders", include_provenance=True)
+    assert caught.value.code == "SOURCE_METADATA_UNAVAILABLE"
+    environment.assert_not_called()

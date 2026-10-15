@@ -1,0 +1,59 @@
+id: bp-salary-threshold-count
+intent: How many employees make over a salary amount? Count employees earning above, below, at least or exactly
+  a specified annual salary. Returns one employee count, not an employee list. Count employees whose recorded annual
+  salary is above, at least, exactly equal to or below a whole-currency threshold. Optional current status, department
+  and employee. NULL salary never matches. Returns a scalar zero for no matches. Fractional-currency thresholds
+  require direct SQL.
+slots_summary: comparison, salary, employee_status, department, employee
+status: validated
+drift_status: clean
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+uses:
+- dbpcm_warehouse.employee.annual_salary
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status
+slots:
+- name: comparison
+  type: enum
+  required: true
+  enum_values:
+  - above
+  - at_least
+  - equal
+  - below
+- name: salary
+  type: nonnegative_integer
+  required: true
+  min_value: 0
+  max_value: 1000000000
+- name: employee_status
+  type: enum
+  required: false
+  enum_values:
+  - Active
+  - Deceased
+  - Inactive
+  - Retired
+  - Terminated
+  - On Leave
+  - Not Hired
+  - Prehire
+  - Unknown
+  binds_to: dbpcm_warehouse.employee.employee_status
+  optional_pattern: 'TRUE'
+- name: department
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: employee
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.employee.employee_code
+  optional_pattern: 'TRUE'
+result_grain: []
+sql_template: SELECT count(DISTINCT e.employee_code) AS `Employee Count` FROM dbpcm_warehouse.employee e WHERE e.employee_status
+  = {employee_status} AND e.department_name = {department} AND e.employee_code = {employee} AND (({comparison} =
+  'above' AND e.annual_salary > {salary}) OR ({comparison} = 'at_least' AND e.annual_salary >= {salary}) OR ({comparison}
+  = 'equal' AND e.annual_salary = {salary}) OR ({comparison} = 'below' AND e.annual_salary < {salary}))

@@ -75,8 +75,6 @@ from app.corpus.export import build_blueprints_export, build_knowledge_export
 from app.errors import (
     ArgumentValidationError,
     CartesianJoinError,
-    ClickHouseQueryError,
-    ClickHouseUnavailableError,
     ColumnScopeError,
     DatabaseNotAllowedError,
     ParseFailedError,
@@ -136,13 +134,15 @@ _SQL_GUIDANCE = (
     "returned by discovery and ClickHouse-compatible read-only SQL. "
 )
 _SCHEMA_GUIDANCE = (
-    "getTableSchema reports live Trino types (VARCHAR, TIMESTAMP, DECIMAL, etc.) "
-    "for available catalogued columns. Catalog type definitions and provenance/scope "
-    "keys retain the legacy ClickHouse-compatible contract and dbpcm_warehouse "
-    "namespace; live type names do not change the API input dialect. "
+    "getTableSchema reports logical ClickHouse types, including Nullable, for live "
+    "available catalogued columns. Write ClickHouse SQL using these authoring types; "
+    "physical Trino types remain internal and do not change the input dialect. "
+    "Use typed date bounds such as toDate('2026-01-01'), not bare date strings. "
     if settings.trino_enabled else
     "getTableSchema reports ClickHouse column types and catalog documentation. "
 )
+
+from app.query_feedback import observed_function_guide
 
 mcp = FastMCP(
     name="ClickHouse API",
@@ -152,13 +152,14 @@ mcp = FastMCP(
         "Recommended workflow: "
         "(1) Call listDatabases to discover available databases. "
         "(2) Call listTables to see tables in a database. "
-        "(3) Call getTableSchema BEFORE writing any SELECT query — this gives you "
+        "(3) Reuse verified schema already in context; otherwise call getTableSchema, selecting only needed columns when known — this gives you "
         "exact column names, types, and comments. "
         "(4) Optionally call sampleRows to inspect real data values. "
-        "(5) Call explainQuery to validate your SQL before running it. "
+        "(5) Use explainQuery selectively for complex or uncertain query plans. "
         "(6) Call runQuery to execute the validated query. "
         "All queries are read-only.  INSERT/UPDATE/DELETE/DDL are blocked. "
-        "External table functions (url, s3, file, etc.) are blocked."
+        "External table functions (url, s3, file, etc.) are blocked. "
+        + (observed_function_guide() if settings.trino_enabled else "")
     ),
     host="0.0.0.0",
     port=settings.mcp_port,
@@ -185,6 +186,10 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
     """
     from app.error_logging import log_failure
     log_failure(logger, "mcp.tool", exc)
+    from app.model_errors import model_tool_error
+    public_error = model_tool_error(exc)
+    if public_error is not None:
+        return ToolError(public_error)
     if isinstance(exc, QueryValidationError):
         if exc.code == "INVALID_COLUMN_REFERENCE":
             return ToolError(f"[{exc.code}] {exc.message}")
@@ -213,23 +218,6 @@ def _domain_to_tool_error(exc: Exception) -> ToolError:
         return ToolError(
             f"[{exc.code}] {exc.message}. "
             "Call listTables to verify the table name."
-        )
-    if isinstance(exc, ClickHouseQueryError):
-        # exc.message is already "ClickHouse query error: <NAME (code N)>: <sentence>.
-        # Hint: <fix>" from execute_query (via app/ch_errors.py).  Do NOT point the
-        # model at explainQuery here: EXPLAIN runs the same analyzer, so a syntax /
-        # NOT_AN_AGGREGATE / UNKNOWN_IDENTIFIER error reproduces identically there
-        # and the old advice sent models into a runQuery→explainQuery→runQuery loop.
-        retry = "Apply the hint, then retry." if "Hint:" in exc.message else "Fix the SQL, then retry."
-        return ToolError(f"[{exc.code}] {exc.message} {retry}")
-    if isinstance(exc, ClickHouseUnavailableError):
-        # Backend-correct guidance: the TRINO_* code is stamped at raise time, so
-        # prefix-matching it stays right even if trino_enabled flips between
-        # import and error (it decorates TRINO_DISCOVERY_UNAVAILABLE / TRINO_UNAVAILABLE).
-        backend = "Trino" if exc.code.startswith("TRINO_") else "ClickHouse"
-        return ToolError(
-            f"[{exc.code}] {exc.message}. "
-            f"The {backend} server is temporarily unreachable."
         )
     if isinstance(exc, ColumnScopeError):
         # Forward the service-layer message verbatim: it is an author-controlled
@@ -463,8 +451,7 @@ def run_query(
     name="explainQuery",
     description=(
         "Run EXPLAIN on a SQL statement and return the query execution plan without executing it. "
-        "Use this to validate SQL syntax and inspect the query plan BEFORE calling runQuery, "
-        "especially for complex queries. "
+        "Use selectively to validate syntax and inspect complex or uncertain query plans before runQuery. "
         "EXPLAIN checks the plan; success does not guarantee runtime success or performance. "
         "explainQuery enforces the SAME scope, session, and scratch-isolation guardrails as "
         "runQuery — it is NOT an escape hatch: a query that fails those gates (column-scope, "

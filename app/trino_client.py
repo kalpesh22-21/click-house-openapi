@@ -101,7 +101,7 @@ def normalize_logical_sql(sql: str) -> str:
             type(exc).__name__,
         )
         raise QueryValidationError(
-            "Invalid logical SQL.", "TRINO_UNSUPPORTED_SQL"
+            "Invalid logical SQL. Check for incomplete SQL or unterminated quotes.", "TRINO_UNSUPPORTED_SQL"
         ) from exc
 
 
@@ -125,23 +125,18 @@ def normalize_logical_sql(sql: str) -> str:
 #   uniqexact           -> COUNT(DISTINCT x)                            [1 arg]
 #   todate              -> CAST(x AS DATE)                              [1 arg]
 #   todate32            -> CAST(x AS DATE)                              [1 arg]
-#   todatetime          -> CAST(x AS TIMESTAMP)                         [1 arg]
+#   todatetime          -> type-aware timestamp/epoch mapping (trino_semantics)
 #   todatetime64        -> CAST(x AS TIMESTAMP(p))                      [2 args]
 #   tofloat64           -> CAST(x AS DOUBLE)                            [1 arg]
 #   tostring            -> CAST(x AS VARCHAR)                           [1 arg]
 #   touint8             -> truncate toward zero, modulo 256            [1 arg]
-#   sumif               -> COALESCE(SUM(x) FILTER (WHERE cond), 0)      [2 args]
-#   avgif               -> AVG(x) FILTER (WHERE cond)                   [2 args]
+#   sumif / avgif       -> type-aware defaults (trino_semantics)
 #   multiif             -> CASE WHEN c THEN v ... ELSE v_else END       [odd arity >= 3]
 #   addmonths           -> DATE_ADD('month', n, d)  (arg-order swap)    [2 args]
 #   concatwithseparator -> NULL-guarded CONCAT_WS                     [>= 2 args]
 #
-# Kept UNMAPPED on purpose: quantileExactLow / quantileExactHigh — the
-# parametric double-call (quantileExactLow(0.5)(x)) parses as
-# exp.ParameterizedAgg (which the walk below does not even visit), and
-# Trino has no exact percentile aggregate; the mapping (approx_percentile
-# is an APPROXIMATION) is a quantile decision for a later owner, not an
-# exact-safe rewrite.
+# Parameterized aggregates (including exact quantiles) are rejected explicitly
+# by trino_constructs. Never silently substitute an approximate percentile.
 
 
 class _FunctionMapping(NamedTuple):
@@ -196,27 +191,10 @@ def _to_date_as_cast_date(func: exp.Func) -> exp.Expression:
     )
 
 
-def _to_datetime_as_cast_timestamp(func: exp.Func) -> exp.Expression:
-    """toDateTime(x) -> CAST(x AS TIMESTAMP).
-
-    CH tz-less DateTime ≈ Trino TIMESTAMP for this catalog's naive-datetime
-    usage: a DATE input yields midnight, a timestamp input is the identity,
-    and a 'YYYY-MM-DD[ hh:mm:ss]' string literal parses to the same naive
-    value CH computes. Documented divergence: CH also accepts an epoch
-    integer (seconds since 1970-01-01); Trino's CAST does not model epoch
-    conversion and rejects it, so such calls fail loudly rather than
-    mis-convert. Arity admission: exactly 1 arg — CH's optional timezone
-    argument stays untouched.
-    """
-    return exp.Cast(
-        this=func.expressions[0], to=exp.DataType.build(exp.DataType.Type.TIMESTAMP)
-    )
-
-
 def _to_datetime64_as_cast_timestamp(func: exp.Func) -> exp.Expression:
     """toDateTime64(x, p) -> CAST(x AS TIMESTAMP(p)).
 
-    Verified against the pinned sqlglot (30.22.0): the 2-arg CH shape
+    Verified against the pinned sqlglot (30.12.0): the 2-arg CH shape
     (value, scale) maps onto exp.Cast carrying a parameterized TIMESTAMP
     type and renders / round-trips cleanly as CAST(x AS TIMESTAMP(p)).
     Second-precision timestamps and date/datetime string literals convert
@@ -308,37 +286,6 @@ def _as_trino_condition(condition: exp.Expression) -> exp.Expression:
     return exp.Cast(this=condition, to=exp.DataType.build("BOOLEAN"))
 
 
-def _sum_if_as_filtered_sum(func: exp.Func) -> exp.Expression:
-    """sumIf(x, cond) -> COALESCE(SUM(x) FILTER (WHERE cond), 0).
-
-    Both dialects skip non-matching rows, but the EMPTY matching set
-    diverges: ClickHouse sumIf returns 0, Trino SUM(...) FILTER returns
-    NULL. The corpus relies on the 0 — bp-compare-employee-paychecks-two-
-    periods pivots periods as sumIf(b) - sumIf(a), and its header documents
-    that the 0 replaces FULL OUTER JOIN + coalesce semantics for line items
-    present in only one period. NULL would poison that subtraction, so the
-    COALESCE is part of the exact mapping, not decoration.
-    """
-    value, cond = func.expressions
-    return exp.Coalesce(
-        this=exp.Filter(this=exp.Sum(this=value), expression=exp.Where(this=_as_trino_condition(cond))),
-        expressions=[exp.Literal.number(0)],
-    )
-
-
-def _avg_if_as_filtered_avg(func: exp.Func) -> exp.Expression:
-    """avgIf(x, cond) -> AVG(x) FILTER (WHERE cond).
-
-    Documented empty-set delta: ClickHouse avgIf over no matching rows
-    returns NaN, Trino returns NULL. No compensation is applied: the corpus
-    consumes avgIf as a terminal display column (bp-department-scorecard
-    rounds it straight into an output alias, never in further arithmetic),
-    where NULL renders more honestly than ClickHouse's NaN.
-    """
-    value, cond = func.expressions
-    return exp.Filter(this=exp.Avg(this=value), expression=exp.Where(this=_as_trino_condition(cond)))
-
-
 def _multi_if_as_case(func: exp.Func) -> exp.Expression:
     """multiIf(c1, v1, c2, v2, ..., v_else) -> CASE WHEN ... ELSE ... END.
 
@@ -378,15 +325,12 @@ _CLICKHOUSE_FUNCTION_MAP: dict[str, _FunctionMapping] = {
     "uniqexact": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n == 1),
     "todate": _FunctionMapping(_to_date_as_cast_date, lambda n: n == 1),
     "todate32": _FunctionMapping(_to_date32_as_cast_date, lambda n: n == 1),
-    "todatetime": _FunctionMapping(_to_datetime_as_cast_timestamp, lambda n: n == 1),
     "todatetime64": _FunctionMapping(
         _to_datetime64_as_cast_timestamp, lambda n: n == 2
     ),
     "tofloat64": _FunctionMapping(_to_float64_as_cast_double, lambda n: n == 1),
     "tostring": _FunctionMapping(_to_string_as_cast_varchar, lambda n: n == 1),
     "touint8": _FunctionMapping(_to_uint8_as_cast_integer, lambda n: n == 1),
-    "sumif": _FunctionMapping(_sum_if_as_filtered_sum, lambda n: n == 2),
-    "avgif": _FunctionMapping(_avg_if_as_filtered_avg, lambda n: n == 2),
     "multiif": _FunctionMapping(_multi_if_as_case, lambda n: n >= 3 and n % 2 == 1),
     "addmonths": _FunctionMapping(_add_months_as_date_add, lambda n: n == 2),
     "concatwithseparator": _FunctionMapping(
@@ -396,19 +340,17 @@ _CLICKHOUSE_FUNCTION_MAP: dict[str, _FunctionMapping] = {
 
 
 def _map_clickhouse_functions(tree: exp.Query) -> None:
-    """Apply _CLICKHOUSE_FUNCTION_MAP across the routed AST (in place).
+    """Normalize supported constructs, reject known unsafe signatures, then map functions.
 
-    sqlglot parses ClickHouse aggregates it does not model as
-    exp.AnonymousAggFunc subclasses (uniqExact -> exp.AnonymousAggFunc,
-    sumIf/avgIf -> exp.CombinedAggFunc) and unknown scalars as
-    exp.Anonymous; the parametric double-call quantileExact*(p)(x) parses as
-    exp.ParameterizedAgg, which this walk does NOT visit, so it stays
-    unmapped by construction. Each map entry admits its own arity: an absent
-    entry or an arity mismatch leaves the call untouched — e.g. ClickHouse's
-    multi-argument uniqExact(a, b) tuple semantics have no one-statement
-    Trino equivalent, so non-unary calls stay untouched, and the coordinator
-    rejects anything unmapped loudly.
+    Remaining unknown functions are still rejected by the coordinator. This is
+    intentionally not a claim of universal ClickHouse compatibility.
     """
+    from app.trino_constructs import normalize_constructs
+
+    from app.trino_semantics import normalize_semantics
+
+    normalize_semantics(tree)
+    normalize_constructs(tree)
     # Map children before a parent can duplicate them in a NULL guard.
     for func in reversed(list(tree.find_all(exp.Anonymous, exp.AnonymousAggFunc))):
         mapping = _CLICKHOUSE_FUNCTION_MAP.get(func.name.lower())
@@ -511,6 +453,10 @@ def _rewrite_query(
                 "Trino supports SELECT/WITH and plain EXPLAIN SELECT only.",
                 "TRINO_UNSUPPORTED_SQL",
             )
+        from app.trino_constructs import inline_scalar_constants, preserve_paging_order
+
+        inline_scalar_constants(statements[0])
+        preserve_paging_order(statements[0])
         tree = qualify_tables(statements[0], db=DEFAULT_DATABASE, dialect="clickhouse")
         # ClickHouse resolves SELECT aliases in GROUP BY/HAVING (alias-first).
         # Trino does not. Expand within this SELECT only, never into subqueries.
@@ -523,6 +469,9 @@ def _rewrite_query(
                         if isinstance(node, exp.Column) and not node.table and node.name in aliases:
                             node.replace(aliases[node.name].copy())
         catalog = get_semantic_catalog()
+        from app.trino_semantics import annotate_input_types
+
+        annotate_input_types(tree, catalog)
         from app.trino_metadata import canonical_database
         from app.trino_native_sources import source_relation
 

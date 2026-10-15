@@ -1,0 +1,99 @@
+id: bp-accrual-event-summary
+intent: Accrual event/day row counts, event hours and distinct employees by company, department, workflow status,
+  event type, event-date month or department_status (department and status together). Includes all event types and
+  leave categories unless explicitly filtered. Required half-open requested-for-date period [start,end); optional
+  workflow status enum, resolved event_type and earn_code strings, employee status, department and employee. No
+  implicit Approved or PTO filter. COUNT counts event/day rows, not distinct multi-day requests. Approved hours
+  are not taken balance usage. LEFT JOIN preserves unmatched events unless employee filters supplied; does not zero-fill
+  periods or prove full coverage.
+slots_summary: group_by, period, event_status, event_type, earn_code, employee_status, department, employee
+status: validated
+drift_status: clean
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+uses:
+- dbpcm_warehouse.accrual_events.employee_code
+- dbpcm_warehouse.accrual_events.status
+- dbpcm_warehouse.accrual_events.event_type
+- dbpcm_warehouse.accrual_events.earn_code
+- dbpcm_warehouse.accrual_events.request_date
+- dbpcm_warehouse.accrual_events.hours
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.department_name
+slots:
+- name: group_by
+  type: enum
+  required: true
+  enum_values:
+  - company
+  - department
+  - status
+  - event_type
+  - month
+  - department_status
+- name: period
+  type: period_range
+  required: true
+- name: event_status
+  type: enum
+  required: false
+  enum_values:
+  - Approved
+  - Requested
+  - Denied
+  - Removed
+  - Calendar Only
+  binds_to: dbpcm_warehouse.accrual_events.status
+  optional_pattern: 'TRUE'
+- name: event_type
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.accrual_events.event_type
+  optional_pattern: 'TRUE'
+- name: earn_code
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.accrual_events.earn_code
+  optional_pattern: 'TRUE'
+- name: employee_status
+  type: enum
+  required: false
+  enum_values:
+  - Active
+  - Deceased
+  - Inactive
+  - Retired
+  - Terminated
+  - On Leave
+  - Not Hired
+  - Prehire
+  - Unknown
+  binds_to: dbpcm_warehouse.employee.employee_status
+  optional_pattern: 'TRUE'
+- name: department
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: employee
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.employee.employee_code
+  optional_pattern: 'TRUE'
+result_grain:
+- Group
+- Event Status
+sql_template: "WITH a AS (\n SELECT employee_code, status, event_type, substring(toString(request_date), 1, 7) AS\
+  \ month,\n count(*) AS event_rows, sum(hours) AS hours\n FROM dbpcm_warehouse.accrual_events\n WHERE status =\
+  \ {event_status} AND event_type = {event_type} AND earn_code = {earn_code}\n AND toDate(request_date) >= toDate({period_start})\
+  \ AND toDate(request_date) < toDate({period_end})\n GROUP BY employee_code, status, event_type, substring(toString(request_date),\
+  \ 1, 7)\n)\nSELECT CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'department_status' THEN e.department_name\
+  \ WHEN 'status' THEN a.status WHEN 'event_type' THEN a.event_type WHEN 'month' THEN toString(a.month) ELSE 'Company'\
+  \ END AS `Group`, CASE WHEN {group_by} = 'department_status' THEN a.status ELSE 'All selected statuses' END AS\
+  \ `Event Status`, sum(CAST(a.event_rows AS Nullable(Decimal(20, 0)))) AS `Event Day Rows`,\n sum(CAST(a.hours\
+  \ AS Nullable(Decimal(38, 6)))) AS `Event Hours`, uniqExact(a.employee_code) AS `Employee Count`\nFROM a LEFT\
+  \ JOIN dbpcm_warehouse.employee e ON a.employee_code = e.employee_code\nWHERE e.employee_status = {employee_status}\
+  \ AND e.department_name = {department} AND e.employee_code = {employee}\nGROUP BY CASE {group_by} WHEN 'department'\
+  \ THEN e.department_name WHEN 'department_status' THEN e.department_name WHEN 'status' THEN a.status WHEN 'event_type'\
+  \ THEN a.event_type WHEN 'month' THEN toString(a.month) ELSE 'Company' END\n, CASE WHEN {group_by} = 'department_status'\
+  \ THEN a.status ELSE 'All selected statuses' END\nORDER BY `Group`, `Event Status`\n"

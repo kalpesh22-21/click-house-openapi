@@ -6,7 +6,12 @@ trino_join_keys:
   employee_code:
     column: employee_code_num
     encoding: employee_ascii4_be_v1
-description: Employee accrual-plan balance records. Use accrual_events for individual time-off events.
+description: >
+  Employee accrual-plan balance records. For beginning balances and recorded taken
+  amounts, use beginning_balance and taken_amount from this table, with the relevant
+  plan and employee scope. Use accrual_events for event/workflow analysis; approved
+  event hours are not interchangeable with recorded taken amounts. Do not infer
+  period coverage or units from a request date in another table.
 grain: []
 grain_verifiable: false
 primary_key: []
@@ -54,8 +59,11 @@ columns:
       plan-specific definitions.
   taken_amount:
     type: Nullable(Decimal(18, 6))
-    description: Taken amount. Do not infer a current balance formula or unit without
-      plan-specific definitions.
+    description: >
+      Recorded taken amount for the accrual plan. Use for balance-based taken/usage
+      questions; do not substitute approved event hours, which may include future
+      requests. Do not infer a current balance formula, unit, or date-period usage
+      without plan-specific definitions.
   accrual_date:
     type: Nullable(DateTime64(6))
     description: Accrual date.

@@ -1,0 +1,81 @@
+id: bp-timecard-earnings-summary
+intent: 'Total timecard earnings, paid hours, entry counts and employee counts by company, employee, allocated department,
+  day, month or earning code. Supports per-person hours and pay in a period and monthly labor-cost trends. Uses
+  daily total_earning entries: in-progress earnings finalized and moved to payroll after period close. Use payroll
+  earnings for finalized periods. Do not add both lifecycle stages for the same earnings. This template does not
+  infer period-close status or switch sources. Amount is not net pay, annual salary or proof of payment. Optional earning_code is client-defined: resolve regular/overtime concepts, never hardcode a universal
+  OT code. No average-rate calculation across unlike earning codes. Required half-open punch-date period and resolved
+  table_source prevent accidental cross-source double counting. FINAL deduplicates storage versions, not overlapping
+  real-world events. Department means recorded labor-allocation department code, not current home department. No
+  scheduled shift, tardiness or overtime policy is inferred. Observed first/last dates do not prove completeness;
+  missing days/months are not zero-filled.'
+slots_summary: group_by, period, source, employee, department, earning_code, pay_class
+status: validated
+drift_status: clean
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+uses:
+- dbpcm_warehouse.total_earning.department_code
+- dbpcm_warehouse.total_earning.earn_amount
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.total_earning.employee_code
+- dbpcm_warehouse.total_earning.pay_class_code
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.table_source
+slots:
+- name: group_by
+  type: enum
+  required: true
+  enum_values:
+  - company
+  - employee
+  - department
+  - day
+  - month
+  - earning_code
+- name: period
+  type: period_range
+  required: true
+- name: source
+  type: entity
+  required: true
+  binds_to: dbpcm_warehouse.total_earning.table_source
+- name: employee
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.total_earning.employee_code
+  optional_pattern: 'TRUE'
+- name: department
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.total_earning.department_code
+  optional_pattern: 'TRUE'
+- name: earning_code
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.total_earning.earn_code
+  optional_pattern: 'TRUE'
+- name: pay_class
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.total_earning.pay_class_code
+  optional_pattern: 'TRUE'
+result_grain:
+- Group
+sql_template: 'SELECT CASE {group_by} WHEN ''employee'' THEN employee_code WHEN ''department'' THEN department_code
+  WHEN ''day'' THEN toString(punch_date) WHEN ''month'' THEN substring(toString(punch_date),1,7) WHEN ''earning_code''
+  THEN earn_code ELSE ''Company'' END AS `Group`,
+
+  sum(earn_amount) AS `Timecard Earning Amount`, sum(earn_hours) AS `Paid Hours`, count(*) AS `Entry Count`, count(DISTINCT
+  employee_code) AS `Employee Count`, count(DISTINCT punch_date) AS `Observed Days`, min(punch_date) AS `First Observed
+  Date`, max(punch_date) AS `Last Observed Date`
+
+  FROM dbpcm_warehouse.total_earning FINAL
+
+  WHERE punch_date >= toDate({period_start}) AND punch_date < toDate({period_end}) AND table_source = {source} AND
+  employee_code = {employee} AND department_code = {department} AND earn_code = {earning_code} AND pay_class_code
+  = {pay_class}
+
+  GROUP BY CASE {group_by} WHEN ''employee'' THEN employee_code WHEN ''department'' THEN department_code WHEN ''day''
+  THEN toString(punch_date) WHEN ''month'' THEN substring(toString(punch_date),1,7) WHEN ''earning_code'' THEN earn_code
+  ELSE ''Company'' END ORDER BY `Group`'

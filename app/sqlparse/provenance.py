@@ -92,6 +92,14 @@ class ProvenanceExtractionError(Exception):
     """
 
 
+class MissingSourceMetadataError(ProvenanceExtractionError):
+    """A base relation cannot be verified against live metadata."""
+
+    def __init__(self, table):
+        self.table = table
+        super().__init__(f"Table {table!r} has no available catalog metadata.")
+
+
 class InvalidColumnReferenceError(ProvenanceExtractionError):
     """A referenced column is absent from known physical source metadata."""
 
@@ -353,11 +361,7 @@ def _build_alias_map(
         # an uncatalogued table reference is an unverifiable query (D63, fail-closed).
         qualified_key = f"{tbl_db}.{tbl_name}"
         if qualified_key not in catalog_schema:
-            raise ProvenanceExtractionError(
-                f"Table '{qualified_key}' is not in the catalog schema. "
-                "Identifier matching is case-sensitive and exact (ClickHouse semantics). "
-                "Cannot qualify columns — fail-closed (D63)."
-            )
+            raise MissingSourceMetadataError(qualified_key)
         if alias:
             alias_map[alias] = (tbl_name, tbl_db)
         alias_map[tbl_name] = (tbl_name, tbl_db)
@@ -1110,7 +1114,10 @@ def _extract_column_provenance(
                     )
                 # else: case (B) — already captured via the real access, or a provable
                 # output-alias reference; either way it adds no data access. Skip.
-            elif col_name.lower() in all_catalog_column_names_lower:
+            elif (
+                col_name.lower() in all_catalog_column_names_lower
+                and not _is_output_alias_reference(col_node)
+            ):
                 # Case-mismatch: `amount` vs `Amount`, `registerType` vs `RegisterType`, etc.
                 # The identifier looks like a catalog column name but uses wrong case.
                 # ClickHouse is case-sensitive; this reference is unresolvable. Fail-closed.

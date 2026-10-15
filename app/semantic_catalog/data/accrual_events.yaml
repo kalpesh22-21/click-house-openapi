@@ -6,7 +6,13 @@ trino_join_keys:
   employee_code:
     column: employee_code_num
     encoding: employee_ascii4_be_v1
-description: Employee accrual-event log for time-off requests and related accrual activity. Event-level records, not an accrual-balance table.
+description: >
+  Employee accrual-event log containing all types of accrual events, not only PTO or
+  approved time-off requests. Includes time-off requests, payout requests, and other
+  accrual activity across workflow statuses and leave categories. Available types vary
+  by client and period; discover event_type, status, and earn_code/earn_description
+  for the requested scope. Event-level records, not an accrual-balance table.
+  Approved request hours do not establish actual leave taken or posted balance usage.
 
 grain: []
 grain_verifiable: false   # no exposed unique key — the D43 COUNT(*)==COUNT(DISTINCT grain) conformance probe does not apply
@@ -51,7 +57,7 @@ columns:
   hours:
     type: Nullable(Decimal(18, 6))
     unit: hours
-    description: hours attached to the accrual event. Do not assume these are approved/taken hours without filtering status.
+    description: Hours attached to the accrual event. Filter status and event_type for approved request hours; approval alone does not establish actual leave taken or posted balance usage.
 
   earn_code:
     type: Nullable(String)
@@ -85,7 +91,7 @@ columns:
       Time Off Request: time_off_request
       Payout Request: payout_request
     observed_values: [ Time Off Request ]
-    description: Accrual event category. Current accessible rows show time-off requests.
+    description: Accrual event category across all event types. Listed and observed values are not exhaustive; resolve available types in the requested client and period. Do not assume all rows are time-off requests.
 
   date_added:
     type: Nullable(DateTime64(6))
@@ -117,8 +123,8 @@ measures:
 rules:
   - id: approved_events
     predicate: "status = 'Approved'"
-    applies_when: measuring approved or taken time off
-    description: Restrict to approved accrual events.
+    applies_when: measuring approved request hours or approved event counts
+    description: Restrict to approved accrual events. Approval is a workflow state, not proof of actual leave taken.
 
   - id: requested_events
     predicate: "status = 'Requested'"
@@ -157,9 +163,9 @@ rules:
 
 ambiguities:
   - term: time_off_taken
-    resolves_to: [ "SUM(hours) with status = 'Approved' and event_type = 'Time Off Request'" ]
-    default: approved_time_off_hours
-    clarify_if: user asks for requested, denied, removed, calendar-only, pending, or all request activity
+    resolves_to: [ "accrual_balances.taken_amount for recorded plan usage", "approved_time_off_hours for explicitly requested approved request hours" ]
+    default: recorded_plan_usage
+    clarify_if: the user means actual leave taken during an event-date period and the balance period or actual-use evidence is not established; never silently substitute approved request hours
 
   - term: request_date
     resolves_to: [ request_date ]
@@ -174,7 +180,7 @@ ambiguities:
   - term: PTO
     resolves_to: [ "resolveValues(earn_code, 'PTO / vacation / personal day / floating holiday') → filter earn_code IN result; SUM(hours) with approved_events" ]
     default: approved_pto_vacation_style
-    clarify_if: user wants sick leave, bereavement, unpaid leave, FMLA/family leave, jury duty, holidays, all leave categories, or non-approved statuses
+    clarify_if: the requested PTO category cannot be resolved; explicit workflow statuses or all-status requests override the approved default without further clarification
 
   - term: sick_time
     resolves_to: [ "resolveValues(earn_code, 'sick leave / sick time') → filter earn_code IN result; SUM(hours) with approved_events" ]
@@ -199,7 +205,7 @@ ambiguities:
   - term: request_volume
     resolves_to: [ "COUNT(*) grouped by status, usually with event_type = 'Time Off Request'" ]
     default: status_scoped_request_count
-    clarify_if: user wants only approved/taken hours instead of workflow volume
+    clarify_if: user means actual leave usage rather than event-row volume; approved request hours and recorded taken amounts are different measures
 # Identity and optimizer fields remain server-side.
 mcp_projection:
   hidden_columns: [client_code, proc_center, employee_code_num, client_code_key]

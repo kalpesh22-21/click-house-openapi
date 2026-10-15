@@ -1,0 +1,71 @@
+id: bp-employee-tenure-summary
+intent: Elapsed years from original or most recent hire date to a supplied ISO YYYY-MM-DD reference_date, using
+  calendar days / 365.25. Company/department/current-status groups, average/min/max and valid-date count. Excludes
+  NULL, dates at/before 1900-01-01 and future hire dates. For employment tenure of current staff select Active;
+  all-status elapsed time does NOT stop at termination and is not historical active headcount. Date is explicit,
+  not inferred from today.
+slots_summary: group_by, hire_basis, reference_date, employee_status, department, employee
+status: validated
+drift_status: clean
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+uses:
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.hire_date
+- dbpcm_warehouse.employee.most_recent_hire_date
+slots:
+- name: group_by
+  type: enum
+  required: true
+  enum_values:
+  - company
+  - department
+  - status
+- name: hire_basis
+  type: enum
+  required: true
+  enum_values:
+  - original_hire
+  - most_recent_hire
+- name: reference_date
+  type: string
+  required: true
+- name: employee_status
+  type: enum
+  required: false
+  enum_values:
+  - Active
+  - Deceased
+  - Inactive
+  - Retired
+  - Terminated
+  - On Leave
+  - Not Hired
+  - Prehire
+  - Unknown
+  binds_to: dbpcm_warehouse.employee.employee_status
+  optional_pattern: 'TRUE'
+- name: department
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: employee
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.employee.employee_code
+  optional_pattern: 'TRUE'
+result_grain:
+- Group
+sql_template: "SELECT CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'status' THEN e.employee_status\
+  \ ELSE 'Company' END AS `Group`, count(*) AS `Valid Hire Date Count`,\n avg(dateDiff('day', CASE {hire_basis}\
+  \ WHEN 'most_recent_hire' THEN e.most_recent_hire_date ELSE e.hire_date END, toDate({reference_date})) / 365.25)\
+  \ AS `Average Elapsed Years`,\n min(dateDiff('day', CASE {hire_basis} WHEN 'most_recent_hire' THEN e.most_recent_hire_date\
+  \ ELSE e.hire_date END, toDate({reference_date})) / 365.25) AS `Minimum Elapsed Years`,\n max(dateDiff('day',\
+  \ CASE {hire_basis} WHEN 'most_recent_hire' THEN e.most_recent_hire_date ELSE e.hire_date END, toDate({reference_date}))\
+  \ / 365.25) AS `Maximum Elapsed Years`\nFROM dbpcm_warehouse.employee e WHERE e.employee_status = {employee_status}\
+  \ AND e.department_name = {department} AND e.employee_code = {employee} AND (CASE {hire_basis} WHEN 'most_recent_hire'\
+  \ THEN e.most_recent_hire_date ELSE e.hire_date END) > toDate('1900-01-01') AND (CASE {hire_basis} WHEN 'most_recent_hire'\
+  \ THEN e.most_recent_hire_date ELSE e.hire_date END) <= toDate({reference_date})\nGROUP BY CASE {group_by} WHEN\
+  \ 'department' THEN e.department_name WHEN 'status' THEN e.employee_status ELSE 'Company' END ORDER BY `Group`"

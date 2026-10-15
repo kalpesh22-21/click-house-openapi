@@ -4,7 +4,13 @@ source: clickhouse
 region: workforce_time_attendance
 description: >
   Summarized daily earning entries per employee by earning code. Aggregates timecard outcomes
-  into daily buckets for payroll cost analysis and labor reporting. Not individual punch pairs —
+  into daily buckets for payroll cost analysis and labor reporting. These are the in-progress
+  earnings that are fixed/finalized and moved to payroll after the pay period closes. Use
+  total_earning for open-period earnings and payroll earnings-register rows for finalized periods.
+  These are stages of the same earnings lifecycle, not independent additive amounts. Never
+  sum or union both for the same covered earnings without a verified period-close boundary
+  and overlap handling. Physical deletion from total_earning is not guaranteed by this contract.
+  Not individual punch pairs —
   use punch_pair for matched In/Out detail.
 
 grain: []

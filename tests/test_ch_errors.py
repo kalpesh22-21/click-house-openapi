@@ -159,7 +159,7 @@ class TestWiring:
                 cc.execute_query("SELECT 1", get_settings())
         err = exc.value.detail["error"]
         assert exc.value.detail["code"] == "CLICKHOUSE_QUERY_ERROR"
-        assert err.startswith("ClickHouse query error: NOT_AN_AGGREGATE (code 215):")
+        assert err.startswith("ClickHouse query error: NOT_AN_AGGREGATE. Hint:")
         assert "Hint:" in err
         assert "In query" not in err
         assert "localhost:8123" not in err
@@ -180,10 +180,13 @@ class TestWiring:
             with pytest.raises(ToolError) as exc:
                 mcp_run_query(sql="SELECT 1")
         msg = str(exc.value)
-        assert "[CLICKHOUSE_QUERY_ERROR]" in msg
-        assert "Hint:" in msg
-        assert "explainQuery" not in msg
-        assert "Apply the hint, then retry." in msg
+        import json
+        payload = json.loads(msg.split("] ", 1)[1])
+        assert payload["code"] == "SQL_AGGREGATION_ERROR"
+        assert payload["input_dialect"] == "clickhouse"
+        assert "GROUP BY" in payload["guidance"]
+        assert "explainQuery applies the same validation" in payload["guidance"]
+        assert payload["retry"] == "after_query_change"
 
     @patch("app.service.get_catalog_schema", return_value={})
     def test_mcp_unlisted_code_gets_generic_retry_suffix(self, _catalog):
@@ -201,5 +204,8 @@ class TestWiring:
             with pytest.raises(ToolError) as exc:
                 mcp_run_query(sql="SELECT 1")
         msg = str(exc.value)
-        assert "Hint:" not in msg
-        assert "Fix the SQL, then retry." in msg
+        import json
+        payload = json.loads(msg.split("] ", 1)[1])
+        assert payload["code"] == "SQL_EXECUTION_ERROR"
+        assert "precise cause is unavailable" in payload["message"]
+        assert "SOME_NEW_ERROR" not in msg

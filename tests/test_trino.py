@@ -337,13 +337,13 @@ def test_sumif_maps_to_coalesced_filtered_sum(trino_settings, principal):
 
 
 def test_avgif_maps_to_filtered_avg_without_coalesce(trino_settings, principal):
-    # Documented empty-set delta: ClickHouse avgIf -> NaN, Trino -> NULL; the
-    # corpus consumes it as a terminal display column, so no compensation.
+    # annual_salary is Nullable in the catalog: empty matches remain NULL.
+    # Non-nullable input instead receives the ClickHouse NaN default.
     sql = trino_client.rewrite_query(
         "SELECT avgIf(annual_salary, employee_status = 'Active') FROM employee",
         trino_settings,
     )
-    assert "AVG(annual_salary) FILTER(WHERE employee_status = 'Active')" in sql
+    assert "AVG(CAST(annual_salary AS DOUBLE)) FILTER(WHERE employee_status = 'Active')" in sql
     assert "COALESCE(AVG" not in sql.upper()
     assert "AVGIF" not in sql.upper()
 
@@ -395,9 +395,6 @@ def test_concatwithseparator_preserves_null_propagation(trino_settings, principa
         ("SELECT toString(employee_code, employee_code) FROM employee",
          "TOSTRING(employee_code, employee_code)"),
         ("SELECT toUInt8() FROM employee", "TOUINT8()"),
-        ("SELECT sumIf(gross_pay) FROM payroll", "SUMIF(gross_pay)"),
-        ("SELECT avgIf(annual_salary, employee_status, gender) FROM employee",
-         "AVGIF(annual_salary, employee_status, gender)"),
         ("SELECT addMonths(hire_date) FROM employee", "ADDMONTHS(hire_date)"),
         ("SELECT addMonths(hire_date, 1, 2) FROM employee",
          "ADDMONTHS(hire_date, 1, 2)"),
@@ -414,15 +411,12 @@ def test_arity_mismatch_leaves_mapped_names_untouched(sql, verbatim, trino_setti
     assert verbatim in trino_client.rewrite_query(sql, trino_settings)
 
 
-def test_quantileexact_stays_unmapped_by_construction(trino_settings, principal):
-    # The parametric double-call parses as exp.ParameterizedAgg, which the
-    # mapping walk does not even visit — kept unmapped pending the quantile
-    # owner decision (Trino has no exact percentile aggregate).
-    sql = trino_client.rewrite_query(
-        "SELECT quantileExactLow(0.5)(annual_salary) FROM employee", trino_settings
-    )
-    assert "QUANTILEEXACTLOW" in sql.upper()
-    assert "APPROX_PERCENTILE" not in sql.upper()
+def test_nonmedian_quantile_rejected_before_dispatch(trino_settings, principal):
+    with pytest.raises(QueryValidationError) as error:
+        trino_client.rewrite_query(
+            "SELECT quantileExactLow(0.25)(annual_salary) FROM employee", trino_settings
+        )
+    assert error.value.code == "TRINO_UNSUPPORTED_SQL"
 
 
 @pytest.mark.parametrize(
@@ -2021,3 +2015,45 @@ def test_trino_routing_identifiers_accept_valid_values():
     assert settings.trino_mysql_view_catalog == "custom_view_catalog"
     assert settings.trino_clickhouse_catalog == "ch_federated"
     assert settings.trino_mysql_schema == "dbreplica_2"
+
+
+def test_scalar_constant_routing(trino_settings, principal):
+    sql = trino_client.rewrite_query(
+        "WITH 25000 AS w SELECT w, employee_code FROM employee", trino_settings
+    )
+    assert "WITH" not in sql
+    assert "SELECT 25000, employee_code" in sql
+    assert '"mysql_shard_prod_01"' in sql
+
+
+def test_date_and_array_composition_routing(trino_settings, principal):
+    sql = trino_client.rewrite_query(
+        "SELECT today() - 30, arrayStringConcat(arraySort(groupUniqArray(employee_code)), ', ') FROM employee",
+        trino_settings,
+    )
+    assert "DATE_ADD('day', -30, CURRENT_DATE)" in sql
+    assert "ARRAY_JOIN(ARRAY_SORT(COALESCE(ARRAY_AGG(DISTINCT employee_code)" in sql
+
+
+@pytest.mark.parametrize('function', ['quantileExactLow', 'quantileExactHigh', 'quantileExactLowIf', 'quantileExactHighIf'])
+def test_exact_median_keeps_shard_routing(function, trino_settings, principal):
+    args = 'annual_salary, annual_salary > 0' if function.endswith('If') else 'annual_salary'
+    rewritten = trino_client.rewrite_query(f'SELECT {function}(0.5)({args}) FROM employee', trino_settings)
+    assert 'ELEMENT_AT(ARRAY_SORT(ARRAY_AGG(' in rewritten
+    assert 'mysql_shard_prod_01' in rewritten
+    assert 'APPROX_PERCENTILE' not in rewritten
+
+
+def test_schema_authoring_types_preserve_nullability(monkeypatch, trino_settings):
+    from app import trino_metadata
+    monkeypatch.setattr(trino_metadata, "discover", lambda *args: {
+        "dbpcm_warehouse.employee": {"columns": {
+            "annual_salary": {"type": "Nullable(Decimal(18,6))",
+                              "physical_type": "decimal(18,6)"},
+            "hire_date": {"type": "Nullable(Date)", "physical_type": "date"},
+        }}
+    })
+    assert trino_metadata.column_rows("dbpcm_datawarehouse", "employee", trino_settings) == [
+        ["annual_salary", "Nullable(Decimal(18,6))", ""],
+        ["hire_date", "Nullable(Date)", ""],
+    ]

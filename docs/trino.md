@@ -175,3 +175,214 @@ For MCP stdio, application logs and the entrypoint banner go to stderr because
 stdout is reserved for JSON-RPC. The HTTP/container deployment uses stdout.
 Subprocess tests verify the stream and severity configuration; response-handler
 tests cover handled failures without changing HTTP bodies or auth headers.
+
+### ClickHouse SQL conversion coverage
+
+Conversion is a supported subset, not a guarantee of arbitrary ClickHouse SQL
+compatibility. SQLGlot is pinned to 30.12.0 so local, deployment, and CI parsing
+agree. ClickHouse-only queries continue through the native route.
+
+The construct regression suite supports:
+
+- Literal scalar `WITH` bindings, including nested query shadowing. Expression
+  bindings are rejected; table CTEs are retained.
+- Unary `groupUniqArray(x)` with NULL arguments excluded and an empty array for
+  empty input, composed with unary `arraySort` and `arrayStringConcat` on string
+  arrays (optional separator, default empty string).
+- Constant positive tuple positions, including `x.1` in array lambdas, rendered
+  as Trino row subscripts `x[1]`.
+- `today()` and integer-literal day offsets such as `today() - 30`. The date is
+  evaluated in the Trino session timezone; deployments must align that timezone
+  with the intended ClickHouse timezone. Cross-timezone equivalence is not implied.
+
+The following now fail before execution with `TRINO_UNSUPPORTED_SQL`:
+unsupported parameterized aggregates (including non-median quantiles and size-limited
+`groupUniqArray`), unsupported `intDiv` overloads, `formatReadableQuantity`, expression
+scalar WITH bindings, and unsupported signatures of the new array/date mappings.
+Exact quantiles are never silently replaced by approximate percentiles.
+
+Type-aware semantics now preserve the following behavior:
+
+- `sum` / `sumIf`: zero for empty non-nullable numeric input; NULL for empty
+  nullable input. No blanket `COALESCE` for nullable salaries.
+- `avg` / `avgIf`: NaN for empty non-nullable input; NULL for nullable input.
+  Decimal values are averaged as DOUBLE to match ClickHouse's Float64 result,
+  rather than rounding the mean to the input decimal scale.
+- Numeric `minIf` / `maxIf`: zero for an empty non-nullable input and NULL
+  for an empty nullable input. String/date defaults remain unsupported.
+- `quantileExactLow(0.5)` / `quantileExactHigh(0.5)` and their `If` variants:
+  exact lower/upper medians using sorted non-null source values. Decimal and
+  integer values are not cast to DOUBLE. Empty inputs preserve zero for
+  integer/decimal, NaN for float, and NULL for nullable inputs. Odd/even groups,
+  duplicates and conditional selection are supported. Other levels and
+  windowed quantiles remain explicit rejections; no approximate substitution.
+- Windowed `sum`, `avg`, `sumIf`, `avgIf`, numeric `minIf` and `maxIf`:
+  retain PARTITION BY, ORDER BY, ROWS/RANGE frames and named windows. Empty-frame
+  defaults wrap the complete window result. Conditional windows use CASE
+  inside the aggregate because Trino does not support their FILTER syntax.
+  Grouped totals such as `sum(count()) OVER ()` are supported.
+- Scalar `argMax`: skip rows with a NULL value or key; preserve the source
+  nullability-dependent empty-set default. Ties remain unspecified, as at source.
+- `length`: count UTF-8 bytes for strings and elements for arrays.
+- `toDateTime`: convert known integer Unix epochs (including nullable inputs),
+  saturate to the DateTime UInt32 range, and truncate supported finite numeric
+  literals to whole seconds. ISO date/time string literals without fractional
+  seconds are supported. Session timezones must still match.
+- Literal `JSONExtractString` string-key paths: preserve string values, NULL
+  input, and the empty-string default for missing/null values or malformed JSON.
+
+These functions fail before dispatch when input type/nullability cannot be
+resolved from the logical catalog, supported derived projections, or explicit
+SQL types. Outer-join and UNION inference, windowed argMax, tuple argMax,
+non-literal floating epochs, decimal epochs, dynamic string-to-DateTime parsing,
+date/timestamp-to-DateTime range wrapping, and timezone overloads are not admitted. An explicit cast to a non-nullable type
+is not treated as proof when its source can be NULL.
+
+Dynamic JSON extraction, numeric JSON paths, duplicate keys, and serialization
+of non-string JSON values are explicitly rejected: ClickHouse's formatting is
+not equivalent to Trino's JSON scalar extraction. Literal extraction does not
+use approximate serialization. Unknown functions outside these guarded families
+may still reach Trino and fail there; this is not universal dialect equivalence.
+
+NaN/Infinity retain their SQL semantics during calculation. If they remain in
+returned rows, the shared REST/MCP result boundary raises `NON_FINITE_RESULT`
+instead of silently converting them to NULL or failing JSON serialization.
+Queries must handle such final values explicitly.
+
+### Exact median execution cost
+
+Exact median conversion uses ARRAY_AGG + ARRAY_SORT and COUNT over the same
+eligible rows, followed by integer positional selection. It retains O(n)
+values per group and sorts them; it does not guarantee source pushdown.
+Large payroll groups can hit Trino query memory/time limits. These limits
+must fail loudly, never trigger a silent approximate result. Windowed medians
+and arbitrary percentile levels remain out of scope for this implementation.
+ClickHouse-only queries continue through the native ClickHouse route.
+
+The source definitions are documented in [ClickHouse Low](https://clickhouse.com/docs/reference/functions/aggregate-functions/quantileExactLow)
+and [High](https://clickhouse.com/docs/reference/functions/aggregate-functions/quantileExactHigh).
+
+### Schema-aware SQLGlot analysis
+
+The converter uses SQLGlot `qualify` and `annotate_types` on a copy of the
+logical query, using catalog column types. Only validated type metadata returns
+to the executable AST; qualification does not change routing, authorization,
+projections, stars, or user aliases. A qualification failure retains the
+conservative scoped analysis rather than assuming a type.
+
+This enables aggregates over supported CASE expressions, numeric COALESCE,
+ABS, and decimal/integer ROUND, including derived projections. ClickHouse
+nullability rules remain explicit: an omitted CASE ELSE is nullable, COALESCE
+is non-nullable when a guaranteed non-null input exists, and unknown functions
+remain unknown. Floating-point ROUND is not admitted by this new inference
+because ClickHouse and Trino have different tie-breaking rules.
+
+SQLGlot 30.12.0 and 30.22.0 were compared on nine synthetic analysis queries.
+Both inferred useful expression types, but neither supplied the required
+nullability guarantees for COALESCE, mixed-nullability UNIONs, or outer joins;
+both also reported ROUND(Decimal) as DOUBLE. The deployment pin therefore
+remains 30.12.0. Run `scripts/evaluate_sqlglot_analysis.py` under a candidate
+Python environment to reproduce the comparison without database access.
+Window-frame semantics, outer-join settings, and remaining timestamp overloads
+still require separate compatibility work. The library analysis alone does not
+remove those guards.
+
+The remote failure-matrix revisit also added type inference for day-based
+`dateDiff` over Date/DateTime64 inputs, with DATE-cast endpoints to preserve
+ClickHouse calendar-day boundaries. Explicit timezone overloads remain rejected.
+Identity paging wrappers (`SELECT * FROM (ordered SELECT) LIMIT/OFFSET`) now
+repeat projected ordering at the outer level, because Trino may discard an
+inner ORDER BY. Paging wrappers with unprojected ordering expressions fail
+explicitly instead of returning an unstable page.
+
+
+### Integer division and query failure guidance
+
+`intDiv(value, positive_integer_literal)` now supports signed-64-compatible
+integer inputs and Decimal precision up to 18, including nullable columns and
+literal scalar WITH divisors. Decimal inputs are truncated before conversion to
+BIGINT, then divided using integer arithmetic. This preserves salary bucket
+boundaries and truncation toward zero for negative values without a DOUBLE
+round-trip. Nested bucket labels such as `intDiv(bucket, 1000)` are supported
+when the bucket's type is known. Float inputs, wide decimals/UInt64, dynamic,
+negative or zero divisors remain explicit rejections rather than guessed
+conversions. Arithmetic elsewhere in the expression retains its existing
+range/overflow limitations.
+
+REST and MCP runQuery/explainQuery errors now include a bounded excerpt derived
+only from the caller's original ClickHouse SQL, with literals/comments removed.
+A named rejected function gets a targeted expression; execution failures without
+a reliable logical source location show clearly labelled query context. Physical
+Trino locations are never presented as logical SQL locations. Unparseable SQL
+gets quoting/parenthesis guidance rather than unsafe raw-text echoing.
+
+Recovery advice explicitly requests ClickHouse SQL on logical catalog tables.
+Known unsupported families include practical alternatives (e.g. numeric output
+or `toString(bucket)` instead of human-readable quantity formatting), with
+semantic differences stated. No guidance suggests approximate replacements for
+exact medians. Authorization denials retain their policy instructions; outages
+retain operator instructions rather than suggesting policy bypasses or SQL edits.
+ClickHouse execution errors, like Trino errors, expose allowlisted error labels
+and authored hints only; private backend messages, expanded view SQL and data
+values are not returned. These excerpts are response-only, not log payloads.
+
+
+### Schema authoring contract
+
+In Trino mode, `getTableSchema` exposes catalogued ClickHouse types, including
+`Nullable`, intersected with live available columns. Physical Trino types are
+retained internally; they are not SQL-authoring instructions. This aligns schema
+responses with the semantic validator and keeps one dialect for the model.
+Use typed date bounds (`toDate('2026-01-01')` for Date inputs). A catalog type is
+an authored contract, not proof of physical compatibility: deployments must still
+check precision, scale, nullability, date ranges and timezone semantics against
+actual source projections. Never fix a disagreement by silently rounding money,
+dropping Nullable, or inventing a type for an unknown expression.
+
+### Year extraction and integer conversion
+
+`toYear(x)` accepts known logical Date/Date32 and timezone-free timestamp inputs.
+Use catalog columns or supported date constructors; strings, epoch numbers and
+explicit timezone overloads are not inferred as equivalent dates.
+
+`toInt64(x)` truncates fractional values toward zero before the BIGINT cast.
+Supported inputs are signed-64-compatible integer types, Decimal precision at
+most 18, and finite Float32/Float64 values in `[-2^63, 2^63)`. Nullable inputs
+remain nullable, including inside aggregates. Out-of-range/non-finite floats
+raise an execution error; string parsing, UInt64 wraparound and wider numeric
+contracts are rejected during conversion. For exact salary bucketing, prefer
+`intDiv(annual_salary, 25000)` over first converting monetary values to float.
+
+Type-error feedback lists bounded, literal-redacted candidate expressions from
+the submitted ClickHouse SQL (CASE/coalesce, UNION positions, window defaults,
+and comparisons). These are investigation targets, not confirmed coordinator
+locations or automatic casts. Physical source SQL is never used for excerpts.
+
+### Model-facing execution errors
+
+MCP exposes backend-neutral `[CODE]` errors with a versioned JSON body containing
+`code`, `message`, `input_dialect: "clickhouse"`, `guidance`, and `retry`.
+A redacted `candidate_expression` is included when caller SQL is available.
+SQL/type/function failures require a query change; outages require service
+recovery, configuration failures require operator action, and identity failures
+require restored access. Resource limits require a scope or capacity change.
+Existing authorization codes remain unchanged and offer no bypass.
+
+Backend adapters still sanitize and log the original error category. The shared
+query-feedback builder supplies structured feedback directly to the MCP formatter;
+MCP does not reparse REST error prose. REST error codes remain compatible. The
+agent reads the versioned fields directly; regex diagnosis is retained only for
+legacy API responses and saved traces. Neither physical SQL nor coordinator
+messages are introduced into the public contract.
+
+Function recovery guidance is curated from observed trace failures and the remote
+query-pattern report. It covers numeric conversion/year extraction, salary
+bucketing and display formatting, exact median variants, directory-array
+functions, date windows, conditional extrema, and exact distinct counts.
+Runtime function errors do not expose coordinator SQL or identify an offender
+from an untrusted backend message: guidance is selected from parsed caller
+functions and explicitly labels them as candidates. Unknown functions receive
+signature/schema guidance without an invented replacement. Examples remain
+ClickHouse SQL and preserve exactness, NULL rules, filters and grouping; a
+replacement result shape is offered only when it meets the user's request.
+This guidance does not expand the transpiler's supported semantic domain.

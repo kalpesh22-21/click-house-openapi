@@ -219,3 +219,24 @@ class TestAccrualBalancesYaml:
         assert {"client_code", "proc_center"} <= hidden
         assert set(entry["row_scope"]["implicit_filters"]) >= {"client_code", "proc_center"}
         assert entry["source"] == "mysql"
+
+    def test_accrual_event_and_balance_guidance_survives_public_export(self):
+        from app.semantic_catalog.export import build_catalog_export_from
+
+        catalog = loader.load_semantic_catalog()
+        for trino_enabled in (False, True):
+            exported = build_catalog_export_from(catalog, "test", trino_enabled=trino_enabled)
+            # Check the public payload, not just the authored YAML: both execution
+            # routes must teach the same distinction and keep optimizer keys private.
+            import json
+
+            public = json.dumps(exported)
+            assert "all types of accrual events" in public
+            assert "approval alone does not establish actual leave taken" in public
+            assert "recorded_plan_usage" in public
+            assert "trino_join_keys" not in public
+        events = catalog["dbpcm_warehouse.accrual_events"]
+        taken = next(a for a in events["ambiguities"] if a["term"] == "time_off_taken")
+        assert taken["default"] != "approved_time_off_hours"
+        approved = next(r for r in events["rules"] if r["id"] == "approved_events")
+        assert "taken" not in approved["applies_when"]

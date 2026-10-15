@@ -84,9 +84,9 @@ class TestMappedHints:
 
     def test_function_not_found_points_at_rewrites(self):
         out = rw(_trino_user_error("FUNCTION_NOT_FOUND", _MAPPED["FUNCTION_NOT_FOUND"]))
-        assert "COUNT(DISTINCT col)" in out
-        assert "quantileExact*" in out
-        assert "approx_percentile(x, 0.5)" in out
+        assert "ClickHouse SQL" in out
+        assert "getTableSchema" in out
+        assert "approx_percentile" not in out
 
     def test_column_not_found_points_at_get_table_schema(self):
         out = rw(_trino_user_error("COLUMN_NOT_FOUND", _MAPPED["COLUMN_NOT_FOUND"]))
@@ -115,7 +115,7 @@ class TestMappedHints:
     def test_type_family_points_at_typed_literals(self):
         for name in ("TYPE_MISMATCH", "INVALID_CAST_ARGUMENT"):
             out = rw(_trino_user_error(name, _MAPPED[name]))
-            assert "DATE 'YYYY-MM-DD'" in out
+            assert "toDate('YYYY-MM-DD')" in out
 
     def test_division_by_zero_points_at_nullif(self):
         out = rw(_trino_user_error("DIVISION_BY_ZERO", _MAPPED["DIVISION_BY_ZERO"]))

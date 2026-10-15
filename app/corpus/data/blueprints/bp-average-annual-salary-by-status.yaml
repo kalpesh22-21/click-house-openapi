@@ -3,7 +3,7 @@ intent: Calculate the average annual salary per employee filtered by employee st
 slots_summary: employee_status
 status: validated
 drift_status: clean
-catalog_sha: ''
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
 uses:
 - dbpcm_warehouse.employee.annual_salary
 - dbpcm_warehouse.employee.employee_status
@@ -13,13 +13,16 @@ slots:
   binds_to: dbpcm_warehouse.employee.employee_status
   required: true
   enum_values:
-  - A
-  - D
-  - I
-  - R
-  - T
-  - V
-sql_template: SELECT avg(annual_salary) AS average_annual_salary_per_employee FROM
-  dbpcm_warehouse.employee WHERE employee_status = {employee_status}
+  - Active
+  - Deceased
+  - Inactive
+  - Retired
+  - Terminated
+  - On Leave
+  - Not Hired
+  - Prehire
+  - Unknown
+sql_template: SELECT avg(annual_salary) AS average_annual_salary_per_employee FROM dbpcm_warehouse.employee WHERE
+  employee_status = {employee_status}
 resolves:
   average annual salary per employee: dbpcm_warehouse.employee.annual_salary

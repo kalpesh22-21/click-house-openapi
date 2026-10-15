@@ -292,7 +292,7 @@ def test_group_and_having_aliases(native_setup, trino_settings, principal):
     )
     tree = sqlglot.parse_one(sql, read="trino")
     assert "DATE_TRUNC('MONTH', pay_date)" in tree.args["group"].sql(dialect="trino")
-    assert "SUM(amount) > 10" in tree.args["having"].sql(dialect="trino")
+    assert "COALESCE(SUM(amount), 0) > 10" in tree.args["having"].sql(dialect="trino")
 
 
 def test_group_alias_scope_is_local(native_setup, trino_settings, principal):

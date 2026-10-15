@@ -29,6 +29,20 @@ def _reset_cache():
 # runtime-shaped `bp::sha256:` id and slugified filename, since normalized to the seed
 # `bp-<slug>` convention and registered here.
 _BLUEPRINT_IDS = {
+    "bp-employee-summary",
+        "bp-punch-pair-summary",
+        "bp-employee-day-clock-span",
+        "bp-timecard-earnings-summary",
+        "bp-salary-exact-median",
+        "bp-salary-distribution",
+        "bp-salary-threshold-count",
+        "bp-salary-threshold-directory",
+        "bp-employee-date-summary",
+        "bp-employee-tenure-summary",
+
+    "bp-payroll-summary",
+    "bp-accrual-balance-summary",
+    "bp-accrual-event-summary",
     "bp-overtime-by-department",
     "bp-active-headcount-by-department",
     "bp-average-salary-by-department",

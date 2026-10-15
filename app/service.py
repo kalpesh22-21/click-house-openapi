@@ -43,6 +43,7 @@ from app.errors import (
     TableNotFoundError,
 )
 from app.principal import get_current_scope, get_current_session_id
+from app.query_feedback import with_query_feedback
 from app.security import statement_supports_provenance, validate_and_sanitize
 from app.semantic_catalog import (
     build_table_schema_response,
@@ -50,6 +51,7 @@ from app.semantic_catalog import (
     get_semantic_catalog,
     hidden_columns_for,
 )
+from app.sqlparse.provenance import MissingSourceMetadataError
 from app.sqlparse import (
     CartesianJoinForbiddenError,
     InvalidColumnReferenceError,
@@ -395,6 +397,27 @@ def _compact_result(
         rows = rows[:max_response_rows]
     if truncated_override is not None:
         truncated = truncated_override
+    # Preserve NaN/Infinity inside SQL evaluation, but do not silently turn
+    # them into NULL (or emit invalid JSON) at either transport boundary.
+    import math
+    from decimal import Decimal
+
+    def contains_nonfinite(value):
+        if isinstance(value, float):
+            return not math.isfinite(value)
+        if isinstance(value, Decimal):
+            return not value.is_finite()
+        if isinstance(value, (list, tuple)):
+            return any(contains_nonfinite(item) for item in value)
+        if isinstance(value, dict):
+            return any(contains_nonfinite(item) for pair in value.items() for item in pair)
+        return False
+
+    if contains_nonfinite(rows):
+        raise QueryValidationError(
+            "Query results contain NaN or Infinity, which cannot be represented as JSON numbers. Handle non-finite results explicitly in SQL.",
+            "NON_FINITE_RESULT",
+        )
     return {
         "columns": columns,
         "rows": rows,
@@ -862,6 +885,12 @@ def sample_rows(
                 code="SCRATCH_SESSION_VIOLATION",
             ) from exc
         except ProvenanceExtractionError as exc:
+            if isinstance(exc, MissingSourceMetadataError) and exc.table in get_semantic_catalog():
+                logger.error("Source metadata unavailable; execution blocked")
+                raise ClickHouseUnavailableError(
+                    message="Source metadata is unavailable. Refresh discovery or ask the operator to check source availability and catalog configuration; SQL rewriting cannot restore metadata.",
+                    code="SOURCE_METADATA_UNAVAILABLE",
+                ) from exc
             logger.error(
                 "sample_rows: provenance extraction failed code=PARSE_FAILED_CLOSED"
             )
@@ -1061,6 +1090,12 @@ def _enforce_query_guardrails(
                 message=str(exc), code="INVALID_COLUMN_REFERENCE",
             ) from exc
         except ProvenanceExtractionError as exc:
+            if isinstance(exc, MissingSourceMetadataError) and exc.table in get_semantic_catalog():
+                logger.error("Source metadata unavailable; execution blocked")
+                raise ClickHouseUnavailableError(
+                    message="Source metadata is unavailable. Refresh discovery or ask the operator to check source availability and catalog configuration; SQL rewriting cannot restore metadata.",
+                    code="SOURCE_METADATA_UNAVAILABLE",
+                ) from exc
             # Parse/qualify failed — fail-closed (D63): never execute.
             logger.error(
                 "%s: provenance extraction failed code=PARSE_FAILED_CLOSED", caller
@@ -1112,6 +1147,7 @@ def _enforce_query_guardrails(
     return uses
 
 
+@with_query_feedback
 def run_query(
     sql: str,
     limit: int | None = None,
@@ -1182,6 +1218,7 @@ def run_query(
     return _with_provenance(result, uses) if include_provenance else result
 
 
+@with_query_feedback
 def explain_query(
     sql: str,
     settings: Settings | None = None,

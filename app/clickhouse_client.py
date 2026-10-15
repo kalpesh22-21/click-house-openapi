@@ -23,7 +23,7 @@ from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import ClickHouseError, DatabaseError
 from fastapi import HTTPException
 
-from app.ch_errors import rewrite_clickhouse_error
+from app.ch_errors import public_clickhouse_error
 from app.config import Settings, get_settings
 from app.principal import get_current_principal
 
@@ -422,16 +422,13 @@ def execute_query(
     except DatabaseError as exc:
         # DatabaseError covers syntax errors, unknown tables, type mismatches —
         # things the LLM can fix by rewriting the query.
-        # Log the full detail server-side (safe; stays in logs, not the response).
+        # Log only sanitized failure metadata, never the backend body.
         from app.error_logging import log_failure
         log_failure(logger, "clickhouse.query", exc, code="CLICKHOUSE_QUERY_ERROR")
-        # Forward a compacted ClickHouse error to the caller for LLM
-        # self-correction: rewrite_clickhouse_error drops the echoed query and
-        # version/URL noise and appends a code-specific fix hint (see
-        # app/ch_errors.py).  Redaction still runs afterwards so any host:port,
-        # user, or password fragment that survives the rewrite is masked.
+        # Backend bodies can contain expanded private views and row values.
+        # Return only an authored hint; the service adds caller-owned SQL context.
         raw_msg = str(exc)
-        safe_msg = _redact_connection_details(rewrite_clickhouse_error(raw_msg), settings)
+        safe_msg = _redact_connection_details(public_clickhouse_error(raw_msg), settings)
         raise HTTPException(
             status_code=400,
             detail={

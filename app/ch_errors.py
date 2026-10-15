@@ -85,7 +85,10 @@ _HINTS: dict[str, str] = {
     ),
     "NO_COMMON_TYPE": (
         "The compared or combined values have incompatible types; cast both sides "
-        "explicitly (e.g. compare a DateTime64 column to toDateTime64('...', 6))."
+        "explicitly (e.g. compare a DateTime64 column to toDateTime64('...', 6)). "
+        "For UNION, CASE, coalesce and lag defaults, align corresponding result types, "
+        "including Decimal precision/scale and Nullable. Keep money as Decimal; do not "
+        "silently convert exact amounts to Float64 to make branches compatible."
     ),
     "TYPE_MISMATCH": "Cast the mismatched side explicitly so both types agree.",
     "CANNOT_PARSE_TEXT": (
@@ -175,3 +178,12 @@ def rewrite_clickhouse_error(raw: str) -> str:
     if hint:
         out += f" Hint: {hint}"
     return out
+
+
+def public_clickhouse_error(raw: str) -> str:
+    """Allowlisted label/advice only; raw bodies may contain private view SQL."""
+    names = re.findall(r"\(([A-Z][A-Z0-9_]+)\)", raw or "")
+    name = next((n for n in reversed(names) if n in _HINTS), None)
+    if name is None:
+        return "ClickHouse rejected the query. Check the submitted ClickHouse SQL and contact the operator if the problem persists."
+    return f"{name}. Hint: {_HINTS[name]}"

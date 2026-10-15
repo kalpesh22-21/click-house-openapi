@@ -223,7 +223,7 @@ def column_rows(database: str, table: str, settings: Settings) -> list[list[str]
         f"{canonical_database(database)}.{table}", {}
     )
     return [
-        [name, info["physical_type"], info.get("description", "")]
+        [name, info["type"], info.get("description", "")]
         for name, info in entry.get("columns", {}).items()
     ]
 

@@ -41,7 +41,7 @@ asyncio.run(inspect())
             assert "dbpcm_datawarehouse.employee" in text
             assert "not universally supported" in text
             assert "DDL is blocked" in text
-        assert "live Trino types" in tools["getTableSchema"]
+        assert "logical ClickHouse types" in tools["getTableSchema"]
         assert "resolve" in tools["listTables"].lower() or "resolving" in tools["listTables"]
         assert "dbpcm_datawarehouse" in tools["listDatabases"]
         assert "against ClickHouse" not in tools["runQuery"]
@@ -50,29 +50,17 @@ asyncio.run(inspect())
             assert "Execution backend and SQL dialect: ClickHouse" in text
             assert "Execution backend: Trino" not in text
         assert "ClickHouse column types" in tools["getTableSchema"]
-        assert "live Trino types" not in tools["getTableSchema"]
+        assert "logical ClickHouse types" not in tools["getTableSchema"]
 
 
-@pytest.mark.parametrize(
-    "code,backend",
-    [
-        ("TRINO_DISCOVERY_UNAVAILABLE", "Trino"),
-        ("TRINO_UNAVAILABLE", "Trino"),
-        ("CLICKHOUSE_UNAVAILABLE", "ClickHouse"),
-    ],
-)
-def test_unavailable_suffix_names_the_failing_backend(code, backend):
-    """The unreachable-server tool suffix names the backend that actually failed.
-
-    The branch keys off the error CODE prefix (stamped at raise time), so it is
-    correct even if TRINO_ENABLED changes between import and the failure.
-    """
+@pytest.mark.parametrize("code", ["TRINO_DISCOVERY_UNAVAILABLE", "TRINO_UNAVAILABLE", "CLICKHOUSE_UNAVAILABLE"])
+def test_unavailable_is_backend_neutral_but_logged(code, caplog):
+    import json
     from app.errors import ClickHouseUnavailableError
     from app.mcp_server import _domain_to_tool_error
-
-    other = "ClickHouse" if backend == "Trino" else "Trino"
-    err = _domain_to_tool_error(ClickHouseUnavailableError("backend down", code))
-    message = str(err)
-    assert f"[{code}]" in message
-    assert message.endswith(f"The {backend} server is temporarily unreachable.")
-    assert f"The {other} server" not in message
+    message = str(_domain_to_tool_error(ClickHouseUnavailableError("private endpoint", code)))
+    assert message.startswith("[EXECUTION_SERVICE_UNAVAILABLE]")
+    payload = json.loads(message.split("] ", 1)[1])
+    assert payload["retry"] == "after_service_recovery"
+    assert "Trino" not in message and "private endpoint" not in message
+    assert code in caplog.text

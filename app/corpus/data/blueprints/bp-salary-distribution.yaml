@@ -1,0 +1,59 @@
+id: bp-salary-distribution
+intent: Annual salary distribution with configurable positive whole-currency band width. Lower bound inclusive,
+  upper bound exclusive; no formatted-label rounding. Counts and percentage denominator include only selected recorded
+  salaries, not employees missing salaries. Required population selects recorded or positive only. No implicit active
+  filter.
+slots_summary: band_width, salary_population, employee_status, department, employee
+status: validated
+drift_status: clean
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+uses:
+- dbpcm_warehouse.employee.annual_salary
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status
+slots:
+- name: band_width
+  type: positive_integer
+  required: true
+  min_value: 1
+  max_value: 10000000
+- name: salary_population
+  type: enum
+  required: true
+  enum_values:
+  - recorded
+  - positive
+- name: employee_status
+  type: enum
+  required: false
+  enum_values:
+  - Active
+  - Deceased
+  - Inactive
+  - Retired
+  - Terminated
+  - On Leave
+  - Not Hired
+  - Prehire
+  - Unknown
+  binds_to: dbpcm_warehouse.employee.employee_status
+  optional_pattern: 'TRUE'
+- name: department
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: employee
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.employee.employee_code
+  optional_pattern: 'TRUE'
+result_grain:
+- Lower Bound
+sql_template: "SELECT intDiv(e.annual_salary, {band_width}) * {band_width} AS `Lower Bound`,\n (intDiv(e.annual_salary,\
+  \ {band_width}) + 1) * {band_width} AS `Upper Bound Exclusive`,\n count(*) AS `Employee Count`, 100.0 * count(*)\
+  \ / sum(count(*)) OVER () AS `Percent of Selected Recorded Salaries`\nFROM dbpcm_warehouse.employee e WHERE e.employee_status\
+  \ = {employee_status} AND e.department_name = {department} AND e.employee_code = {employee} AND e.annual_salary\
+  \ IS NOT NULL\n AND ({salary_population} = 'recorded' OR e.annual_salary > 0)\nGROUP BY intDiv(e.annual_salary,\
+  \ {band_width}) ORDER BY `Lower Bound`"

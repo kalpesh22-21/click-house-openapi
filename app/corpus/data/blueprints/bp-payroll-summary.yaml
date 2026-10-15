@@ -1,0 +1,84 @@
+id: bp-payroll-summary
+intent: Payroll amount, source line count and distinct employee count by company, department or pay-date month.
+  Required register_type enum and half-open pay-date period [start,end); select EARN for gross earnings. Optional
+  type_code, employee status, department and employee. Earnings represent finalized total_earning after period close;
+  use total_earning for in-progress earnings and never add both for the same covered earnings. Preaggregate payroll per employee/month before LEFT JOIN;
+  unmatched employees retained unless employee filters supplied. Does not prove complete months or zero-fill missing
+  months; no implicit earnings filter.
+slots_summary: group_by, register_type, period, type_code, employee_status, department, employee
+status: validated
+drift_status: clean
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+uses:
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.pay_date
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.type_code
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.department_name
+slots:
+- name: group_by
+  type: enum
+  required: true
+  enum_values:
+  - company
+  - department
+  - month
+- name: register_type
+  type: enum
+  required: true
+  enum_values:
+  - EARN
+  - EETAX
+  - DDUCT
+  - NETPAYDIST
+  - EEBEN
+  - ERTAX
+  binds_to: dbpcm_warehouse.payroll.register_type
+- name: period
+  type: period_range
+  required: true
+- name: type_code
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.payroll.type_code
+  optional_pattern: 'TRUE'
+- name: employee_status
+  type: enum
+  required: false
+  enum_values:
+  - Active
+  - Deceased
+  - Inactive
+  - Retired
+  - Terminated
+  - On Leave
+  - Not Hired
+  - Prehire
+  - Unknown
+  binds_to: dbpcm_warehouse.employee.employee_status
+  optional_pattern: 'TRUE'
+- name: department
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: employee
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.employee.employee_code
+  optional_pattern: 'TRUE'
+result_grain:
+- Group
+sql_template: "WITH p AS (\n SELECT employee_code, substring(toString(pay_date), 1, 7) AS month,\n sum(amount) AS\
+  \ amount, count(*) AS line_count\n FROM dbpcm_warehouse.payroll\n WHERE register_type = {register_type} AND type_code\
+  \ = {type_code}\n AND toDate(pay_date) >= toDate({period_start}) AND toDate(pay_date) < toDate({period_end})\n\
+  \ GROUP BY employee_code, substring(toString(pay_date), 1, 7)\n)\nSELECT CASE {group_by} WHEN 'department' THEN\
+  \ e.department_name WHEN 'month' THEN toString(p.month) ELSE 'Company' END AS `Group`, sum(CAST(p.amount AS Nullable(Decimal(38,\
+  \ 2)))) AS `Payroll Amount`,\n sum(CAST(p.line_count AS Nullable(Decimal(20, 0)))) AS `Source Line Count`, uniqExact(p.employee_code)\
+  \ AS `Employee Count`\nFROM p LEFT JOIN dbpcm_warehouse.employee e ON p.employee_code = e.employee_code\nWHERE\
+  \ e.employee_status = {employee_status} AND e.department_name = {department} AND e.employee_code = {employee}\n\
+  GROUP BY CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'month' THEN toString(p.month) ELSE 'Company'\
+  \ END\nORDER BY `Group`\n"

@@ -2,7 +2,7 @@ database: dbpcm_warehouse
 table: payroll
 source: clickhouse
 region: workforce_payroll
-description: Payroll register line-item table. Contains paycheck components such as earnings, deductions, taxes, benefits, employer taxes, and net-pay distributions. Not one row per paycheck.
+description: Payroll register line-item table. Contains paycheck components such as earnings, deductions, taxes, benefits, employer taxes, and net-pay distributions. Not one row per paycheck. Earnings are the finalized stage of total_earning after the pay period closes; use earnings-register rows for finalized earnings, and total_earning for in-progress periods. Do not add both sources for the same covered earnings. A cross-source report requires a verified finalization boundary and overlap handling, not just calendar dates.
 grain:
   - pay_date
   - employee_code

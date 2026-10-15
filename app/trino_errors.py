@@ -12,10 +12,8 @@ from __future__ import annotations
 # from io.trino.spi.StandardErrorCode (errorName on the wire).
 _HINTS: dict[str, str] = {
     "FUNCTION_NOT_FOUND": (
-        "The function has no mapped Trino equivalent on this path; rewrite with a "
-        "supported function (ClickHouse names like uniqExact become COUNT(DISTINCT "
-        "col)), and note exact percentiles (quantileExact*) are unsupported on "
-        "Trino — use approx_percentile(x, 0.5) where approximation is acceptable."
+        "Write ClickHouse SQL and check the function signature and catalog input types with getTableSchema. "
+        "Check the submitted expression; do not use Trino-only function names or substitute estimates for exact results."
     ),
     "COLUMN_NOT_FOUND": (
         "The column does not exist on that logical table; call getTableSchema for "
@@ -51,18 +49,17 @@ _HINTS: dict[str, str] = {
     ),
     "TYPE_MISMATCH": (
         "The operand types are incompatible; cast explicitly and compare a "
-        "date/timestamp column to a matching typed literal (DATE 'YYYY-MM-DD' / "
-        "TIMESTAMP 'YYYY-MM-DD hh:mm:ss')."
+        "date/timestamp column to a matching ClickHouse literal (toDate('YYYY-MM-DD') / "
+        "toDateTime('YYYY-MM-DD hh:mm:ss'))."
     ),
     "INVALID_CAST_ARGUMENT": (
         "The value cannot be cast to the target type; cast explicitly and compare "
-        "a date/timestamp column to a matching typed literal (DATE 'YYYY-MM-DD' / "
-        "TIMESTAMP 'YYYY-MM-DD hh:mm:ss')."
+        "a date/timestamp column to a matching ClickHouse literal (toDate('YYYY-MM-DD') / "
+        "toDateTime('YYYY-MM-DD hh:mm:ss'))."
     ),
     "INVALID_FUNCTION_ARGUMENT": (
-        "One argument is invalid for that function in Trino (e.g. an approx "
-        "percentile within epsilon, or a format string); check the Trino semantics "
-        "for that function."
+        "Check the ClickHouse function signature, argument types, and supported overloads. "
+        "For exact medians use quantileExactLow(0.5)(salary) and quantileExactHigh(0.5)(salary)."
     ),
     "DIVISION_BY_ZERO": (
         "Guard the divisor with NULLIF(divisor, 0) so the row reads NULL instead "
