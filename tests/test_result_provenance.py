@@ -6,6 +6,7 @@ from app import service
 from app.errors import ColumnScopeError, ClickHouseQueryError
 from app.principal import current_scope
 from tests.test_scope_enforcement import _CATALOG
+from tests.catalog_helpers import authored_catalog
 
 
 @pytest.fixture(autouse=True)
@@ -13,7 +14,7 @@ def environment():
     token = current_scope.set(frozenset())
     with (
         patch("app.service.get_catalog_schema", return_value=_CATALOG),
-        patch("app.service.get_semantic_catalog", return_value={}),
+        patch("app.service.get_semantic_catalog", return_value=authored_catalog(_CATALOG)),
         patch("app.service.execute_query", return_value=(["Total"], [[42]])) as execute,
     ):
         yield execute
@@ -69,7 +70,7 @@ def test_engine_error_is_not_replaced_with_provenance_error(environment):
 
 
 def test_hidden_policy_dependencies_do_not_require_caller_scope():
-    catalog = {"analytics.orders": {"mcp_projection": {"hidden_columns": ["status"]}}}
+    catalog = {"analytics.orders": {"columns": {"gross_pay": {"type": "Decimal(18,2)"}, "status": {"type": "String"}}, "mcp_projection": {"hidden_columns": ["status"]}}}
     current_scope.set(frozenset({"analytics.orders.gross_pay"}))
     with patch("app.service.get_semantic_catalog", return_value=catalog):
         result = service.run_query(

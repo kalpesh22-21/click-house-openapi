@@ -313,4 +313,7 @@ def resolve_mysql_shard(client_code: str, settings: Settings) -> str:
     # Supply derived catalog names to the unchanged range matcher.
     candidates = [dict(entry, catalog=_catalog_name_for(entry)) for entry in entries]
     catalog = _resolve_from_entries(client_code, candidates, settings.trino_env_type, settings.trino_mysql_schema)
-    return _catalog_name_verified(catalog, settings)
+    catalog = _catalog_name_verified(catalog, settings)
+    from app.catalog_verification import require_verified_shard
+    require_verified_shard(catalog, settings)
+    return catalog

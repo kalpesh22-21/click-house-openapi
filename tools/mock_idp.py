@@ -81,9 +81,8 @@ def mint_token(
     Includes the three warehouse tenant claims — ``clientcode`` / ``proc_center``
     / ``jti`` (which the default CLICKHOUSE_TENANT_SETTINGS map fills
     paycom_client_code / paycom_proc_center / paycom_authenticated_user from) — a
-    legacy ``user_name`` claim, and ``column_scope`` (empty JSON list — no column
-    restrictions) so tokens pass validate_token's required-claim checks out of the
-    box.  session_id is NOT a JWT claim — it flows via the X-Session-Id header.
+    legacy ``user_name`` claim. Catalog permissions are resolved server-side.
+    session_id is NOT a JWT claim — it flows via the X-Session-Id header.
     """
     now = int(time.time())
     claims: dict[str, Any] = {
@@ -98,13 +97,11 @@ def mint_token(
         "clientcode": client_code,
         "proc_center": proc_center,
         "jti": jti,
-        # column_scope: empty list means no column restrictions (all columns permitted).
-        # Enforcement only fires when scope is non-empty and query uses disallowed columns.
         # session_id is NOT a JWT claim — it is sent by the agent backend as X-Session-Id.
-        "column_scope": json.dumps([]),
     }
     if extra_claims:
         claims.update(extra_claims)
+    claims.pop("column_scope", None)
     return jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": kid})
 
 

@@ -57,6 +57,7 @@ import hmac
 import json
 import logging
 import sys
+from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 import anyio
@@ -103,7 +104,6 @@ from app.service import (
     sample_rows as svc_sample_rows,
 )
 from app.session_binding import sid_hash_matches
-from app.trino_metadata import discovery_memo
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +134,8 @@ _SQL_GUIDANCE = (
     "returned by discovery and ClickHouse-compatible read-only SQL. "
 )
 _SCHEMA_GUIDANCE = (
-    "getTableSchema reports logical ClickHouse types, including Nullable, for live "
-    "available catalogued columns. Write ClickHouse SQL using these authoring types; "
+    "getTableSchema reports logical ClickHouse types, including Nullable, for "
+    "catalogued columns. Write ClickHouse SQL using these authoring types; "
     "physical Trino types remain internal and do not change the input dialect. "
     "Use typed date bounds such as toDate('2026-01-01'), not bare date strings. "
     if settings.trino_enabled else
@@ -722,10 +722,10 @@ class JWTAuthMiddleware:
             )
             return
 
-        # scope ← JWT claim (principal.column_scope)
+        # Permissions are resolved server-side after identity/session validation.
         # session_id ← X-Session-Id request header (not a JWT claim)
         # The trusted agent backend is expected to always send X-Session-Id;
-        # absent header → None → extractor skips scratch-table validation.
+        # absent header → None → scratch access fails session validation.
         session_id_value = _session_id_from_scope(scope)
 
         # --- X-Session-Id ↔ sid_hash binding (auth-hardening Slice 1) ---
@@ -763,21 +763,20 @@ class JWTAuthMiddleware:
                 )
                 return
 
+        from app.catalog_scope import resolve_principal_permissions
+        from app.errors import ClickHouseUnavailableError
+        try:
+            principal = await anyio.to_thread.run_sync(resolve_principal_permissions, principal)
+        except ClickHouseUnavailableError as exc:
+            await _send_json_response(send, 503, {"error": exc.message, "code": exc.code})
+            return
+
         ctx_token = current_principal.set(principal)
-        scope_token = current_scope.set(principal.column_scope)
+        scope_token = current_scope.set(principal.catalog_scope.columns or frozenset())
         session_token = current_session_id.set(session_id_value)
-        # Per-request Trino discovery memo (app.trino_metadata.discovery_memo):
-        # bound HERE, beside the principal, so one MCP request pays for one live
-        # discovery sweep instead of up to three (scoped getTableSchema /
-        # sampleRows / runQuery all rediscovering identical metadata). MCP-only:
-        # REST requests are never scope-bound, so they already pay at most one
-        # discovery per call — memoizing them would force narrow reads into a
-        # full-catalog sweep with no redundancy to reclaim.
-        memo_token = discovery_memo.set({})
         try:
             await self.app(scope, receive, send)
         finally:
-            discovery_memo.reset(memo_token)
             current_principal.reset(ctx_token)
             current_scope.reset(scope_token)
             current_session_id.reset(session_token)
@@ -1383,6 +1382,22 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def create_http_app():
+    """Verify once at ASGI startup, never in FastMCP's per-request lifespan."""
+    app = mcp.streamable_http_app()
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def verified_lifespan(application):
+        from app.catalog_verification import verify_catalog
+        await anyio.to_thread.run_sync(verify_catalog, settings)
+        async with original_lifespan(application) as state:
+            yield state
+
+    app.router.lifespan_context = verified_lifespan
+    return app
+
+
 async def _run_http() -> None:
     """Build and serve the streamable-HTTP MCP app with JWT auth middleware."""
     # Fail closed: a network-exposed transport must not start without a way to
@@ -1395,7 +1410,7 @@ async def _run_http() -> None:
         )
         sys.exit(1)
 
-    starlette_app = mcp.streamable_http_app()
+    starlette_app = create_http_app()
 
     # Wrap with the JWT auth middleware so every request requires a valid token.
     # The health routes are exempted by default so the Kubernetes probes (both
@@ -1427,6 +1442,8 @@ def main() -> None:
     configure_logging(settings.log_level, stdio=transport == "stdio")
 
     if transport == "stdio":
+        from app.catalog_verification import verify_catalog
+        verify_catalog(settings)
         logger.info("Starting MCP server (stdio transport)")
         mcp.run(transport="stdio")
     elif transport == "http":

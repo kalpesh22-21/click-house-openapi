@@ -181,36 +181,30 @@ class TestGetTableSchemaRealCatalogIntegration:
             "app.service.get_catalog_schema",
             return_value={
                 "dbpcm_warehouse.employee": {
-                    "EmployeeCode": "String",
-                    "AnnualSalary": "Nullable(Decimal(18, 6))",
+                    "employee_code": "String",
+                    "annual_salary": "Nullable(Decimal(18, 6))",
                 }
             },
         ):
             m.return_value = (
                 ["name", "type", "comment"],
                 [
-                    ["EmployeeCode", "String", ""],
-                    ["AnnualSalary", "Nullable(Decimal(18, 6))", ""],
+                    ["employee_code", "String", ""],
+                    ["annual_salary", "Nullable(Decimal(18, 6))", ""],
                 ],
             )
-            scope = frozenset({"dbpcm_warehouse.employee.EmployeeCode"})
+            scope = frozenset({"dbpcm_warehouse.employee.employee_code"})
             result = _call_with_scope("dbpcm_warehouse", "employee", scope)
 
         assert result["catalogued"] is True
         names = {c["name"] for c in result["columns"]}
-        assert names == {"EmployeeCode"}
+        assert names == {"employee_code"}
         # catalog_sha is the real sidecar contents, a 40-char git SHA, not a mock.
         assert len(result["catalog_sha"]) == 40
         assert result["catalog_sha"] == result["catalog_sha"].strip()
 
-    def test_real_catalog_uncatalogued_table_structural_only(self, mock_execute):
-        with patch("app.service.execute_query") as m:
-            m.return_value = (
-                ["name", "type", "comment"],
-                [["col_a", "String", ""]],
-            )
-            result = _call_with_scope("dbpcm_warehouse", "not_a_real_table", frozenset())
-
-        assert result["catalogued"] is False
-        assert result["description"] is None
-        assert {c["name"] for c in result["columns"]} == {"col_a"}
+    def test_uncatalogued_table_rejected_without_inspection(self, mock_execute):
+        from app.errors import TableNotFoundError
+        with pytest.raises(TableNotFoundError):
+            _call_with_scope("dbpcm_warehouse", "not_a_real_table", frozenset())
+        mock_execute.assert_not_called()

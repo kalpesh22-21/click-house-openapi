@@ -21,12 +21,9 @@ provides a local tamper/drift check (always) plus a best-effort agent-fixture
 staleness check when the agent's fixture path is available (see that script's
 docstring).
 
-This is a SEPARATE catalog from `app/catalog.py`'s interim `system.columns`
-catalog, which continues to feed `extract_column_provenance()` for
-`runQuery`/`sampleRows` column-scope enforcement (D57) — replacing that interim
-provenance catalog with this richer YAML catalog is an explicit follow-up, not
-done in this pass (see D83/D84 delivery notes). This loader is additive: it
-feeds ONLY the `getTableSchema` overlay (D83) via `app/semantic_catalog/overlay.py`.
+The authored catalog also supplies the schema used for query provenance and
+scope validation. Physical source alignment is verified at startup; request
+validation never discovers columns or silently removes unavailable entries.
 
 Backend-scoped notes (`trino_notes` / `clickhouse_notes`)
 ---------------------------------------------------------
@@ -82,11 +79,10 @@ above. This is enforced by
 
 Caching
 -------
-Unlike `app/catalog.py` (60s TTL, because `system.columns` can change any time
-ClickHouse's schema does), the YAML catalog only changes on a `clickhouse-api`
-redeploy (it is a copy-in, human-reviewed file per D53(b)/D79a) — so it is
-loaded once and cached indefinitely per process, with an explicit
-`invalidate_semantic_catalog_cache()` escape hatch for tests.
+The YAML catalog changes on deployment and is cached once per process.
+Startup verification checks deployed sources against this contract. The explicit
+`invalidate_semantic_catalog_cache()` hook is for tests; production catalog
+changes require a verified restart.
 """
 
 from __future__ import annotations

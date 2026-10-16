@@ -117,7 +117,8 @@ def mock_execute():
 
 @pytest.fixture()
 def mock_catalog():
-    with patch("app.service.get_catalog_schema") as m:
+    from tests.catalog_helpers import authored_catalog
+    with patch("app.service.get_semantic_catalog", return_value=authored_catalog(_CATALOG)), patch("app.service.get_catalog_schema") as m:
         m.return_value = _CATALOG
         yield m
 

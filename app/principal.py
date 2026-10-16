@@ -29,7 +29,10 @@ from __future__ import annotations
 
 import contextvars
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from app.catalog_scope import CatalogScope
 
 
 @dataclass(frozen=True)
@@ -41,11 +44,7 @@ class Principal:
         claims:       The full set of *verified* JWT claims.  The per-tenant settings
                       mapping reads arbitrary claim names from here (e.g. 'user_name'),
                       so the raw claims must be carried through — never the raw token.
-        column_scope: Frozenset of "database.table.column" strings the caller is
-                      permitted to access.  Empty frozenset = ALLOW-ALL (unrestricted);
-                      the caller may read any warehouse column.  The only signal that
-                      enforcement is disabled entirely is ``current_scope is None``
-                      (stdio/local-trust path).
+        catalog_scope: Server-resolved permissions, never extracted from JWT.
         token:        The raw bearer JWT this principal was validated from.  Carried
                       ONLY so a first-party downstream call that must act AS the user
                       (the employee-access ``/cl/eeaccess`` fetch) can forward the very
@@ -55,8 +54,8 @@ class Principal:
 
     subject: str
     claims: Dict[str, Any] = field(default_factory=dict)
-    column_scope: frozenset = field(default_factory=frozenset)
     token: str = ""
+    catalog_scope: CatalogScope | None = None
 
 
 # None means "no authenticated principal" — e.g. internal schema/health queries
@@ -66,8 +65,9 @@ current_principal: contextvars.ContextVar[Optional[Principal]] = contextvars.Con
     "current_principal", default=None
 )
 
-# None means "no scope enforcement" — e.g. stdio/local-trust transport.
-# A non-None frozenset is the set of permitted "database.table.column" strings.
+# Compatibility context for trusted local callers and existing provenance checks.
+# Serving requests derive this only from server-resolved CatalogScope, never JWT.
+# Explicit deny-all is preserved on Principal.catalog_scope.
 current_scope: contextvars.ContextVar[Optional[frozenset]] = contextvars.ContextVar(
     "current_scope", default=None
 )

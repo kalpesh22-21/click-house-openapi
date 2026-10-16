@@ -54,7 +54,7 @@ def make_jwt(
     signing_key: bytes | None = None,
     include_user_name: bool = True,
     include_tenant_claims: bool = True,
-    include_column_scope: bool = True,
+    include_column_scope: bool = False,
     column_scope: list | None = None,
     session_id: str | None = None,
     extra_claims: dict | None = None,
@@ -64,19 +64,17 @@ def make_jwt(
     Defaults produce a fully valid token carrying the three warehouse tenant
     claims — ``clientcode`` / ``proc_center`` / ``jti`` (the claims the default
     CLICKHOUSE_TENANT_SETTINGS map fills paycom_client_code / paycom_proc_center /
-    paycom_authenticated_user from) — plus a ``column_scope`` JSON list. A legacy
+    paycom_authenticated_user from). A legacy
     ``user_name`` claim is also included (some tests still assert on it); it is no
     longer a tenant claim.
 
     Override the keyword args to exercise negative cases (expired, wrong
-    audience/issuer, missing tenant claim, bad signature, alg=none, missing
-    scope, ...).  ``include_tenant_claims=False`` omits all three tenant claims
+    audience/issuer, missing tenant claim, bad signature, alg=none, ...).  ``include_tenant_claims=False`` omits all three tenant claims
     (for the MISSING_TENANT_CLAIM 403 path); pass a blank value (e.g.
     ``client_code="   "``) to exercise the blank-claim rejection.
 
-    ``column_scope`` defaults to an empty list (no column restrictions) when
-    ``include_column_scope=True``.  Pass a list of strings to restrict scope.
-    ``include_column_scope=False`` omits the claim entirely (for 403 tests).
+    Legacy column_scope arguments are only for compatibility tests. The server
+    ignores that retired claim; default tokens contain identity claims only.
 
     Note: session_id is NOT a JWT claim — it flows via the X-Session-Id request
     header, set by the agent backend per-request.
@@ -98,7 +96,7 @@ def make_jwt(
         claims["clientcode"] = client_code
         claims["proc_center"] = proc_center
         claims["jti"] = jti
-    if include_column_scope:
+    if include_column_scope or column_scope is not None:
         scope_list = column_scope if column_scope is not None else []
         claims["column_scope"] = _json.dumps(scope_list)
     if session_id is not None:

@@ -61,6 +61,79 @@ for this mode so the composite request identity remains the Trino user.
 contracts are provisioned. Caller JWT claims continue to supply tenant identity
 and processing center; the registry never supplies authorization identity.
 
+## Catalog verification at startup
+
+The authored YAML catalog is the schema contract for query validation on both
+backends. MySQL and mixed-source requests no longer run `SELECT 1`,
+`information_schema.columns`, or `LIMIT 0` discovery sweeps before executing SQL.
+Metadata tools on both backends read the catalog filtered by server-resolved
+permissions. Warehouse `sampleRows` projects authored visible columns explicitly
+and executes only its data query. Dynamic scratch-table metadata remains a
+separate session-gated inspection path. Unknown warehouse tables have no
+metadata even when the legacy catalog-table restriction flag is disabled.
+
+Both REST and MCP startup verify source alignment before serving traffic.
+`CATALOG_VERIFICATION_TARGETS_PATH` must point to a deployment-owned JSON file:
+
+```json
+[
+  {
+    "shard": "online__example__01__dbonline",
+    "claims": {
+      "proc_center": "verification-center",
+      "clientcode": "verification-client",
+      "user_name": "verification-user",
+      "jti": "verification-access-identity"
+    }
+  }
+]
+```
+
+These are placeholders. Configure actual claim names according to the existing
+Trino identity and ClickHouse tenant-setting mappings. Do not commit real
+identities or private native SQL. Mount this file read-only. For direct
+ClickHouse, omit `shard` and supply claims required by its tenant settings.
+
+For Trino deployments containing MySQL sources, the file must cover every shard
+in the active environment/database routing inventory. Each verification identity
+must route to its declared shard. Startup opens a connection per target and checks
+source output with zero-row probes in both secured-view and native-source modes.
+Missing columns, unexpected non-internal columns, column-order differences,
+incompatible types, inaccessible sources, or incomplete target coverage prevent
+startup. Direct ClickHouse uses DESCRIBE plus a zero-row dependency check.
+
+Logical Nullable and LowCardinality wrappers are preserved in validation.
+Trino type checks allow explicit compatible backend representations, integer
+widening, sufficient decimal capacity/scale, and sufficient timestamp precision.
+Unrecognized conversions fail closed and need an explicit compatibility rule.
+Startup verification does not prove row-policy correctness or every user's
+permissions; the existing deployment security checks remain required.
+
+Restart after provisioning source, catalog, or target changes. Newly routed shards
+are rejected until startup verification includes them. Source drift after startup
+surfaces as an execution failure; requests never rediscover or shrink the catalog.
+There is no hot catalog reload in this implementation.
+
+Catalog permissions come from `query_permission_scope(principal)` in
+`app/catalog_scope.py`, resolved once per authenticated REST or MCP request.
+The current dummy returns unrestricted catalog access: all catalog schemas,
+tables, and visible columns. It performs no SQL or metadata I/O. Existing
+`ALLOWED_DATABASES`, hidden-column projections, tenant row policies, and scratch
+session gates still apply.
+
+Replace this adapter with a server-controlled, identity-parameterized permission
+query when its source is available. It must return a `CatalogScope`; `None` in a
+dimension means unrestricted, while an empty allowlist denies access. An invalid
+result or failed lookup returns `SCOPE_RESOLUTION_UNAVAILABLE` (503), never an
+allow-all fallback. Permission results live only on the request principal.
+
+JWTs carry identity and session binding, not catalog grants. The API accepts
+tokens without `column_scope` and ignores/discards that retired claim even when
+present in an old token. The token issuer no longer exposes or emits the field;
+passing it to `/token`, including through extra claims, is rejected. Deploy token
+issuers and callers with this contract; signed identity and `sid_hash` checks
+are unchanged.
+
 ## Cache operations
 
 Warm the optional cache using the same normalization and validation as runtime:
@@ -125,9 +198,8 @@ and `projection_sql`. Native SELECT placeholders are `{{CLIENT_CODE}}`,
 MySQL values use UTF-8 hex literals. Definitions are trusted deployment policy,
 not model input: placeholder validation does not prove the policy is correct.
 Keep indexed string narrowing plus exact comparisons where needed to preserve
-Trino authorization semantics. Queries against missing or invalid definitions fail closed. Discovery omits
-unprovisioned sources, as it omits absent secured views; malformed existing
-contracts fail discovery. Provision each desired catalog entry before switching modes.
+Trino authorization semantics. Missing or invalid source definitions now fail startup
+catalog verification. Provision every enabled catalog entry before switching modes.
 There is no fallback from a native policy failure to an unprotected source.
 
 The native definitions and both engines' proprietary view files are Git-ignored
@@ -170,7 +242,7 @@ Service scope and SQL guards still run before dispatch. Direct execution refresh
 the employee permission set and uses the existing authenticated tenant settings,
 read-only controls and result caps. A direct execution failure is returned; it does
 not trigger a retry on Trino. `TRINO_ENABLED=false` retains the original direct-only
-behavior. Metadata discovery remains on its existing configured-backend path.
+behavior. Request validation reads the authored catalog without live discovery.
 The API deployment therefore needs working direct ClickHouse credentials and row
 policies even when Trino is enabled; Trino's JDBC credentials are not reused.
 

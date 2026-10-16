@@ -99,6 +99,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.critical("Semantic Catalog RLS validation failed: %s", exc)
         sys.exit(1)
 
+    from app.catalog_verification import verify_catalog
+    import anyio
+    await anyio.to_thread.run_sync(verify_catalog, settings)
+
     if settings.trino_enabled:
         logger.info("Experimental Trino backend selected; metadata comes from the semantic catalog.")
     else:

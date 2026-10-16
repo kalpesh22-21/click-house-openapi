@@ -47,7 +47,7 @@ for _k, _v in _BASE_ENV.items():
     os.environ.setdefault(_k, _v)
 
 from app import service  # noqa: E402
-from app.errors import ColumnScopeError, ParseFailedError  # noqa: E402
+from app.errors import ColumnScopeError, ParseFailedError, TableNotFoundError  # noqa: E402
 
 _CATALOG = {
     "analytics.orders": {
@@ -90,7 +90,8 @@ def mock_execute():
 
 @pytest.fixture()
 def mock_catalog():
-    with patch("app.service.get_catalog_schema") as m:
+    from tests.catalog_helpers import authored_catalog
+    with patch("app.service.get_semantic_catalog", return_value=authored_catalog(_CATALOG)), patch("app.service.get_catalog_schema") as m:
         m.return_value = _CATALOG
         yield m
 
@@ -130,7 +131,7 @@ class TestD83SampleRowsFullScopeExecutes:
         assert result is not None
         mock_execute.assert_called_once()
         sql_arg = mock_execute.call_args[0][0]
-        assert "SELECT *" in sql_arg
+        assert "SELECT `order_id`, `customer_id`, `gross_pay`, `status`" in sql_arg
         assert "LIMIT 5" in sql_arg
 
 
@@ -158,11 +159,11 @@ class TestD83SampleRowsUncataloguedTableFailClosed:
         """Table not in the (interim) provenance catalog -> SELECT * cannot be
         expanded -> ProvenanceExtractionError -> ParseFailedError (fail-closed,
         matches run_query's SELECT * treatment, D69/OQ-2)."""
-        with pytest.raises(ParseFailedError) as exc_info:
+        with pytest.raises(TableNotFoundError) as exc_info:
             _sample_with_scope(
                 "analytics", "uncatalogued_table", _FULL_SCOPE, session_id="sess-001"
             )
-        assert exc_info.value.code == "PARSE_FAILED_CLOSED"
+        assert exc_info.value.code == "TABLE_NOT_FOUND"
         mock_execute.assert_not_called()
 
 

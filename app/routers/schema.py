@@ -51,7 +51,7 @@ def list_databases(settings: Settings = Depends(get_settings)) -> list[DatabaseI
     operation_id="listTables",
     summary="List tables in a database",
     description=(
-        "Returns all tables (and their storage engines) inside the specified database. "
+        "Returns catalog tables and their backend labels inside the specified database. "
         "Use the 'database' parameter to select which database to inspect. "
         "Call listDatabases first if you are unsure which databases exist."
     ),

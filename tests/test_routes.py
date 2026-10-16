@@ -61,6 +61,20 @@ def env_setup():
     get_settings.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def authored_metadata(monkeypatch):
+    from app import service
+    from tests.catalog_helpers import authored_catalog
+    real = service.get_semantic_catalog()
+    extra = authored_catalog({
+        "default.users": {"id": "UInt64", "name": "String"},
+        "default.events": {"id": "UInt64"},
+        "default.t": {"id": "UInt64"},
+        "analytics.orders": {"id": "UInt64"},
+    })
+    monkeypatch.setattr(service, "get_semantic_catalog", lambda: {**real, **extra})
+
+
 @pytest.fixture()
 def mock_execute():
     """Patch execute_query in the service layer — single patch covers all routes.
@@ -455,7 +469,9 @@ class TestCataloguedTableRestriction:
         resp = client.get("/tables", headers=AUTH, params={"database": self._DB})
         assert resp.status_code == 200, resp.text
         names = [t["name"] for t in resp.json()]
-        assert names == [self._CATALOGUED]
+        assert self._CATALOGUED in names
+        assert self._UNCATALOGUED not in names
+        mock_schema_execute.assert_not_called()
 
     def test_schema_forbidden_for_uncatalogued(self, client, mock_schema_execute):
         resp = client.get(
@@ -487,9 +503,8 @@ class TestCataloguedTableRestriction:
         )
         assert resp.status_code == 200, resp.text
 
-    def test_uncatalogued_accessible_when_restriction_off(self, client, mock_schema_execute):
-        """Regression guard: with the flag OFF (default), uncatalogued tables are
-        still reachable — the feature must be strictly opt-in."""
+    def test_uncatalogued_has_no_authored_metadata_even_with_restriction_off(self, client, mock_schema_execute):
+        """No physical metadata fallback exists when the table is not authored."""
         os.environ["RESTRICT_TO_CATALOGUED_TABLES"] = "false"
         get_settings.cache_clear()
         mock_schema_execute.return_value = (
@@ -501,7 +516,8 @@ class TestCataloguedTableRestriction:
             headers=AUTH,
             params={"database": self._DB, "table": self._UNCATALOGUED},
         )
-        assert resp.status_code == 200, resp.text
+        assert resp.status_code == 404, resp.text
+        mock_schema_execute.assert_not_called()
 
     # --- runQuery / explainQuery enforcement -------------------------------
 
@@ -738,26 +754,25 @@ class TestHealthRoute:
 # Schema routes — ClickHouse domain errors map to clean HTTP codes (not 500)
 # ===========================================================================
 
-class TestSchemaRouteErrorTranslation:
-    """Regression: schema routes let ClickHouse domain errors propagate; the
-    app-level handler must translate them (was a 500 on /databases)."""
+class TestCatalogMetadataWithoutBackend:
+    """Catalog metadata remains available without backend query execution."""
 
-    def test_databases_clickhouse_query_error_returns_400(self, client, mock_execute):
+    def test_databases_does_not_execute_backend_query(self, client, mock_execute):
         from fastapi import HTTPException
 
         mock_execute.side_effect = HTTPException(
             status_code=400, detail={"error": "boom", "code": "CLICKHOUSE_QUERY_ERROR"}
         )
         resp = client.get("/databases", headers=AUTH)
-        assert resp.status_code == 400, resp.text
-        assert resp.json()["code"] == "CLICKHOUSE_QUERY_ERROR"
+        assert resp.status_code == 200, resp.text
+        mock_execute.assert_not_called()
 
-    def test_databases_clickhouse_unavailable_returns_502(self, client, mock_execute):
+    def test_databases_available_without_backend_connection(self, client, mock_execute):
         from fastapi import HTTPException
 
         mock_execute.side_effect = HTTPException(
             status_code=502, detail={"error": "down", "code": "CLICKHOUSE_UNAVAILABLE"}
         )
         resp = client.get("/databases", headers=AUTH)
-        assert resp.status_code == 502, resp.text
-        assert resp.json()["code"] == "CLICKHOUSE_UNAVAILABLE"
+        assert resp.status_code == 200, resp.text
+        mock_execute.assert_not_called()

@@ -1067,30 +1067,24 @@ def test_live_discovery_intersects_and_probes(monkeypatch, trino_settings, princ
     conn.close.assert_called_once()
 
 
-def test_live_discovery_missing_and_partial_views(
-    monkeypatch, trino_settings, principal
-):
-    discovery_connection(monkeypatch, [["employee", "employee_code", "varchar"]])
+def test_catalog_metadata_does_not_depend_on_live_views(monkeypatch, trino_settings, principal):
+    from app.trino_metadata import logical_catalog
+    connect, _, _ = discovery_connection(monkeypatch, [])
     assert service.list_databases(trino_settings) == [{"name": "dbpcm_datawarehouse"}]
-    assert [
-        x["name"] for x in service.list_tables("dbpcm_datawarehouse", trino_settings)
-    ] == ["employee"]
+    assert {t["name"] for t in service.list_tables("dbpcm_datawarehouse", trino_settings)} == {
+        e["table"] for e in logical_catalog(trino_settings).values()
+    }
     schema = service.get_table_schema("dbpcm_datawarehouse", "employee", trino_settings)
-    assert schema["database"] == "dbpcm_datawarehouse"
-    assert [c["name"] for c in schema["columns"]] == ["employee_code"]
-    discovery_connection(monkeypatch, [])
-    assert service.list_databases(trino_settings) == []
-    assert service.list_tables("dbpcm_datawarehouse", trino_settings) == []
+    assert "employee_code" in {c["name"] for c in schema["columns"]}
+    connect.assert_not_called()
 
 
-def test_discovery_resolves_before_network(monkeypatch, tmp_path, principal):
-    connect = MagicMock()
+def test_catalog_metadata_does_not_resolve_shards(monkeypatch, tmp_path, principal):
+    connect = MagicMock(side_effect=AssertionError("metadata I/O"))
     monkeypatch.setattr(trino_client, "_connect", connect)
-    settings = make_settings(
-        str(_write_snapshot(tmp_path / "empty.json", {"entries": []}))
-    )
-    with pytest.raises(QueryValidationError, match="MySQL shard routing is unavailable"):
-        service.list_databases(settings)
+    settings = make_settings(str(_write_snapshot(tmp_path / "empty.json", {"entries": []})))
+    assert service.list_databases(settings)
+    assert service.get_table_schema("dbpcm_datawarehouse", "employee", settings)
     connect.assert_not_called()
 
 
@@ -1215,40 +1209,6 @@ def test_physical_view_cannot_bypass_routing(trino_settings, principal):
 # mysql-source candidate still fails CLOSED before any network I/O.
 
 
-def test_discovery_resolves_shard_lazily_for_clickhouse_only_schema(
-    monkeypatch, tmp_path, principal
-):
-    """Empty mysql_shards + clickhouse-source table: discovery succeeds, no lockout."""
-    settings = make_settings(
-        str(_write_snapshot(tmp_path / "empty.json", {"entries": []}))
-    )
-    connect, _, cursor = discovery_connection(
-        monkeypatch,
-        [
-            ["payroll", "employee_code", "varchar"],
-            ["payroll", "amount", "decimal(18,2)"],
-        ],
-    )
-    schema = service.get_table_schema("dbpcm_warehouse", "payroll", settings)
-    assert schema["catalogued"] is True
-    assert [c["name"] for c in schema["columns"]] == ["employee_code", "amount"]
-    # The empty registry was never consulted: only the clickhouse catalog was probed.
-    connect.assert_called_once_with(settings, "pc1|10R37|alice")
-    info_calls = [
-        c
-        for c in cursor.execute.call_args_list
-        if "information_schema" in c.args[0]
-    ]
-    assert [c.args[1] for c in info_calls] == [["dbpcm_warehouse", "payroll"]]
-
-    # A mysql-source candidate still fails CLOSED, before any network I/O.
-    connect.reset_mock()
-    with pytest.raises(QueryValidationError) as exc:
-        service.get_table_schema("dbpcm_datawarehouse", "employee", settings)
-    assert exc.value.code == "MYSQL_SHARD_REGISTRY_INVALID"
-    connect.assert_not_called()
-
-
 # --- Per-request discovery memoization (post-cherry-pick review, HIGH) --------
 # The transports bind trino_metadata.discovery_memo next to the principal for
 # the life of one request, so one MCP operation pays ONE live discovery sweep
@@ -1277,10 +1237,10 @@ def _full_sweep_rows(settings):
     ]
 
 
-def test_memo_scoped_get_table_schema_makes_one_connect(
+def test_scoped_get_table_schema_never_connects(
     monkeypatch, trino_settings, principal, request_memo
 ):
-    """Scoped getTableSchema: 1 Trino connect (narrow read + provenance catalog)."""
+    """Scoped getTableSchema: no metadata connections."""
     from app.principal import current_scope
 
     monkeypatch.setattr("app.catalog.get_settings", lambda: trino_settings)
@@ -1296,15 +1256,15 @@ def test_memo_scoped_get_table_schema_makes_one_connect(
         )
     finally:
         current_scope.reset(token)
-    assert connect.call_count == 1
+    connect.assert_not_called()
     assert schema["database"] == "dbpcm_datawarehouse"
     assert [c["name"] for c in schema["columns"]] == ["employee_code"]
 
 
-def test_memo_sample_rows_makes_one_discovery_and_one_execution(
+def test_sample_rows_makes_zero_discovery_and_one_execution(
     monkeypatch, trino_settings, principal, request_memo
 ):
-    """sampleRows on the RLS-hidden employee view: 1 discovery + 1 execution."""
+    """sampleRows on the RLS-hidden employee view: 0 discovery + 1 execution."""
     monkeypatch.setattr("app.catalog.get_settings", lambda: trino_settings)
     connect, _, _ = discovery_connection(
         monkeypatch, _full_sweep_rows(trino_settings)
@@ -1317,17 +1277,15 @@ def test_memo_sample_rows_makes_one_discovery_and_one_execution(
         settings=trino_settings,
         include_provenance=True,
     )
-    assert connect.call_count == 1
+    connect.assert_not_called()
     execute.assert_called_once()
-    assert result["provenance"]["columns"] == [
-        ["dbpcm_warehouse.employee", "employee_code"]
-    ]
+    assert ["dbpcm_warehouse.employee", "employee_code"] in result["provenance"]["columns"]
 
 
-def test_memo_run_query_makes_one_discovery_and_one_execution(
+def test_run_query_makes_zero_discovery_and_one_execution(
     monkeypatch, trino_settings, principal, request_memo
 ):
-    """runQuery with provenance: still 1 discovery + 1 execution connection."""
+    """runQuery with provenance: still 0 discovery + 1 execution connection."""
     monkeypatch.setattr("app.catalog.get_settings", lambda: trino_settings)
     connect, _, _ = discovery_connection(
         monkeypatch, _full_sweep_rows(trino_settings)
@@ -1339,7 +1297,7 @@ def test_memo_run_query_makes_one_discovery_and_one_execution(
         settings=trino_settings,
         include_provenance=True,
     )
-    assert connect.call_count == 1
+    connect.assert_not_called()
     execute.assert_called_once()
 
 
@@ -1511,8 +1469,8 @@ def test_exact_median_keeps_shard_routing(function, trino_settings, principal):
 
 def test_schema_authoring_types_preserve_nullability(monkeypatch, trino_settings):
     from app import trino_metadata
-    monkeypatch.setattr(trino_metadata, "discover", lambda *args: {
-        "dbpcm_warehouse.employee": {"columns": {
+    monkeypatch.setattr(trino_metadata, "logical_catalog", lambda *args: {
+        "dbpcm_warehouse.employee": {"database": "dbpcm_warehouse", "table": "employee", "columns": {
             "annual_salary": {"type": "Nullable(Decimal(18,6))",
                               "physical_type": "decimal(18,6)"},
             "hire_date": {"type": "Nullable(Date)", "physical_type": "date"},

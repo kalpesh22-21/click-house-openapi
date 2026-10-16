@@ -18,7 +18,7 @@ class TableInfo(BaseModel):
 
     database: str = Field(..., description="Owning database name")
     name: str = Field(..., description="Table name")
-    engine: str = Field(..., description="ClickHouse table engine (e.g. MergeTree)")
+    engine: str = Field(..., description="Backend label for catalog tables; physical engine for scratch tables")
 
 
 class ColumnInfo(BaseModel):

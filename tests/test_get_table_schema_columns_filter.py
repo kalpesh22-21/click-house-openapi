@@ -224,13 +224,11 @@ class TestServiceWiring:
         )
         assert got == allowed == ["EmployeeCode"]
 
-    def test_works_on_an_uncatalogued_table(self, mock_execute, mock_catalog_sha):
-        """§1.3 structural-only path still narrows."""
-        with patch("app.service.get_semantic_catalog", return_value={}):
-            result = service.get_table_schema("wh", "employee", columns=["AnnualSalary"])
-        assert result["catalogued"] is False
-        assert _names(result) == ["AnnualSalary"]
-        assert result["columns_not_found"] == []
+    def test_uncatalogued_table_has_no_schema(self, mock_execute, mock_catalog_sha):
+        from app.errors import TableNotFoundError
+        with patch("app.service.get_semantic_catalog", return_value={}), pytest.raises(TableNotFoundError):
+            service.get_table_schema("wh", "employee", columns=["AnnualSalary"])
+        mock_execute.assert_not_called()
 
 
 # ===========================================================================

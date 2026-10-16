@@ -26,6 +26,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.catalog import get_catalog_schema
+from app.catalog_scope import resolve_catalog_scope, scoped_catalog, enforce_catalog_scope
 from app.clickhouse_client import execute_query
 from app.config import Settings, get_settings
 from app.constants import SCRATCH_DATABASE
@@ -79,6 +80,8 @@ _LIMIT_TAIL_RE = re.compile(r"\bLIMIT\s+\d+(\s+OFFSET\s+\d+)?\s*$", re.IGNORECAS
 
 def _check_database_allowed(database: str, settings: Settings) -> None:
     """Raise DatabaseNotAllowedError if *database* is not in the allowlist."""
+    if database != settings.scratch_database and not resolve_catalog_scope().allows_schema(database):
+        raise DatabaseNotAllowedError("Schema is outside your catalog scope.", "DATABASE_NOT_ALLOWED")
     allowed = settings.allowed_databases_list()
     if settings.trino_enabled:
         from app.trino_metadata import canonical_database
@@ -431,99 +434,60 @@ def _compact_result(
 # ---------------------------------------------------------------------------
 
 
-def list_databases(settings: Settings | None = None) -> list[dict[str, str]]:
-    """Return all databases accessible through this API.
-
-    Filters results against the ALLOWED_DATABASES allowlist so only
-    permitted databases are returned.
-
-    Returns a list of dicts, each with a single 'name' key.
-    """
-    if settings is None:
-        settings = get_settings()
-
-    if settings.trino_enabled:
-        from app.trino_metadata import discover, public_database
-        return [{"name": name} for name in sorted({public_database(e["database"]) for e in discover(settings).values()})]
-    else:
-        _, rows = _execute("SELECT name FROM system.databases ORDER BY name", settings)
+def _catalog_entries(settings: Settings) -> dict:
+    """Deployment-filtered authored metadata; never inspect source schemas."""
+    from app.trino_metadata import canonical_database
 
     allowed = settings.allowed_databases_list()
-    return [
-        {"name": name}
-        for (name,) in rows
-        if allowed is None or name in allowed
-    ]
+    allowed = None if allowed is None else {canonical_database(db) for db in allowed}
+    return {key: entry for key, entry in get_semantic_catalog().items()
+            if allowed is None or entry["database"] in allowed}
 
 
-def list_tables(
-    database: str,
-    settings: Settings | None = None,
-) -> list[dict[str, str]]:
-    """Return all tables in *database*.
+def _catalog_column_rows(database: str, table: str, settings: Settings) -> list:
+    entry = _catalog_entries(settings).get(f"{database}.{table}", {})
+    return [[name, info["type"], info.get("description", "")]
+            for name, info in entry.get("columns", {}).items()]
 
-    Scratch-table isolation (D64): when *database* is the scratch database, the
-    result is filtered to ONLY the caller's own scratch tables (those whose name
-    identifies the current session as owner, via the shared
-    ``scratch_table_belongs_to_session`` D64 parser). This closes the metadata
-    leak where listTables('scratch') returned every session's scratch tables.
-    FAIL-CLOSED: if no session is bound (session_id is None), the scratch listing
-    is EMPTY — a session-less caller can never prove ownership, so nothing leaks.
-    Non-scratch databases are unaffected (full list).
 
-    Catalogued-table enforcement (RESTRICT_TO_CATALOGUED_TABLES): when enabled,
-    non-scratch results are additionally narrowed to tables present in the
-    semantic catalog, mirroring how list_databases filters against the allowlist.
+def list_databases(settings: Settings | None = None) -> list[dict[str, str]]:
+    """List schemas in the scoped catalog, without database metadata I/O."""
+    settings = settings or get_settings()
+    from app.trino_metadata import public_database
 
-    Raises:
-        DatabaseNotAllowedError: if *database* is not in the allowlist.
-    """
-    if settings is None:
-        settings = get_settings()
+    names = {entry["database"] for entry in scoped_catalog(_catalog_entries(settings)).values()}
+    # Scratch schemas are dynamic and session-owned, not part of the warehouse
+    # catalog. Expose their namespace only to callers with a bound session.
+    allowed = settings.allowed_databases_list()
+    if not settings.trino_enabled and get_current_session_id() and (allowed is None or settings.scratch_database in allowed):
+        names.add(settings.scratch_database)
+    return [{"name": public_database(name) if settings.trino_enabled else name} for name in sorted(names)]
 
-    _check_database_allowed(database, settings)
+
+def list_tables(database: str, settings: Settings | None = None) -> list[dict[str, str]]:
+    """List catalog tables; inspect only session-owned dynamic scratch tables."""
+    settings = settings or get_settings()
+    from app.trino_metadata import canonical_database, public_database
 
     if settings.trino_enabled:
-        from app.trino_metadata import discover, public_database
-        return [
-            {"database": public_database(entry["database"]), "name": entry["table"], "engine": "Trino"}
-            for _, entry in sorted(discover(settings, database).items())
-        ]
-    else:
-        sql = (
-            "SELECT database, name, engine "
-            "FROM system.tables "
-            "WHERE database = %(db)s "
-            "ORDER BY name"
-        )
-        _, rows = _execute(sql, settings, parameters={"db": database})
-
-    tables = [
-        {"database": row[0], "name": row[1], "engine": row[2]}
-        for row in rows
-    ]
-
+        database = canonical_database(database)
+    _check_database_allowed(database, settings)
     if database == settings.scratch_database:
-        # Session-gate the scratch database: keep only tables owned by the caller.
-        # scratch_table_belongs_to_session fails closed on a None/empty session_id
-        # and on any name not owned exactly by session_id, so a session-less caller
-        # gets an empty list and no foreign scratch table ever appears.
         session_id = get_current_session_id()
-        tables = [
-            t for t in tables
-            if scratch_table_belongs_to_session(t["name"], session_id)
-        ]
-    elif settings.restrict_to_catalogued_tables:
-        # Catalogued-table enforcement: hide any table that is not in the semantic
-        # catalog, mirroring how list_databases filters against the allowlist. The
-        # scratch branch above already returned its own (session-gated, never
-        # catalogued) listing, so this only narrows real warehouse databases.
-        tables = [
-            t for t in tables
-            if _is_table_catalogued(t["database"], t["name"])
-        ]
-
-    return tables
+        if session_id is None or settings.trino_enabled:
+            return []
+        _, rows = _execute(
+            "SELECT database, name, engine FROM system.tables WHERE database = %(db)s ORDER BY name",
+            settings, parameters={"db": database},
+        )
+        return [{"database": row[0], "name": row[1], "engine": row[2]} for row in rows
+                if scratch_table_belongs_to_session(row[1], session_id)]
+    return [
+        {"database": public_database(database) if settings.trino_enabled else database,
+         "name": entry["table"], "engine": "Trino" if settings.trino_enabled else "ClickHouse"}
+        for _, entry in sorted(scoped_catalog(_catalog_entries(settings)).items())
+        if entry["database"] == database
+    ]
 
 
 # Caps on the getTableSchema `columns` narrowing argument (M3). The values are
@@ -605,16 +569,13 @@ def get_table_schema(
 ) -> dict[str, Any]:
     """Return the merged, scope-filtered column schema for *database*.*table* (D83/D84).
 
-    Pipeline (mcp-overlay-design.md §1): introspect (unchanged system.columns
-    query) -> merge with the Semantic Catalog overlay (case-sensitive exact
-    column-name join, D70) -> scope-filter the merged result (skipped when
+    Pipeline: read authored columns -> apply Semantic Catalog metadata -> scope-filter the merged result (skipped when
     `current_scope` is None [stdio/local-trust] or empty [allow-all, D80b]).
 
     Returns the design §1.2 shape: database, table, catalogued, description,
     grain, temporal, primary_key, join_keys, columns, measures, rules,
-    ambiguities, catalog_sha. An uncatalogued table returns catalogued=False
-    with all catalog-derived fields null and columns carrying introspection
-    fields only (design §1.3) — still scope-filtered.
+    ambiguities, catalog_sha. Warehouse tables absent from the catalog are
+    rejected. Session-owned scratch tables retain dynamic schema inspection.
 
     `columns` (M3) narrows the emitted `columns` array to the named columns,
     adding a `columns_not_found` key that echoes back any requested name that
@@ -676,17 +637,16 @@ def get_table_schema(
                 code="SCRATCH_SESSION_VIOLATION",
             )
 
-    sql = (
-        "SELECT name, type, comment "
-        "FROM system.columns "
-        "WHERE database = %(db)s AND table = %(tbl)s "
-        "ORDER BY position"
-    )
-    if settings.trino_enabled:
-        from app.trino_metadata import column_rows
-        rows = column_rows(database, table, settings)
+    if database == settings.scratch_database and settings.trino_enabled:
+        rows = []  # Scratch relations are not supported by the Trino backend.
+    elif database == settings.scratch_database:
+        _, rows = _execute(
+            "SELECT name, type, comment FROM system.columns "
+            "WHERE database = %(db)s AND table = %(tbl)s ORDER BY position",
+            settings, parameters={"db": database, "tbl": table},
+        )
     else:
-        _, rows = _execute(sql, settings, parameters={"db": database, "tbl": table})
+        rows = _catalog_column_rows(database, table, settings)
 
     if not rows:
         raise TableNotFoundError(
@@ -703,7 +663,13 @@ def get_table_schema(
     ]
 
     scope = get_current_scope()
-    # The introspected universe (real system.columns data for every table) is
+    effective = resolve_catalog_scope()
+    if database != settings.scratch_database and (effective.schemas is not None or effective.columns is not None):
+        visible = scoped_catalog(get_semantic_catalog())
+        if f"{database}.{table}" not in visible:
+            raise ColumnScopeError("Table is outside your catalog scope.", "COLUMN_SCOPE_VIOLATION")
+        scope = frozenset(f"{key}.{name}" for key, entry in visible.items() for name in entry["columns"])
+    # The authored schema universe is
     # only needed to resolve cross-table free-text references inside
     # rules[]/ambiguities[] when scope-filtering is actually active (FIX 1,
     # security review) — skip the extra query entirely when enforcement is a
@@ -758,8 +724,8 @@ def sample_rows(
     Returns the compact {columns, rows, row_count, truncated=False} shape.
 
     Hidden-column projection (A-H1): sampleRows never emits a column the
-    getTableSchema overlay hides. Instead of `SELECT *`, it introspects the
-    table's columns and projects the VISIBLE set (introspected columns MINUS
+    getTableSchema overlay hides. Instead of `SELECT *`, it reads the authored
+    columns and projects the VISIBLE set (catalog columns MINUS
     `mcp_projection.hidden_columns` — the RLS physical columns client_code /
     proc_center, and labor_allocation's `version`). This holds on EVERY path
     (scope=None stdio/local-trust, empty/allow-all, and enforced), so the sample
@@ -811,27 +777,8 @@ def sample_rows(
     # overlay uses.
     hidden = hidden_columns_for(get_semantic_catalog(), f"{database}.{table}")
 
-    if hidden:
-        # This table hides columns: introspect its real columns and project ONLY
-        # the visible set (introspected MINUS hidden), so a `SELECT *` can never
-        # leak a hidden column's name or values. Only catalogued RLS tables reach
-        # this branch — every other table keeps the plain `SELECT *` below (its
-        # visible set == all columns, so the two are equivalent), avoiding an
-        # introspection round-trip for the common case. The metadata query is the
-        # same one get_table_schema uses; it does not scan table data.
-        intro_sql = (
-            "SELECT name "
-            "FROM system.columns "
-            "WHERE database = %(db)s AND table = %(tbl)s "
-            "ORDER BY position"
-        )
-        if settings.trino_enabled:
-            from app.trino_metadata import column_rows
-            col_rows = [[row[0]] for row in column_rows(database, table, settings)]
-        else:
-            _, col_rows = _execute(
-                intro_sql, settings, parameters={"db": database, "tbl": table}
-            )
+    if database != settings.scratch_database:
+        col_rows = _catalog_column_rows(database, table, settings)
         if not col_rows:
             raise TableNotFoundError(
                 message=(
@@ -867,6 +814,8 @@ def sample_rows(
     # normal warehouse sample references no scratch DB → no provenance parse.
     references_scratch = _references_scratch_db(sql, settings.scratch_database)
     need_provenance = include_provenance or (scope is not None) or (
+        resolve_catalog_scope().schemas is not None or resolve_catalog_scope().columns is not None
+    ) or (
         settings.require_session_scratch_gate and references_scratch
     )
 
@@ -888,7 +837,7 @@ def sample_rows(
             if isinstance(exc, MissingSourceMetadataError) and exc.table in get_semantic_catalog():
                 logger.error("Source metadata unavailable; execution blocked")
                 raise ClickHouseUnavailableError(
-                    message="Source metadata is unavailable. Refresh discovery or ask the operator to check source availability and catalog configuration; SQL rewriting cannot restore metadata.",
+                    message="Catalog metadata is unavailable. Ask the operator to verify the loaded catalog and deployment configuration; SQL rewriting cannot restore metadata.",
                     code="SOURCE_METADATA_UNAVAILABLE",
                 ) from exc
             logger.error(
@@ -927,6 +876,8 @@ def sample_rows(
                     code="COLUMN_SCOPE_VIOLATION",
                 )
     # ---------------------------------------------------------------------------
+
+    enforce_catalog_scope(sql, uses, get_semantic_catalog())
 
     # Refresh the caller's employee row-policy set if stale/cold (no-op when the
     # feature is disabled or there is no principal). Fail-closed-loud on a cold JTI.
@@ -1032,6 +983,8 @@ def _enforce_query_guardrails(
     # parse, no PARSE_FAILED_CLOSED regression (the GPT Action stays working).
     references_scratch = _references_scratch_db(clean_sql, settings.scratch_database)
     need_provenance = include_provenance or (scope is not None) or (
+        resolve_catalog_scope().schemas is not None or resolve_catalog_scope().columns is not None
+    ) or (
         settings.require_session_scratch_gate and references_scratch
     )
 
@@ -1093,7 +1046,7 @@ def _enforce_query_guardrails(
             if isinstance(exc, MissingSourceMetadataError) and exc.table in get_semantic_catalog():
                 logger.error("Source metadata unavailable; execution blocked")
                 raise ClickHouseUnavailableError(
-                    message="Source metadata is unavailable. Refresh discovery or ask the operator to check source availability and catalog configuration; SQL rewriting cannot restore metadata.",
+                    message="Catalog metadata is unavailable. Ask the operator to verify the loaded catalog and deployment configuration; SQL rewriting cannot restore metadata.",
                     code="SOURCE_METADATA_UNAVAILABLE",
                 ) from exc
             # Parse/qualify failed — fail-closed (D63): never execute.
@@ -1144,6 +1097,7 @@ def _enforce_query_guardrails(
                 )
     # ---------------------------------------------------------------------------
 
+    enforce_catalog_scope(clean_sql, uses, get_semantic_catalog())
     return uses
 
 

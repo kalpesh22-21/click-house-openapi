@@ -18,11 +18,14 @@ from __future__ import annotations
 
 from typing import AsyncGenerator
 
+import anyio
 from fastapi import Depends, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.auth_jwt import JWTAuthError, validate_token
+from app.catalog_scope import resolve_principal_permissions
 from app.config import Settings, get_settings
+from app.errors import ClickHouseUnavailableError
 from app.principal import Principal, current_principal
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -64,11 +67,11 @@ async def require_principal(
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
-    # REST is intentionally unscoped: column-scope enforcement is MCP-only
-    # (JWTAuthMiddleware in mcp_server.py sets current_scope/current_session_id).
-    # The REST surface is a trusted admin/internal path; it never sets those
-    # ContextVars, so get_current_scope() returns None and service.run_query
-    # skips all column-scope and scratch-isolation checks for REST requests.
+    try:
+        principal = await anyio.to_thread.run_sync(resolve_principal_permissions, principal)
+    except ClickHouseUnavailableError as exc:
+        raise HTTPException(status_code=503, detail={"error": exc.message, "code": exc.code}) from exc
+
     token = current_principal.set(principal)
     try:
         yield principal

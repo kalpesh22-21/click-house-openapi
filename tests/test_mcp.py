@@ -85,6 +85,17 @@ def reset_settings():
     get_settings.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def authored_metadata(monkeypatch):
+    from tests.catalog_helpers import authored_catalog
+    monkeypatch.setattr(service, "get_semantic_catalog", lambda: authored_catalog({
+        "default.users": {"id": "UInt64", "name": "String"},
+        "default.events": {"id": "UInt64"},
+        "default.t": {"id": "UInt64"},
+        "analytics.orders": {"id": "UInt64"},
+    }))
+
+
 @pytest.fixture()
 def mock_execute():
     """Patch execute_query inside app.service for all service tests."""
@@ -105,8 +116,8 @@ class TestServiceListDatabases:
         get_settings.cache_clear()
 
         result = service.list_databases()
-        assert len(result) == 3
-        assert result[0] == {"name": "default"}
+        assert result == [{"name": "analytics"}, {"name": "default"}]
+        mock_execute.assert_not_called()
 
     def test_filters_by_allowlist(self, mock_execute):
         mock_execute.return_value = (["name"], [["default"], ["analytics"], ["secret"]])
@@ -116,12 +127,9 @@ class TestServiceListDatabases:
         result = service.list_databases()
         assert result == [{"name": "analytics"}]
 
-    def test_calls_execute_query(self, mock_execute):
-        mock_execute.return_value = (["name"], [["default"]])
+    def test_metadata_does_not_execute_queries(self, mock_execute):
         service.list_databases()
-        mock_execute.assert_called_once()
-        sql_arg = mock_execute.call_args[0][0]
-        assert "system.databases" in sql_arg
+        mock_execute.assert_not_called()
 
 
 # ===========================================================================
@@ -136,7 +144,9 @@ class TestServiceListTables:
             [["default", "events", "MergeTree"]],
         )
         result = service.list_tables("default")
-        assert result == [{"database": "default", "name": "events", "engine": "MergeTree"}]
+        assert {t["name"] for t in result} == {"events", "t", "users"}
+        assert all(t["engine"] == "ClickHouse" for t in result)
+        mock_execute.assert_not_called()
 
     def test_raises_domain_error_for_disallowed_database(self, mock_execute):
         os.environ["ALLOWED_DATABASES"] = "analytics"
@@ -149,14 +159,9 @@ class TestServiceListTables:
         mock_execute.assert_not_called()
         assert exc_info.value.code == "DATABASE_NOT_ALLOWED"
 
-    def test_uses_parameterised_query(self, mock_execute):
-        """Database name must be passed as a bind parameter, not string-interpolated."""
-        mock_execute.return_value = (["database", "name", "engine"], [])
-        service.list_tables("default")
-        call_kwargs = mock_execute.call_args
-        # parameters kwarg must include 'db'
-        parameters = call_kwargs[1].get("parameters") or call_kwargs[0][2]
-        assert parameters.get("db") == "default"
+    def test_unknown_database_does_not_execute_sql(self, mock_execute):
+        assert service.list_tables("unknown' database") == []
+        mock_execute.assert_not_called()
 
 
 # ===========================================================================
@@ -174,22 +179,10 @@ class TestServiceGetTableSchema:
         assert result["database"] == "default"
         assert result["table"] == "users"
         assert len(result["columns"]) == 2
-        # "default.users" has no Semantic Catalog entry -> catalogued:false,
-        # structural-only path (design §1.3): introspection fields only, overlay
-        # fields nulled/defaulted, still carries catalog_sha (D84).
-        assert result["catalogued"] is False
-        assert result["columns"][0] == {
-            "name": "id",
-            "type": "UInt64",
-            "comment": "",
-            "description": None,
-            "synonyms": None,
-            "unit": None,
-            "values": None,
-            "observed_values": None,
-            "client_defined": False,
-            "sensitive": False,
-        }
+        assert result["catalogued"] is True
+        assert result["columns"][0]["name"] == "id"
+        assert result["columns"][0]["type"] == "UInt64"
+        mock_execute.assert_not_called()
         assert "catalog_sha" in result
 
     def test_raises_database_not_allowed(self, mock_execute):

@@ -6,7 +6,7 @@ import logging
 from functools import lru_cache
 from typing import Annotated, Dict, List, Literal, Optional
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.constants import SCRATCH_DATABASE
@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     # --- Execution backend ---
     # Experimental federation. Logical SQL/column permissions remain unchanged;
     # physical names are resolved only after the service guardrails run.
+    # Deployment-owned JSON identities used only for startup contract checks.
+    catalog_verification_targets_path: str = ""
+    _verified_catalog_shards: frozenset[str] | None = PrivateAttr(default=None)
     trino_enabled: bool = False
     trino_host: str = ""
     trino_port: int = Field(443, ge=1, le=65535)

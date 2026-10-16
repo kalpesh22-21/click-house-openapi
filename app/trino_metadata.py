@@ -1,4 +1,4 @@
-"""Tenant-scoped live discovery intersected with the authored semantic catalog."""
+"""Catalog metadata for requests and explicit live inspection for operators."""
 
 from __future__ import annotations
 
@@ -13,25 +13,9 @@ from app.shard_routing import resolve_mysql_shard, validate_identifier
 
 PUBLIC_DATABASE = "dbpcm_datawarehouse"
 
-# Per-REQUEST discovery memo, following the same contextvars request-isolation
-# pattern as app.principal (current_principal / current_scope / current_session_id):
-# the MCP HTTP middleware binds a fresh dict next to the principal and resets it
-# (via the token) when the request ends — the memo dies with the request context,
-# so metadata can never be shared ACROSS requests or leak onto a pooled thread.
-# None (the default) means UNMEMOIZED one-shot discovery: REST (never scope-bound,
-# at most one discovery per call), stdio/local-trust, internal callers and tests
-# that never bind it.
-#
-# Entries are keyed by (identity_tuple, database, table) — the identity is a
-# discover() input (it drives both the shard route and the effective Trino
-# user), so keying on it preserves identity isolation WITHIN a shared request
-# context: one principal's results are never served under another identity,
-# while scopes derived from the same full sweep are shared freely. The first
-# discover() of a request sweeps ALL eligible relations on ONE connection and
-# later shapes (scoped table reads, the provenance catalog) project from that
-# in-memory snapshot — one MCP operation previously paid up to three separate
-# discovery connections for the identical metadata. Failures are NEVER cached:
-# a failed discovery raises and a same-request retry reconnects.
+# Optional memo for explicit operator inspections. Serving transports never bind
+# this context: request metadata and validation read logical_catalog directly.
+# Keys retain identity isolation for diagnostic callers that choose to bind it.
 discovery_memo: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     "trino_discovery_memo", default=None
 )
@@ -83,13 +67,10 @@ def _project(full: dict, database: str | None, table: str | None) -> dict:
 def discover(
     settings: Settings, database: str | None = None, table: str | None = None
 ) -> dict:
-    """Resolve before connecting; never reuse another request's metadata or identity.
+    """Explicit live inspection for diagnostics, never request validation.
 
-    When a per-request memo is bound (MCP HTTP transport; see ``discovery_memo``),
-    the first call of the request pays for ONE full live sweep and every later
-    call — scoped table reads included — projects from that in-memory snapshot
-    keyed on (identity, database, table). With no memo bound, each call discovers
-    exactly the requested scope.
+    An optional caller-bound memo shares one full sweep within that inspection.
+    With no memo bound, inspect exactly the requested scope.
     """
     from app.trino_client import request_identity
 
@@ -221,7 +202,7 @@ def _discover_live(
 
 
 def column_rows(database: str, table: str, settings: Settings) -> list[list[str]]:
-    entry = discover(settings, database, table).get(
+    entry = _project(logical_catalog(settings), database, table).get(
         f"{canonical_database(database)}.{table}", {}
     )
     return [
@@ -231,11 +212,11 @@ def column_rows(database: str, table: str, settings: Settings) -> list[list[str]
 
 
 def catalog_schema(settings: Settings) -> dict[str, dict[str, str]]:
-    # Authored types preserve the existing ClickHouse-dialect validation contract;
-    # live discovery determines which relations and columns actually exist.
+    # The authored catalog is the validation contract. Startup verifies sources;
+    # request validation must not discover or silently shrink this schema.
     return {
         key: {
             name: info.get("type", "String") for name, info in entry["columns"].items()
         }
-        for key, entry in discover(settings).items()
+        for key, entry in logical_catalog(settings).items()
     }

@@ -134,7 +134,13 @@ class TestListTablesScratchIsolation:
         """A non-scratch database returns its full, unfiltered table list."""
         mock_execute.return_value = (["database", "name", "engine"], _WAREHOUSE_ROWS)
         # Even with no session bound, warehouse listings are unchanged.
-        result = _list_with_session("analytics", None)
+        from tests.catalog_helpers import authored_catalog
+        with patch("app.service.get_semantic_catalog", return_value=authored_catalog({
+            "analytics.employees": {"employee_id": "UInt64"},
+            "analytics.departments": {"id": "UInt64"},
+        })):
+            result = _list_with_session("analytics", None)
+        mock_execute.assert_not_called()
         assert {t["name"] for t in result} == {"employees", "departments"}
 
     def test_D64_list_scratch_shape_preserved(self, mock_execute):
@@ -196,9 +202,10 @@ class TestGetTableSchemaScratchIsolation:
 
     def test_D64_schema_nonscratch_unaffected(self):
         """A non-scratch table's schema is unchanged (no session gate applied)."""
+        from tests.catalog_helpers import authored_catalog
         cols = (["name", "type", "comment"], [["employee_id", "UInt64", ""]])
         with patch("app.service.execute_query", return_value=cols), patch(
-            "app.service.get_semantic_catalog", return_value={}
+            "app.service.get_semantic_catalog", return_value=authored_catalog({"analytics.employees": {"employee_id": "UInt64"}})
         ), patch("app.service.get_catalog_sha", return_value="b" * 40):
             # No session bound, yet a warehouse table's schema is still returned.
             result = _schema_with_session("analytics", "employees", None)
