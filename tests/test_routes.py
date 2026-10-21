@@ -776,3 +776,8 @@ class TestCatalogMetadataWithoutBackend:
         resp = client.get("/databases", headers=AUTH)
         assert resp.status_code == 200, resp.text
         mock_execute.assert_not_called()
+
+
+@pytest.fixture(autouse=True)
+def _authorized_session_for_route_tests(prevalidated_session_scope):
+    """Session-scope auth is tested separately in test_session_catalog."""

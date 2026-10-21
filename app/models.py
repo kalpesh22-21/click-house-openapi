@@ -27,6 +27,7 @@ class ColumnInfo(BaseModel):
     name: str = Field(..., description="Column name")
     type: str = Field(..., description="ClickHouse data type")
     comment: str = Field("", description="Column comment, if any")
+    context: dict[str, list[dict[str, Any]]] | None = None
 
 
 class SchemaResponse(BaseModel):

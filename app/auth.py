@@ -18,20 +18,18 @@ from __future__ import annotations
 
 from typing import AsyncGenerator
 
-import anyio
-from fastapi import Depends, HTTPException, Security
+from fastapi import Depends, HTTPException, Security, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.auth_jwt import JWTAuthError, validate_token
-from app.catalog_scope import resolve_principal_permissions
 from app.config import Settings, get_settings
-from app.errors import ClickHouseUnavailableError
 from app.principal import Principal, current_principal
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def require_principal(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
     settings: Settings = Depends(get_settings),
 ) -> AsyncGenerator[Principal, None]:
@@ -67,10 +65,12 @@ async def require_principal(
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
+    from app.session_catalog import SESSION_PATH, SCOPE_HEADER, verify_scope, SessionScopeError
     try:
-        principal = await anyio.to_thread.run_sync(resolve_principal_permissions, principal)
-    except ClickHouseUnavailableError as exc:
-        raise HTTPException(status_code=503, detail={"error": exc.message, "code": exc.code}) from exc
+        if request.url.path.rstrip("/") != SESSION_PATH:
+            principal = verify_scope(principal, request.headers.get("X-Session-Id"), request.headers.get(SCOPE_HEADER), settings)
+    except SessionScopeError as exc:
+        raise HTTPException(status_code=exc.status, detail={"error": exc.message, "code": exc.code}) from exc
 
     token = current_principal.set(principal)
     try:

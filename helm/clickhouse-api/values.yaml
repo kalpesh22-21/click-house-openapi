@@ -31,6 +31,11 @@ imagePullSecrets: []
 # -----------------------------------------------------------------------------
 replicaCount: 2
 
+# Optional private source SQL mounts. Pair with config.TRINO_MYSQL_SOURCES_DIR.
+# Keep definitions in an externally provisioned Secret or private volume.
+extraVolumes: []
+extraVolumeMounts: []
+
 # Pod-level annotations (e.g. Prometheus scrape config, Vault agent injection)
 podAnnotations: {}
 

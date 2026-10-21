@@ -213,3 +213,8 @@ class TestNotAnMcpTool:
         assert "exportKnowledge" not in tool_names
         # Sanity: the legitimate model-facing tools ARE present.
         assert "getTableSchema" in tool_names
+
+
+@pytest.fixture(autouse=True)
+def _authorized_session_for_route_tests(prevalidated_session_scope):
+    """Session-scope auth is tested separately in test_session_catalog."""

@@ -71,12 +71,25 @@ class TestServiceKeyConfigured:
 
     @pytest.mark.parametrize("path", EXPORT_PATHS)
     def test_matching_service_key_body_matches_builder(self, path):
-        """The service-key path returns the same body the JWT path does."""
+        """User catalogs omit hidden columns; infrastructure exports retain them."""
         via_key = _client(SERVICE_KEY).get(path, headers={"X-Service-Key": SERVICE_KEY})
         via_jwt = _client(SERVICE_KEY).get(path, headers=AUTH)
         assert via_key.status_code == 200
         assert via_jwt.status_code == 200
-        assert via_key.content == via_jwt.content
+        if path == '/catalog/export':
+            from app.catalog_scope import scoped_catalog
+            from app.semantic_catalog import get_semantic_catalog
+            from app.semantic_catalog.export import build_catalog_export_from
+            from app.principal import Principal, current_principal
+            from app.catalog_scope import CatalogScope
+            principal_token = current_principal.set(Principal(subject='test', claims={}, catalog_scope=CatalogScope()))
+            try:
+                expected = build_catalog_export_from(scoped_catalog(get_semantic_catalog()), via_key.json()['catalog_sha'], trino_enabled=False)
+            finally:
+                current_principal.reset(principal_token)
+            assert via_jwt.json() == expected
+        else:
+            assert via_key.content == via_jwt.content
 
     @pytest.mark.parametrize("path", EXPORT_PATHS)
     def test_wrong_service_key_no_jwt_returns_401(self, path):
@@ -292,3 +305,8 @@ class TestPathNormalizationVariants:
             assert resp.status_code in (401, 404, 405, 307), (
                 f"{path} → {resp.status_code}: {resp.text[:200]}"
             )
+
+
+@pytest.fixture(autouse=True)
+def _authorized_session_for_route_tests(prevalidated_session_scope):
+    """Session-scope auth is tested separately in test_session_catalog."""

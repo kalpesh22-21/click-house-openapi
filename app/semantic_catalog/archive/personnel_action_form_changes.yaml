@@ -1,11 +1,6 @@
 database: dbpcm_warehouse
 table: personnel_action_form_changes
 source: mysql
-# Internal join-key contract; physical views must expose this encoding.
-trino_join_keys:
-  employee_code:
-    column: employee_code_num
-    encoding: employee_ascii4_be_v1
 description: Personnel Action Form workflow/change-log table. Each row records one proposed or approved field change within a personnel action transaction; one transaction can contain multiple changed fields.
 
 grain: [ paf_transaction_id, field_id ]   # within-tenant field-change grain; client_code is RLS-enforced below the agent (see AUTHORING_NOTES Tenancy)

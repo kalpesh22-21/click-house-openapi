@@ -24,6 +24,8 @@ the agent re-apply its own extraction functions (`_extract_columns`,
 and use the entry itself as the full overlay. The raw entry is therefore a
 strict SUPERSET of all three projections.
 
+Server-only column context_sql is stripped from exports and never executed here.
+
 Documented exceptions — backend-scoped keys
 -------------------------------------------
 The optional backend-scoped keys (see ``app/semantic_catalog/loader.py``) are
@@ -134,6 +136,7 @@ def build_catalog_export_from(
             for column_def in columns.values():
                 if not isinstance(column_def, dict):
                     continue
+                column_def.pop("context_sql", None)
                 for field in BACKEND_SCOPED_VALUE_FIELDS:
                     scoped_keys = tuple(
                         f"{backend}_{field}" for backend in KNOWN_BACKENDS

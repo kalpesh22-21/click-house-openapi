@@ -8,7 +8,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.exception_handlers import (
     http_exception_handler,
     request_validation_exception_handler,
@@ -18,6 +18,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.auth import require_principal
 from app.config import get_settings
 from app.employee_access import EmployeeAccessError
 from app.error_logging import configure_logging, log_failure
@@ -98,10 +99,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except CatalogValidationError as exc:
         logger.critical("Semantic Catalog RLS validation failed: %s", exc)
         sys.exit(1)
-
-    from app.catalog_verification import verify_catalog
-    import anyio
-    await anyio.to_thread.run_sync(verify_catalog, settings)
 
     if settings.trino_enabled:
         logger.info("Experimental Trino backend selected; metadata comes from the semantic catalog.")
@@ -253,3 +250,14 @@ def custom_openapi() -> dict[str, Any]:
 
 
 app.openapi = custom_openapi  # type: ignore[method-assign]
+
+
+@app.post("/session/catalog")
+async def materialize_session_catalog(request: Request, principal=Depends(require_principal), settings=Depends(get_settings)):
+    from app.session_catalog import materialize, SessionScopeError
+    import anyio
+    try:
+        snapshot = await anyio.to_thread.run_sync(materialize, principal, request.headers.get("X-Session-Id"), settings)
+        return JSONResponse(snapshot, headers={"Cache-Control": "no-store"})
+    except SessionScopeError as exc:
+        raise HTTPException(status_code=exc.status, detail={"error": exc.message, "code": exc.code}) from exc

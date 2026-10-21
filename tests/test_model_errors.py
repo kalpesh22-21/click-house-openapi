@@ -23,7 +23,7 @@ def test_type_error_has_neutral_structured_clickhouse_guidance(backend_code):
 
 @pytest.mark.parametrize('code,public,retry', [
     ('TRINO_SECURITY_NOT_CONFIGURED','EXECUTION_CONFIGURATION_ERROR','after_operator_action'),
-    ('TRINO_NATIVE_SOURCE_INVALID','EXECUTION_CONFIGURATION_ERROR','after_operator_action'),
+    ('TRINO_SOURCE_DEFINITION_INVALID','EXECUTION_CONFIGURATION_ERROR','after_operator_action'),
     ('TRINO_TLS_REQUIRED','EXECUTION_CONFIGURATION_ERROR','after_operator_action'),
     ('TRINO_IDENTITY_REQUIRED','EXECUTION_IDENTITY_REQUIRED','after_access_change'),
     ('TRINO_RESULT_LIMIT','QUERY_RESOURCE_LIMIT','after_scope_or_capacity_change'),

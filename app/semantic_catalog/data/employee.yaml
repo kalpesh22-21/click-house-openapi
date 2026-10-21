@@ -1,11 +1,6 @@
 database: dbpcm_warehouse
 table: employee
 source: mysql
-# Internal execution metadata; excluded from model-facing catalog exports.
-trino_join_keys:
-  employee_code:
-    column: employee_code_num
-    encoding: employee_ascii4_be_v1
 region: workforce_employee
 description: Current-state employee reporting relation with normalized snake_case column names.
 grain:

@@ -13,6 +13,7 @@ _QUERY_CATEGORIES = {
     'QUERY_RESOURCE_LIMIT': ('EXCEEDED_LOCAL_MEMORY_LIMIT', 'EXCEEDED_GLOBAL_MEMORY_LIMIT', 'EXCEEDED_TIME_LIMIT', 'GENERIC_INSUFFICIENT_RESOURCES', 'TRINO_RESULT_LIMIT'),
 }
 _MESSAGES = {
+    'CATALOG_CONTEXT_UNAVAILABLE': 'Column context could not be loaded.',
     'SQL_TYPE_MISMATCH': 'Some operands have incompatible types or values outside the supported conversion range.',
     'SQL_SYNTAX_ERROR': 'The submitted query has unsupported or invalid syntax.',
     'SQL_UNKNOWN_COLUMN': 'A referenced column could not be resolved.',
@@ -43,12 +44,16 @@ def model_error_payload(exc):
         public = 'EXECUTION_IDENTITY_REQUIRED'
         retry = 'after_access_change'
         guidance = 'Restore a valid authenticated session. Do not rewrite SQL to bypass access checks.'
-    elif code in {'TRINO_SECURITY_NOT_CONFIGURED', 'TRINO_TLS_REQUIRED', 'TRINO_NATIVE_SOURCE_INVALID'} or (
+    elif code in {'TRINO_SECURITY_NOT_CONFIGURED', 'TRINO_TLS_REQUIRED', 'TRINO_SOURCE_DEFINITION_INVALID'} or (
         isinstance(exc, ClickHouseQueryError) and re.search(r'\b(SCHEMA_NOT_FOUND|CATALOG_NOT_FOUND)\b', text)
     ):
         public = 'EXECUTION_CONFIGURATION_ERROR'
         retry = 'after_operator_action'
         guidance = 'Ask the operator to correct execution-service configuration. Rewriting SQL will not resolve this.'
+    elif code == 'CATALOG_CONTEXT_UNAVAILABLE':
+        public = 'CATALOG_CONTEXT_UNAVAILABLE'
+        retry = 'after_operator_action'
+        guidance = 'Ask the operator to check the column context query, result shape, limits and source permissions. Do not rewrite business SQL to bypass this failure.'
     elif isinstance(exc, ClickHouseUnavailableError):
         public = 'EXECUTION_SERVICE_UNAVAILABLE'
         retry = 'after_service_recovery'

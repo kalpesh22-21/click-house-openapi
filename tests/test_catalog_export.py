@@ -23,6 +23,8 @@ Coverage (security assertions preserved from the original REST test):
 
 from __future__ import annotations
 
+import pytest
+
 from starlette.testclient import TestClient
 
 from app.config import get_settings
@@ -206,3 +208,8 @@ class TestNotAnMcpTool:
         assert "export_catalog" not in tool_names
         # Sanity: the legitimate model-facing tools ARE present.
         assert "getTableSchema" in tool_names
+
+
+@pytest.fixture(autouse=True)
+def _authorized_session_for_route_tests(prevalidated_session_scope):
+    """Session-scope auth is tested separately in test_session_catalog."""

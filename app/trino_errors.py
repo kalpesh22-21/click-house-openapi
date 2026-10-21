@@ -133,13 +133,6 @@ for _name in (
 ):
     _HINTS[_name] = _HINTS["EXCEEDED_LOCAL_MEMORY_LIMIT"]
 
-# An optimized key can be absent, have the wrong type, or lack a comparison
-# operator. Other errors do not justify running the query again with string keys.
-JOIN_FALLBACK_ERRORS = frozenset(
-    {"COLUMN_NOT_FOUND", "TYPE_MISMATCH", "OPERATOR_NOT_FOUND"}
-)
-
-
 def rewrite_trino_error(exc) -> str:
     """Return safe guidance without relying on downstream redaction."""
     try:

@@ -54,7 +54,7 @@ class Principal:
 
     subject: str
     claims: Dict[str, Any] = field(default_factory=dict)
-    token: str = ""
+    token: str = field(default="", repr=False, compare=False)
     catalog_scope: CatalogScope | None = None
 
 

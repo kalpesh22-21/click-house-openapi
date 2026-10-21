@@ -160,7 +160,7 @@ def test_shared_connection_auth_and_noauth(settings, monkeypatch):
     settings.trino_user, settings.trino_password = "service", "fake-password"
     trino_client._connect(settings, "pc|client|user")
     kw = connect.call_args.kwargs
-    assert kw["user"] == "service" and kw["auth"] is not None
+    assert kw["user"] == "pc|client|user" and kw["auth"] is not None
     assert kw["port"] == 443 and kw["http_scheme"] == "https"
 
 
@@ -196,9 +196,43 @@ def test_registry_transport_boundaries(monkeypatch):
         NoRedirects().redirect_request(None, None, 302, "", {}, "http://other.test")
 
 
-def test_native_catalog_casing_is_preserved():
-    from app.trino_native_sources import _passthrough
-    relation = _passthrough("online__OKC__0011__dbonline", "SELECT 1")
-    assert '"online__OKC__0011__dbonline"' in relation.sql(dialect="trino")
+def test_view_catalog_casing_is_preserved():
+    from app.trino_metadata import physical_target
+    settings = Settings(_env_file=None)
+    entry = {"source": "mysql", "table": "employee"}
+    target = physical_target(entry, "online__OKC__0011__dbonline", settings)
+    assert target == ("online__OKC__0011__dbonline", "dbonline", "employee")
     with pytest.raises(QueryValidationError):
-        _passthrough('bad"; SELECT 1', "SELECT 1")
+        physical_target(entry, 'bad"; SELECT 1', settings)
+
+
+def test_authenticated_query_keeps_identity_and_aggregation_in_trino(settings, monkeypatch):
+    from trino.auth import BasicAuthentication
+
+    connect = MagicMock()
+    monkeypatch.setattr("trino.dbapi.connect", connect)
+    settings.trino_user, settings.trino_password = "service", "fake-password"
+    for identity in ("pc|tenant_a|alice", "pc|tenant_b|bob"):
+        trino_client._connect(settings, identity, mysql_catalog="online__OKC__0011__dbonline")
+        kwargs = connect.call_args.kwargs
+        assert kwargs["user"] == identity
+        assert kwargs["auth"] == BasicAuthentication("service", "fake-password")
+        assert kwargs["session_properties"]["online__OKC__0011__dbonline.aggregation_pushdown_enabled"] == "false"
+    trino_client._connect(settings, "service")
+    assert not any("aggregation_pushdown" in key for key in connect.call_args.kwargs["session_properties"])
+
+
+def test_real_client_headers_separate_query_user_from_service_auth(settings):
+    """Exercise the installed client's wire headers without opening a network connection."""
+    from requests.auth import HTTPBasicAuth
+
+    settings.trino_user, settings.trino_password = "service", "fake-password"
+    conn = trino_client._connect(settings, "pc|tenant|alice", mysql_catalog="online__okc__01__dbonline")
+    try:
+        request = conn._create_request()
+        headers = request.http_headers
+        assert headers["X-Trino-User"] == "pc|tenant|alice"
+        assert "online__okc__01__dbonline.aggregation_pushdown_enabled=false" in headers["X-Trino-Session"]
+        assert conn._http_session.auth == HTTPBasicAuth("service", "fake-password")
+    finally:
+        conn.close()

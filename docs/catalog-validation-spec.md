@@ -1,130 +1,155 @@
-# Catalog based validation and startup view verification
+# User-scoped semantic catalog
 
-Status: Implemented with a dummy permission resolver
+Status: access-adapter composition and per-column SQL enrichment implemented.
+Both access adapters deliberately allow all until production permission rules are supplied.
 
-The authored schema catalog is the authoritative contract for query validation. Provided views and native source relations must implement that contract. Validate their alignment at startup and remove redundant live column discovery from every query request. User access is determined by schema and column scope applied to the catalog, while existing source row policies continue to enforce row access.
+## Catalog lifecycle
 
-## Current behavior and problem
+Authored YAML supplies logical schemas, tables, columns, types, and semantic
+metadata. Query provenance resolves dependencies against this base schema, then
+checks those dependencies against the request's effective permissions. Metadata
+responses apply the same scope and deployment restrictions and omit hidden columns.
+Physical metadata never silently changes the base schema.
 
-MCP `runQuery` always requests provenance. The service loads a schema for provenance and scope validation through `get_catalog_schema()`. With Trino enabled, this bypasses the direct ClickHouse schema cache and calls live discovery. The first discovery in an MCP HTTP request sweeps all eligible relations; later calls reuse only that request's snapshot.
+Startup validates the local catalog, including its RLS projection. It does not
+require verification identities or an all-shard view sweep. Runtime registry
+resolution and catalog-name checks remain intact. Existing health probes report
+backend connectivity separately. YAML changes require a restart.
 
-This introduces a connectivity probe, metadata reads, and relation validation probes before business SQL executes. Native MySQL sources use `SELECT * ... LIMIT 0` to obtain columns. The sweep can include tables unrelated to the query and repeats on the next request.
+## Session access service
 
-Column provenance and scope enforcement require a reliable schema definition. They do not require repeated source discovery when the authored catalog is the contract.
+`resolve_principal_permissions` runs during `POST /session/catalog` with the user
+JWT and `X-Session-Id`. It invokes:
 
-## Decisions
+- `jwt_permission_scope(principal)`: JWT access adapter, currently allow-all.
+- `sql_permission_scope(principal)`: SQL access adapter, currently allow-all and
+  performing no database I/O.
 
-- Use the authored schema catalog for column names, logical types, table resolution, star expansion, and provenance validation.
-- Verify that configured views and native sources implement that catalog at startup, before accepting query traffic.
-- Remove live schema discovery and availability probes from the query validation path, including `runQuery`, `explainQuery`, and equivalent internal service calls.
-- Serve metadata tools from the catalog filtered by the caller's effective scope. `sampleRows` uses the same catalog and scope rules before executing its data query.
-- Keep authorization checks on every request. Removing discovery must not remove column checks, schema checks, tenant routing, row policies, or scratch session isolation.
-- Introduce an explicit schema and column scope contract. A server-side permission-query adapter determines which portion of the catalog a user may access; its initial dummy grants the full catalog.
+The adapters' schema and column grants are intersected. `None` means no additional
+restriction; an empty frozenset denies access. Database aliases are canonicalized
+before intersection. Invalid results or exceptions return
+`SCOPE_RESOLUTION_UNAVAILABLE`; there is no allow-all fallback on failure.
 
-## Catalog and scope model
+The verified principal is bound while the adapters run, then restored. The final
+scope is frozen into explicit grants in a signed scope token, alongside a trimmed
+catalog snapshot. The agent persists both in its existing Couchbase
+`session::<session_id>` document. `MCP_SERVICE_KEY` signs and verifies the token;
+no separate signing key is required. `SESSION_SCOPE_TTL_SECONDS` defaults to 3600.
+Every live request verifies the user JWT and `X-Catalog-Scope`, including owner,
+session, expiry, signature, and authored-catalog version, without running permission
+adapters. Missing, stale, expired, or invalid scopes fail closed. Refresh replaces
+the snapshot and token together. Context SQL stays on demand and is omitted from
+the snapshot. Future SQL adapter calls can use the caller's bound identity without
+recursively calling the public query service. JWT claim names, access SQL, and
+result mapping remain to be defined. The legacy `column_scope` claim is still
+ignored; neither stub interprets it.
 
-Maintain one validated base catalog for the running deployment. It describes the exposed logical schemas, tables, columns, and types, including mappings to their configured source relations. Physical metadata must never silently add columns to this catalog or remove authored entries from it.
+Execution checks dependencies including filters, joins, grouping, and ordering.
+SELECT * expands against the base catalog and rejects inaccessible dependencies
+rather than silently changing its result shape. Source row policies and scratch
+session ownership remain independent security controls.
 
-Schema scope selects the logical schemas available to a caller. Column scope selects allowed columns within those schemas and tables. Schema scope here means logical database or schema names; table access follows from the permitted catalog entries and columns. Any future table-level grant must be represented explicitly rather than inferred from a source probe.
+## Trino authentication
 
-The effective user catalog is the intersection of the base catalog, deployment restrictions, schema scope, and column scope. A column grant cannot override a denied schema. Metadata tools expose only this effective catalog, omitting tables with no visible columns.
+Trino authentication is unchanged: `TRINO_USER` / `TRINO_PASSWORD` authenticate
+the service connection, while the query user is the verified claim tuple
+`proc_center|clientcode|user_name` (claim names are configurable). Trino must permit
+the service principal to impersonate those identities. Request JWTs are **not**
+forwarded to Trino. Context queries use the same connection helper and identity.
 
-Use explicit representations for unrestricted access, a restricted allowlist, and denied access. A missing or failed scope resolution must not mean unrestricted access. JWT column scopes are retired. Tokens provide identity and session binding only; their former column_scope claim is ignored. The token issuer neither accepts nor emits it. Server-resolved CatalogScope is the authorization input.
+## Per-column context SQL
 
-For execution, resolve dependencies against the base catalog and check every dependency against the effective user catalog. This includes columns used only in filters, joins, grouping, ordering, and nested queries. Do not resolve a disallowed column as though it were nonexistent and accidentally authorize a different binding.
+One optional `context_sql` on a column returns **all dynamic context for that
+column**. getTableSchema first applies scope, hidden-column projection, and any
+requested column filter. Only retained columns' context queries run, once each.
 
-Preserve the existing strict behavior for `SELECT *`: expand against the base catalog and reject if any expanded user-visible column is outside scope. Do not silently project a narrower result. Preserve the existing treatment of internal row-policy columns and the separate session-bound scratch schema rules.
+Example authoring shape (lookup relation and fields are illustrative, not a
+production earning-code mapping):
 
-## Startup verification
+```yaml
+database: dbpcm_warehouse
+table: accrual_events
+source: mysql
+columns:
+  earn_code:
+    type: Nullable(String)
+    client_defined: true
+    description: Client-defined accrual earning code.
+    context_sql: |
+      SELECT category AS context_key, earn_code, earn_description
+      FROM earning_code_lookup
+      WHERE client_code = :clientcode
+```
 
-Load and validate the authored catalog, source mappings, and native source contracts during application startup. Using a deployment-controlled verification identity, inspect the provided view or source output and compare it with the catalog. Verification must cover each configured source target and eligible shard that the deployment will serve, rather than assuming one shard represents every shard.
+The SQL uses the serving backend's native dialect: Trino when enabled,
+ClickHouse otherwise. It must be one read-only SELECT/WITH statement. Existing
+statement, write/settings, and unsafe table-function restrictions apply. Lookups
+can reference physical relations absent from the semantic catalog, but only
+inside the owning entry's logical database/source. Bare relations are resolved
+into that source's physical catalog/schema using the caller's shard. Caller SQL
+cannot select a different shard via this mechanism. Catalogued MySQL relations expand through their private source templates. Raw
+MySQL lookup relations resolve directly to shard.dbonline; their server-authored
+context SQL must supply the required tenant/access predicates, using bound claims.
+ClickHouse lookups use native-query relations with FINAL and tenant/JTI settings
+when served through Trino. Source row policies must cover lookup tables too.
 
-For each exposed relation, verify:
+Named `:claim_name` placeholders bind scalar values from verified JWT claims.
+They never interpolate SQL text or identifiers. Missing/non-scalar claim values
+fail the operation. Parameters are ordered by final rendered SQL, including CTEs.
+Context queries run directly through the trusted read-only backend path, without
+recursing through access resolution or interpreting physical lookup names as
+agent-authored logical SQL. ClickHouse-source lookups retain employee-access
+refresh behavior. Trino context requires `TRINO_SECURITY_READY`.
 
-- The mapped relation exists and its dependencies can be resolved.
-- Every catalog column exists under its expected mapped name.
-- Output types are compatible with the logical catalog types under an explicit backend type compatibility policy.
-- The user-visible column set matches the catalog. Extra physical columns are permitted only when explicitly designated as internal and prevented from entering user query results or metadata.
+### Result contract
 
-Compare logical mappings and compatible types rather than requiring identical backend type strings. Column order is part of the contract wherever star expansion or result shaping relies on it. Verification may use metadata queries and zero-row probes; it must not fetch business rows.
+Return uniquely named columns including a non-empty string `context_key` and at
+least one other field. Each row's remaining fields become a record under that
+key. Multiple rows with the same key form a list; SQL controls their ordering.
 
-A missing relation, missing column, incompatible type, unexpected exposed column, or inability to verify a required target fails startup readiness. Report actionable relation and column diagnostics without credentials, tenant data, or private source SQL. Do not substitute stale discovered metadata or silently shrink the catalog to make startup pass.
+```yaml
+columns:
+  earn_code:
+    type: Nullable(String)
+    client_defined: true
+    description: Client-defined accrual earning code.
+    context:
+      vacation:
+        - earn_code: VAC
+          earn_description: Vacation
+      timeoff:
+        - earn_code: PTO
+          earn_description: Paid time off
+```
 
-The verification identity and required target inventory must be explicitly configured. Startup cannot rely on an arbitrary request's JWT or prove every user's runtime permissions. Row-policy behavior and user-specific authorization remain separate checks.
+Values above are illustrative. Zero rows with a valid result schema produce
+`context: {}`. The query's context replaces dynamic context for that column; the
+shared YAML definition is never mutated. Other semantic metadata is preserved.
+MCP getTableSchema and the REST `/tables/schema` column response expose context.
 
-Publish the immutable catalog snapshot and its version only after verification succeeds. Catalog, source contract, or served-target changes require verification before activation, through restart or an explicit reload operation. A newly routed target must already be verified for the active catalog version; do not trigger lazy discovery from a user query.
+### Execution boundaries and errors
 
-## Request execution
+runQuery, explainQuery, sampleRows, listDatabases, and ordinary listTables do not
+execute context SQL. Catalog exports remain static and do not enrich columns.
+`context_sql` is never emitted by getTableSchema or catalog exports. A fresh lookup
+runs on each applicable schema request; there is no cross-request context cache.
 
-For each query:
+Context runs under caller identity and existing backend execution limits. It also
+has `CATALOG_CONTEXT_MAX_ROWS` (default 1000) and `CATALOG_CONTEXT_MAX_BYTES`
+(default 1048576) caps. The service does not inject a truncating LIMIT into these
+queries: oversized results fail instead of returning incomplete context. An
+explicit authored LIMIT remains the author's chosen semantics.
 
-1. Resolve the authenticated identity and effective schema and column scope.
-2. Parse and validate SQL against the loaded catalog and existing SQL guardrails.
-3. Resolve provenance and enforce schema, column, and scratch session restrictions.
-4. Route and rewrite the query using existing tenant identity and source policies.
-5. Execute the requested SQL and return its results and provenance.
+Missing identity, invalid SQL, routing failures, source errors, invalid result
+shape, or exceeded caps fail the entire schema operation with sanitized
+`CATALOG_CONTEXT_UNAVAILABLE`. MCP preserves this stage-specific error and advises
+operator action. Backend exceptions, private SQL, and identity values are not
+included in the error. There is no silent partial success or empty fallback.
 
-Steps 2 and 3 perform no database metadata I/O. Remove the redundant `SELECT 1`, `information_schema.columns`, and `LIMIT 0` discovery calls from this path. This requirement applies to MySQL, mixed-source, and ClickHouse queries using the Trino validation path. Direct ClickHouse validation should also use the authored catalog rather than rebuilding schema from `system.columns`; source verification belongs at startup.
+## Deployment work remaining
 
-After startup, a removed view, changed column, or permission revocation is reported through the actual execution failure. Do not automatically rediscover schema, broaden scope, or retry with a different catalog. Startup verification establishes deployment alignment; it does not guarantee that sources remain available forever.
-
-## Permission query resolver
-
-`query_permission_scope(principal)` is the server-controlled permission adapter.
-It currently returns an unrestricted `CatalogScope`, granting every authored
-schema, table, and user-visible column without a database round trip. Deployment
-restrictions, hidden-column projection, and source row policies continue to apply.
-
-Resolve permissions once after identity and session validation, before executing
-a tool or route, and bind them to the request principal. REST and MCP use the
-same resolver. Repeated metadata and validation operations within a request reuse
-that scope; concurrent requests never share permission state. Resolver exceptions
-or invalid return values fail closed with `SCOPE_RESOLUTION_UNAVAILABLE` (503).
-An explicit empty allowlist denies access; it is never treated as the dummy default.
-
-A future real query replaces only this adapter. It receives verified identity
-parameters and must use a trusted execution path that does not recursively call
-`runQuery` or depend on the scope it is computing. Unknown grants cannot expand
-the authored catalog. Its SQL, result mapping, and revocation behavior will be
-specified when the authorization source is available. No physical discovery is
-part of permission resolution.
-
-JWT `column_scope` is no longer required, parsed, or used for authorization.
-Legacy tokens containing it remain usable but their claim is discarded. The token
-issuer rejects that field, including injection through extra claims, and emits
-identity/session claims only.
-
-## Implementation outline
-
-- Change `app/catalog.py` to expose the validated authored catalog snapshot for query validation.
-- Separate startup verification from `app/trino_metadata.py` discovery and register it in application startup and readiness handling.
-- Update service metadata, provenance, and scope paths to use the catalog snapshot and scope resolver.
-- Remove request discovery memoization where it is no longer used, including its MCP middleware binding. Keep physical inspection only in startup verification and explicit operator diagnostics.
-- Preserve backend routing, source row policies, native contract checks, SQL guardrails, and scratch isolation.
-- Update documentation and tests that currently assert one discovery connection per query to assert zero discovery calls.
-
-## Acceptance criteria
-
-- Startup succeeds for matching catalog and source contracts, and readiness fails for required target verification failures or schema mismatches.
-- Verification covers both secured view mode and native MySQL source mode, including configured shard differences and backend type mappings.
-- Repeated `runQuery` and `explainQuery` calls perform no discovery probes, even on the first request. Validation-only failures execute neither metadata probes nor business SQL.
-- `listDatabases`, `listTables`, and `getTableSchema` read the scoped catalog without source discovery. `sampleRows` performs only its authorized data execution, excluding unrelated existing authorization or routing operations.
-- Provenance remains correct for joins, CTEs, aliases, expressions, and star expansion. Out-of-scope dependencies are rejected even when absent from the output projection.
-- Schema denial overrides column grants. Explicit unrestricted scope, empty restricted scope, missing scope, and failed scope resolution have distinct tested behavior. Concurrent users never share effective permissions.
-- Existing tenant row isolation and scratch session isolation tests continue to pass.
-- Source drift after startup produces an execution error without metadata rediscovery or scope changes.
-- Catalog reloads or newly served targets cannot become active before successful verification.
-
-## Scope of delivery
-
-Implemented: authored-catalog query validation on both backends; catalog-backed
-warehouse metadata and sample projections; removal of Trino request discovery
-and middleware memo binding; startup verification for REST and MCP; verified-shard
-routing guard; per-request schema and column permission resolution; dummy full
-catalog grants; removal of JWT column-scope support from validation and issuance.
-
-Dynamic scratch metadata retains live inspection after session checks. Startup
-verification configuration is required before serving traffic, and catalog or
-target updates use verified restart. The dummy permission adapter is the current
-policy; replacing it with the real authorization query awaits that source's SQL
-and result contract.
+Supply the JWT permission contract and SQL permission lookup when ready. Add real
+per-column context SQL to the desired YAML entries using the result contract above,
+then regenerate the catalog content fingerprint through the existing authoring
+workflow. This implementation deliberately does not invent production access rules
+or business-code mappings.

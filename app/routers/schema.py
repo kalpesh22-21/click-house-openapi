@@ -78,6 +78,7 @@ def list_tables(
 @router.get(
     "/tables/schema",
     response_model=SchemaResponse,
+    response_model_exclude_none=True,
     operation_id="getTableSchema",
     summary="Get column schema for a table",
     description=(
@@ -112,7 +113,7 @@ def get_table_schema(
         database=result["database"],
         table=result["table"],
         columns=[
-            ColumnInfo(name=c["name"], type=c["type"], comment=c["comment"])
+            ColumnInfo(name=c["name"], type=c["type"], comment=c["comment"], context=c.get("context"))
             for c in result["columns"]
         ],
     )

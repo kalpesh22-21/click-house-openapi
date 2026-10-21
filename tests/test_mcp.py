@@ -1380,3 +1380,8 @@ class TestMcpHealthEndpoints:
             assert _clickhouse_health_check() is False
         # The route should never surface a 500; get_client is retried once.
         assert get_client.call_count == 2
+
+
+@pytest.fixture(autouse=True)
+def _authorized_session_for_route_tests(prevalidated_session_scope):
+    """Session-scope auth is tested separately in test_session_catalog."""

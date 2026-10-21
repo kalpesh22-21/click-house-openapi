@@ -23,6 +23,7 @@ _TEST_ENV = {
     "CLICKHOUSE_PASSWORD": "test-password",
     "CLICKHOUSE_DATABASE": "default",
     "CLICKHOUSE_SECURE": "false",
+    "MCP_SERVICE_KEY": "test-session-scope-secret-not-production",
     "API_KEY": "test-api-key-abc123",  # deprecated/unused; kept so old env stays valid
     # OIDC/JWT auth config — required for auth_configured() to be True so the app
     # starts.  The JWKS URL is never fetched in tests: the autouse _patch_jwks
@@ -200,3 +201,17 @@ def test_client():
             from app.main import app
             with TestClient(app, raise_server_exceptions=False) as client:
                 yield client, mock_execute, mock_client
+
+
+@pytest.fixture
+def prevalidated_session_scope(monkeypatch):
+    """Isolate legacy route/JWT/scratch tests from session-token provisioning.
+
+    Those suites test their named layer using an already-authorized session.
+    test_session_catalog exercises the real initialization and token verifier,
+    including missing tokens, tampering, expiry, and cross-session replay.
+    """
+    from dataclasses import replace
+    from app.catalog_scope import CatalogScope
+    monkeypatch.setattr('app.session_catalog.verify_scope',
+                        lambda principal, *_: replace(principal, catalog_scope=CatalogScope()))

@@ -45,9 +45,12 @@ def test_jwt_without_scope_is_valid():
     assert principal.catalog_scope is None
 
 
-def test_dummy_grants_whole_catalog_without_backend_calls(monkeypatch):
+def test_dummy_grants_whole_catalog_without_permission_backend_calls(monkeypatch):
     execute = MagicMock(side_effect=AssertionError("metadata I/O"))
     monkeypatch.setattr(service, "_execute", execute)
+    # Column enrichment is separate from permission resolution and may perform I/O.
+    context_lookup = MagicMock(return_value=(["context_key", "earn_code"], []))
+    monkeypatch.setattr("app.catalog_context.execute_context_sql", context_lookup)
     principal = resolve_principal_permissions(Principal("user"))
     token = current_principal.set(principal)
     try:
@@ -99,48 +102,30 @@ def _app(transport):
     )
 
 
-@pytest.mark.parametrize("transport", ["rest", "mcp"])
-def test_resolves_once_per_request_and_isolates_users(monkeypatch, transport):
-    def query(principal):
-        return CatalogScope(columns=frozenset({f"db.t.{principal.subject}"}))
-
-    resolver = MagicMock(side_effect=query)
+def test_session_grants_reused_without_running_adapters(monkeypatch):
+    from app.session_catalog import materialize, verify_scope
+    from tests.catalog_helpers import authored_catalog
+    catalog = authored_catalog({"db.t": {"alice": "String", "bob": "String"}})
+    monkeypatch.setattr("app.session_catalog.get_semantic_catalog", lambda: catalog)
+    resolver = MagicMock(side_effect=lambda p: CatalogScope(columns=frozenset({f"db.t.{p.subject}"})))
     monkeypatch.setattr(catalog_scope, "query_permission_scope", resolver)
-    app = _app(transport)
-
-    def request(user):
-        with TestClient(app) as client:
-            response = client.get(
-                "/inspect",
-                headers={
-                    "Authorization": f"Bearer {make_jwt(sub=user, column_scope=['ignored'])}"
-                },
-            )
-            assert response.status_code == 200, response.text
-            return response.json()
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(request, ["alice", "bob"]))
-    assert results == [{"columns": ["db.t.alice"]}, {"columns": ["db.t.bob"]}]
+    for user in ("alice", "bob"):
+        principal = Principal(user, {"sub": user})
+        snapshot = materialize(principal, user, get_settings())
+        for _ in range(2):
+            verified = verify_scope(principal, user, snapshot["scope_token"], get_settings())
+            assert verified.catalog_scope.columns == frozenset({f"db.t.{user}"})
     assert resolver.call_count == 2
     assert current_principal.get() is None
 
 
-@pytest.mark.parametrize("transport", ["rest", "mcp"])
-def test_permission_failure_blocks_request_without_identity_leak(
-    monkeypatch, transport
-):
-    monkeypatch.setattr(
-        catalog_scope,
-        "query_permission_scope",
-        MagicMock(side_effect=RuntimeError("private authorization SQL")),
-    )
-    response = TestClient(_app(transport)).get(
-        "/inspect", headers={"Authorization": f"Bearer {make_jwt()}"}
-    )
-    assert response.status_code == 503
-    assert "SCOPE_RESOLUTION_UNAVAILABLE" in response.text
-    assert "private authorization SQL" not in response.text
+def test_permission_failure_blocks_session_initialization(monkeypatch):
+    from app.session_catalog import materialize
+    monkeypatch.setattr(catalog_scope, "query_permission_scope", MagicMock(side_effect=RuntimeError("private authorization SQL")))
+    with pytest.raises(ClickHouseUnavailableError) as caught:
+        materialize(Principal("alice"), "session", get_settings())
+    assert caught.value.code == "SCOPE_RESOLUTION_UNAVAILABLE"
+    assert "private authorization SQL" not in str(caught.value)
     assert current_principal.get() is None
 
 

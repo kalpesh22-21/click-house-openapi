@@ -52,87 +52,62 @@ secrets (the deployment may source these from Vault key `trino`). HTTPS and port
 authentication refuses HTTP. One connection helper is shared by execution,
 metadata and catalog checks. Direct ClickHouse credentials remain separate.
 
-Cluster execution uses `TRINO_MYSQL_SOURCE_MODE=system_query` (the default) and
-private native-source contracts. `views` remains an explicit compatibility mode
-for pre-existing secured views in local development; its provisioning scripts
-and Docker coordinator have been removed. Use unauthenticated local connections
-for this mode so the composite request identity remains the Trino user.
-`TRINO_SECURITY_READY=true` must only be set after source row policies and native
-contracts are provisioned. Caller JWT claims continue to supply tenant identity
-and processing center; the registry never supplies authorization identity.
+Trino execution expands server-owned MySQL SELECT definitions and wraps ClickHouse
+sources in the connector's native-query table function. Logical SQL is validated
+before source expansion. Trino owns join planning and connector pushdown.
 
-## Catalog verification at startup
+Set `TRINO_SECURITY_READY=true` only after the private SQL templates and Trino/ClickHouse
+policies are provisioned. The query user is always the verified claim tuple
+`proc_center|clientcode|user_name` (claim names are configurable). `TRINO_USER` and
+`TRINO_PASSWORD` authenticate the service account; they do not replace the query
+user. Grant that authenticated principal permission to impersonate the permitted
+composite identities in Trino access control. A denied impersonation fails the
+request; there is no retry as the service user. Connectivity and catalog inventory
+probes may use the service account because they are not data requests.
 
-The authored YAML catalog is the schema contract for query validation on both
-backends. MySQL and mixed-source requests no longer run `SELECT 1`,
-`information_schema.columns`, or `LIMIT 0` discovery sweeps before executing SQL.
-Metadata tools on both backends read the catalog filtered by server-resolved
-permissions. Warehouse `sampleRows` projects authored visible columns explicitly
-and executes only its data query. Dynamic scratch-table metadata remains a
-separate session-gated inspection path. Unknown warehouse tables have no
-metadata even when the legacy catalog-table restriction flag is disabled.
+The MySQL template renderer replaces `split_part(CURRENT_USER, '|', N)` with
+escaped literals from the verified identity tuple. The registry selects shards, not grants. Do not expose unauthenticated
+Trino directly to callers: without service authentication a supplied user name is
+only a claim, not proof of identity. See the official Python client's
+[user impersonation contract](https://github.com/trinodb/trino-python-client#user-impersonation).
 
-Both REST and MCP startup verify source alignment before serving traffic.
-`CATALOG_VERIFICATION_TARGETS_PATH` must point to a deployment-owned JSON file:
+## Catalog lifecycle
 
-```json
-[
-  {
-    "shard": "online__example__01__dbonline",
-    "claims": {
-      "proc_center": "verification-center",
-      "clientcode": "verification-client",
-      "user_name": "verification-user",
-      "jti": "verification-access-identity"
-    }
-  }
-]
-```
+The authored YAML catalog supplies logical types and columns for query validation
+on both backends. REST and MCP startup load and validate the local catalog,
+including its hidden RLS projection. Startup does not enumerate tenant shards,
+impersonate verification identities, or probe every source view. No verification
+identity file or startup-approved shard set is required.
 
-These are placeholders. Configure actual claim names according to the existing
-Trino identity and ClickHouse tenant-setting mappings. Do not commit real
-identities or private native SQL. Mount this file read-only. For direct
-ClickHouse, omit `shard` and supply claims required by its tenant settings.
+Physical targets are resolved from the authenticated caller at execution time.
+Registry validation and runtime catalog-name checks remain in place. A newly
+routed shard does not require a service restart solely to pass a startup gate.
+Source unavailability or schema drift surfaces as an execution error; it does not
+silently change the authored schema. Changes to YAML still require a restart.
+Backend connectivity is reported by the existing health probes; those probes do
+not prove user permissions or view correctness.
 
-For Trino deployments containing MySQL sources, the file must cover every shard
-in the active environment/database routing inventory. Each verification identity
-must route to its declared shard. Startup opens a connection per target and checks
-source output with zero-row probes in both secured-view and native-source modes.
-Missing columns, unexpected non-internal columns, column-order differences,
-incompatible types, inaccessible sources, or incomplete target coverage prevent
-startup. Direct ClickHouse uses DESCRIBE plus a zero-row dependency check.
+Warehouse metadata currently reads the scoped authored catalog. Query validation
+does not run `SELECT 1`, `information_schema.columns`, or `LIMIT 0` discovery
+sweeps. The unused diagnostic discovery/memo API has been removed. Dynamic
+scratch metadata retains its session-gated live inspection.
 
-Logical Nullable and LowCardinality wrappers are preserved in validation.
-Trino type checks allow explicit compatible backend representations, integer
-widening, sufficient decimal capacity/scale, and sufficient timestamp precision.
-Unrecognized conversions fail closed and need an explicit compatibility rule.
-Startup verification does not prove row-policy correctness or every user's
-permissions; the existing deployment security checks remain required.
+Catalog permissions are resolved at session initialization or refresh by
+`resolve_principal_permissions(principal)` in `app/catalog_scope.py`. It intersects the
+JWT and SQL adapter results. Both adapters currently return unrestricted access
+by explicit policy; production permission claims and SQL will be supplied later.
+Invalid results or adapter errors fail closed. Legacy JWT `column_scope` remains
+ignored. Deployment restrictions, hidden columns, row policies, and scratch-session
+gates still apply. The agent saves the scoped catalog and signed scope token in
+its session document. Subsequent calls send `X-Catalog-Scope` with the user JWT
+and `X-Session-Id`; verification uses the existing `MCP_SERVICE_KEY` and does not
+repeat permission lookups. There is no default catalog fallback.
 
-Restart after provisioning source, catalog, or target changes. Newly routed shards
-are rejected until startup verification includes them. Source drift after startup
-surfaces as an execution failure; requests never rediscover or shrink the catalog.
-There is no hot catalog reload in this implementation.
-
-Catalog permissions come from `query_permission_scope(principal)` in
-`app/catalog_scope.py`, resolved once per authenticated REST or MCP request.
-The current dummy returns unrestricted catalog access: all catalog schemas,
-tables, and visible columns. It performs no SQL or metadata I/O. Existing
-`ALLOWED_DATABASES`, hidden-column projections, tenant row policies, and scratch
-session gates still apply.
-
-Replace this adapter with a server-controlled, identity-parameterized permission
-query when its source is available. It must return a `CatalogScope`; `None` in a
-dimension means unrestricted, while an empty allowlist denies access. An invalid
-result or failed lookup returns `SCOPE_RESOLUTION_UNAVAILABLE` (503), never an
-allow-all fallback. Permission results live only on the request principal.
-
-JWTs carry identity and session binding, not catalog grants. The API accepts
-tokens without `column_scope` and ignores/discards that retired claim even when
-present in an old token. The token issuer no longer exposes or emits the field;
-passing it to `/token`, including through extra claims, is rejected. Deploy token
-issuers and callers with this contract; signed identity and `sid_hash` checks
-are unchanged.
+Columns may declare server-only `context_sql`. getTableSchema executes one lookup
+per requested accessible column on the caller's resolved source and attaches its
+complete result as column context. Listings, ordinary queries, and exports do not
+run these lookups; exports omit the SQL. See [the catalog design and result
+contract](catalog-validation-spec.md) for authoring, limits, and failure behavior.
 
 ## Cache operations
 
@@ -147,117 +122,106 @@ supply a saved API export. It performs no DDL. Restart API workers after warming
 if they must discard an existing process memo immediately; otherwise the memo
 expires naturally. A refresh failure preserves the previous file.
 
-Mount native policy contracts read-only and the optional cache on a private
-writable volume. Do not commit credentials, inventory snapshots or private SQL.
+Mount the optional cache on a private writable volume. Do not commit credentials, inventory snapshots or private SQL.
 There is no rollback to the removed local snapshot-based routing implementation.
 
-## Metadata and hidden join keys
+## Metadata
 
-Discovery intersects live backend metadata with the authored semantic catalog.
-The public database alias is `dbpcm_datawarehouse`; scope keys use the canonical
-`dbpcm_warehouse` namespace. Metadata is memoized only within an authenticated
-request, with source-mode and identity separation.
-
-`trino_join_keys` is internal metadata mapping a logical string key to its
-numeric column and declared encoding. Eligible joins are rewritten only when
-both operands declare the same encoding. The deployment must validate the
-encoding's correctness; a matching label does not prove collision freedom.
-This metadata is removed from model-facing schema and catalog exports.
+Request metadata and validation use the authored catalog, filtered by server-resolved
+permissions. The public database alias is `dbpcm_datawarehouse`; scope keys use
+`dbpcm_warehouse`. Legacy internal join metadata remains excluded from public
+exports; it does not change query joins. Access-adapter composition and per-column context
+are described in [the catalog design](catalog-validation-spec.md).
 
 ## Verification
 
 Run the unit suite with `python -m pytest tests --ignore=tests/integration
 --ignore=tests/private`. Live tests must use isolated synthetic data or explicit
 operator-provided test access. Do not commit plans containing identities, source
-SQL, grant lists or business rows. Validate private policy equivalence and source
-index plans before enabling a new mode in production.
+SQL, grant lists or business rows. Validate template authorization and deployment policies before serving traffic.
 
-## Native source substitution (October 2026)
+## Source execution
 
-ClickHouse logical relations now compile to `TABLE(clickhouse.system.query(...))`.
-The server injects authenticated tenant settings and the existing read limits,
-`readonly=2`, and quoted `final` setting into each native SELECT. ClickHouse must
-apply row policies to the connector account and the underlying views; a definer
-view that bypasses those policies is not safe. Employee-access freshness is checked
-before executing any ClickHouse or mixed-source query, including numeric-join retries.
-The model continues to see logical tables, not native SQL or hidden join metadata.
+MySQL logical tables expand into private Trino SELECT templates loaded from
+`TRINO_MYSQL_SOURCES_DIR` (default `app/semantic_catalog/mysql_views`). Each template is named
+`<logical_table>.txt`; `labor_allocation` also accepts `labour_allocation.txt`.
+The six supported tables are accrual_events, accrual_balances, employee,
+department, expense and labor_allocation. The six catalog entries without
+source definitions are retained under `app/semantic_catalog/archive`, outside
+the active catalog. Missing or invalid templates fail with
+`TRINO_SOURCE_DEFINITION_INVALID`; there is no deployed-view fallback.
 
-MySQL source selection is controlled by `TRINO_MYSQL_SOURCE_MODE`:
+Templates use `{{shard}}.{{database}}.<base_table>` or the existing
+`{{SHARD_CATALOG}}.dbonline.<base_table>` spelling. The renderer resolves the
+caller shard and `TRINO_MYSQL_SCHEMA` (dbonline), checks that every physical
+relation belongs there, and binds the caller identity. The supplied templates
+own tenant and `on_eeaccess` predicates. No CREATE VIEW is executed or required.
+Definitions are loaded for each query; rendered identity-bearing SQL is not cached.
 
-- `views` (local compatibility only): existing shard routing and secured Trino-view substitution.
-- `system_query` (default): shard routing followed by a private native SELECT containing
-  tenant and employee authorization. Trino applies the original wrapper projection
-  above it to preserve column names, casts and placeholders.
+Private SQL remains Git-ignored and excluded from the image. Mount it at runtime,
+for example with the Helm chart's optional volume hooks:
 
-`TRINO_MYSQL_NATIVE_SOURCES_DIR` defaults to `docker/trino/native_sources`.
-Each supported logical MySQL table requires a `<table>.json` policy contract with
-exactly three string fields: `authorization` (`employee` or `tenant`), `native_sql`,
-and `projection_sql`. Native SELECT placeholders are `{{CLIENT_CODE}}`,
-`{{USERNAME}}`, and `{{MYSQL_SCHEMA}}`; the projection is a SELECT from
-`native_source e` and can use `{{PROC_CENTER}}`. Identity values are server-authored;
-MySQL values use UTF-8 hex literals. Definitions are trusted deployment policy,
-not model input: placeholder validation does not prove the policy is correct.
-Keep indexed string narrowing plus exact comparisons where needed to preserve
-Trino authorization semantics. Missing or invalid source definitions now fail startup
-catalog verification. Provision every enabled catalog entry before switching modes.
-There is no fallback from a native policy failure to an unprotected source.
+```yaml
+config:
+  TRINO_MYSQL_SOURCES_DIR: /etc/trino-sources
+extraVolumes:
+  - name: trino-sources
+    secret:
+      secretName: private-trino-source-definitions
+extraVolumeMounts:
+  - name: trino-sources
+    mountPath: /etc/trino-sources
+    readOnly: true
+```
 
-The native definitions and both engines' proprietary view files are Git-ignored
-and Docker-build-ignored. Mount the private directory read-only into the API
-container separately. A clean checkout intentionally does not contain these files.
-The existing `TRINO_SECURITY_READY` deployment guard still applies.
+In the Trino path, ClickHouse sources become
+`TABLE(clickhouse.system.query(query => '<native SELECT>'))`. The native SELECT
+reads `dbpcm_warehouse.<table>` with `final=1`, configured tenant/JTI settings,
+and read-only resource limits. Trino does not accept ClickHouse SETTINGS on an
+ordinary three-part table query. Configure the ClickHouse connector with
+`clickhouse.map-string-as-varchar=true` so textual keys can join MySQL VARCHAR
+keys; otherwise ClickHouse String maps to VARBINARY. See the connector's
+[native-query contract](https://trino.io/docs/current/connector/clickhouse.html#query-varchar-table).
 
-Verification used isolated Trino 483, MySQL 8.0 and ClickHouse 25.3 containers with
-synthetic data: 12 query shapes in both modes returned identical rows and columns,
-including CTEs, inner/left joins and three-relation cross-source queries. The payroll
-fixture contained 200,000 rows, of which the test principal could access 50,000.
-Plans showed grouped decimal SUM, COUNT and COUNT DISTINCT pushed into ClickHouse.
-Decimal AVG, conditional SUM and grouping by a derived month stayed in Trino.
-Joining payroll to MySQL before aggregation transferred 50,000 payroll rows;
-explicitly aggregating payroll in a CTE before the join transferred 5 rows with
-identical results for that fixture. This is query-shape dependent, not a universal
-rewrite: preserve join multiplicity and grouping semantics when moving aggregates.
-`system.query` does not inherently prevent projection or aggregate pushdown, but
-neither does it guarantee them. No blanket aggregate rewrite or EAGER setting is
-introduced. These synthetic results do not certify production view policies or plans.
+Queries whose sources are all allowed, catalogued ClickHouse tables retain the
+direct ClickHouse route, including samples and EXPLAIN. Mixed-source queries use
+Trino. Direct execution refreshes employee access and applies tenant settings;
+failures do not retry through Trino. Service authentication and composite Trino
+query identity remain unchanged.
 
-MySQL aggregation probes returned identical results in both modes. Native-mode
-COUNT and ungrouped SUM pushed into MySQL; the secured-view equivalents stayed
-in Trino with the permission join. GROUP BY employee_code remained in Trino in
-both modes because the textual grouping semantics still differ between engines.
+Every MySQL execution connection sets
+`<resolved_shard>.aggregation_pushdown_enabled=false`. Configure each MySQL
+connector with `aggregation-pushdown.enabled=false` as the deployment default.
+Trino plans the expanded source SELECT together with the caller query.
 
-## Direct execution for ClickHouse-only queries
+Local verification used isolated Trino 483, ClickHouse 25.3 and MySQL 8.0 with
+synthetic data and the actual private accrual_events template. MySQL and mixed
+queries returned different authorized employees for two users, isolated a second
+tenant, and returned no rows for a quote-containing injection-shaped username.
+ClickHouse returned the newest ReplacingMergeTree row with merges stopped,
+confirming FINAL, and enforced tenant/JTI row policies through the native query.
 
-With `TRINO_ENABLED=true`, query execution now inspects every referenced source in
-all CTEs, subqueries and UNION branches. Queries whose physical sources are all
-catalogued ClickHouse tables execute through the existing direct ClickHouse client.
-This includes sample rows and EXPLAIN. Native functions such as decimal AVG,
-sumIf and toStartOfMonth execute in ClickHouse without Trino translation. Public
-logical database aliases are normalized, and physical tables are qualified so the
-client's default database cannot change their meaning. Queries with MySQL sources
-retain Trino routing and the configured MySQL source mode. Source-free or unknown
-shapes retain the existing Trino path and validation.
+The expanded queries retain textual tenant/employee access checks. Numeric
+employee join substitutions, binary client keys, and native hex-literal SQL are
+removed from the active path. MySQL collation clauses were converted to Trino
+string comparisons; validate case, trailing-space, date, and numeric behavior
+against the deployed source types before publishing. Invalid MySQL zero dates
+must be handled by the JDBC source configuration before Trino can read them.
 
-Service scope and SQL guards still run before dispatch. Direct execution refreshes
-the employee permission set and uses the existing authenticated tenant settings,
-read-only controls and result caps. A direct execution failure is returned; it does
-not trigger a retry on Trino. `TRINO_ENABLED=false` retains the original direct-only
-behavior. Request validation reads the authored catalog without live discovery.
-The API deployment therefore needs working direct ClickHouse credentials and row
-policies even when Trino is enabled; Trino's JDBC credentials are not reused.
-
-A live isolated ClickHouse 25.3 fixture with 200,000 synthetic payroll rows passed
-15 direct execution checks: decimal AVG, conditional SUM, monthly grouping, a CTE
-aggregate and EXPLAIN across an allowed principal, a restricted principal and an
-ungranted tenant. Tests explicitly prohibited calls to the Trino executor.
+A view is planned together with its outer query, not automatically materialized
+in full. Projection and supported predicate pushdown can reduce reads, but the
+standard MySQL connector documents no CHAR/VARCHAR predicate pushdown. Tenant
+and access predicates on strings can therefore be evaluated in Trino after
+broader source scans. Authorization limits returned rows, not necessarily rows
+read from MySQL. Confirm physical reads and aggregate placement with EXPLAIN and
+controlled EXPLAIN ANALYZE; do not promise tenant-bounded transfer without evidence.
+See [MySQL predicate pushdown](https://trino.io/docs/current/connector/mysql.html#predicate-pushdown-support)
+and [Trino pushdown](https://trino.io/docs/current/optimizer/pushdown.html).
 
 ## Trino failure handling
 
-Numeric-key fallback now allows only COLUMN_NOT_FOUND, TYPE_MISMATCH and
-OPERATOR_NOT_FOUND, and still requires that disabling the optimization changes
-SQL. Cancellations, resource limits, authorization failures, transport failures and
-unrelated SQL errors do not rerun the query. Partial results are discarded and
-cursor/connection cleanup runs after execution or fetch failure.
+Queries execute once. Execution or fetch failures discard partial results and close
+the cursor and connection; there is no alternate join rewrite or backend retry.
 
 The Python client's base TrinoQueryError carries INSUFFICIENT_RESOURCES errors;
 these now receive sanitized resource guidance under TRINO_QUERY_ERROR rather than
@@ -266,7 +230,7 @@ EXPRESSION_NOT_AGGREGATE are recognized, along with overflow, stale/invalid view
 invalid policies and cancellation/capacity errors. Client authentication failures
 remain TRINO_UNAVAILABLE with operator guidance; result-decoding failures become
 TRINO_QUERY_ERROR with supported-type guidance. Raw connector messages remain
-excluded. Discovery keeps its fail-closed TRINO_DISCOVERY_UNAVAILABLE response.
+excluded.
 
 ## Deployment error logs
 
@@ -274,7 +238,7 @@ REST and MCP HTTP startup configure application logs on stdout with timestamps,
 severity and logger names. ERROR remains visible even with LOG_LEVEL=CRITICAL.
 Handled REST domain/HTTP/validation failures and MCP tool/auth/scratch failures
 emit ERROR records containing operation, error code, status where available and
-exception class. Trino discovery/readiness and numeric-join fallback failures also
+exception class. Trino readiness failures also
 log at ERROR; ClickHouse query failures no longer log only at WARNING.
 Boundary logs exclude exception messages, request payloads, tokens, SQL and row
 values. Existing Trino execution logs retain the coordinator query ID for lookup.
@@ -289,7 +253,7 @@ tests cover handled failures without changing HTTP bodies or auth headers.
 
 Conversion is a supported subset, not a guarantee of arbitrary ClickHouse SQL
 compatibility. SQLGlot is pinned to 30.12.0 so local, deployment, and CI parsing
-agree. ClickHouse-only queries continue through the native route.
+agree. ClickHouse-only queries retain direct ClickHouse execution.
 
 The construct regression suite supports:
 
@@ -366,7 +330,7 @@ values per group and sorts them; it does not guarantee source pushdown.
 Large payroll groups can hit Trino query memory/time limits. These limits
 must fail loudly, never trigger a silent approximate result. Windowed medians
 and arbitrary percentile levels remain out of scope for this implementation.
-ClickHouse-only queries continue through the native ClickHouse route.
+ClickHouse-only queries retain direct ClickHouse execution.
 
 The source definitions are documented in [ClickHouse Low](https://clickhouse.com/docs/reference/functions/aggregate-functions/quantileExactLow)
 and [High](https://clickhouse.com/docs/reference/functions/aggregate-functions/quantileExactHigh).
@@ -439,8 +403,8 @@ values are not returned. These excerpts are response-only, not log payloads.
 ### Schema authoring contract
 
 In Trino mode, `getTableSchema` exposes catalogued ClickHouse types, including
-`Nullable`, intersected with live available columns. Physical Trino types are
-retained internally; they are not SQL-authoring instructions. This aligns schema
+`Nullable`, filtered by the request access scope. No live column discovery is
+performed; physical schema mismatches fail during execution. This aligns schema
 responses with the semantic validator and keeps one dialect for the model.
 Use typed date bounds (`toDate('2026-01-01')` for Date inputs). A catalog type is
 an authored contract, not proof of physical compatibility: deployments must still

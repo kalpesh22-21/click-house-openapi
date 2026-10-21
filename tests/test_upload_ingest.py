@@ -692,3 +692,8 @@ class TestRoutesNotTools:
         assert not any(
             "upload" in n.lower() or "analyze" in n.lower() for n in names
         )
+
+
+@pytest.fixture(autouse=True)
+def _authorized_session_for_route_tests(prevalidated_session_scope):
+    """Session-scope auth is tested separately in test_session_catalog."""

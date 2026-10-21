@@ -443,3 +443,8 @@ class TestOmitHeaderBypass:
     def test_empty_header_must_not_read_cross_session_scratch(self):
         resp, mock_execute = self._attack(session_header="")
         mock_execute.assert_not_called()
+
+
+@pytest.fixture(autouse=True)
+def _authorized_session_for_route_tests(prevalidated_session_scope):
+    """Session-scope auth is tested separately in test_session_catalog."""

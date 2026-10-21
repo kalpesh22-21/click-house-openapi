@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app import service, trino_metadata
+from app import service
 from app.catalog_scope import CatalogScope, resolve_catalog_scope, scoped_catalog
 from app.config import Settings
 from app.errors import ColumnScopeError
@@ -60,13 +60,13 @@ def test_rejected_scope_never_executes_or_discovers(
     settings = Settings(trino_enabled=True, trino_host="test", _env_file=None)
     monkeypatch.setattr("app.catalog.get_settings", lambda: settings)
     execute = MagicMock(side_effect=AssertionError("business SQL executed"))
-    discover = MagicMock(side_effect=AssertionError("discovery called"))
+    connect = MagicMock(side_effect=AssertionError("unexpected metadata I/O"))
     monkeypatch.setattr(service, "_execute", execute)
-    monkeypatch.setattr(trino_metadata, "discover", discover)
+    monkeypatch.setattr("app.trino_client._connect", connect)
     with pytest.raises(ColumnScopeError):
         service.run_query(sql, settings=settings, include_provenance=True)
     execute.assert_not_called()
-    discover.assert_not_called()
+    connect.assert_not_called()
 
 
 def test_allowed_query_uses_catalog_on_every_request(monkeypatch, scoped_user):
@@ -80,8 +80,8 @@ def test_allowed_query_uses_catalog_on_every_request(monkeypatch, scoped_user):
     monkeypatch.setattr("app.catalog.get_settings", lambda: settings)
     execute = MagicMock(return_value=(["employee_code"], [["E1"]]))
     monkeypatch.setattr(service, "_execute", execute)
-    discover = MagicMock(side_effect=AssertionError("discovery called"))
-    monkeypatch.setattr(trino_metadata, "discover", discover)
+    connect = MagicMock(side_effect=AssertionError("unexpected metadata I/O"))
+    monkeypatch.setattr("app.trino_client._connect", connect)
     for _ in range(2):
         result = service.run_query(
             "SELECT employee_code FROM employee",
@@ -90,7 +90,7 @@ def test_allowed_query_uses_catalog_on_every_request(monkeypatch, scoped_user):
         )
         assert result["row_count"] == 1
     assert execute.call_count == 2
-    discover.assert_not_called()
+    connect.assert_not_called()
     assert [
         t["name"] for t in service.list_tables("dbpcm_datawarehouse", settings)
     ] == ["employee"]

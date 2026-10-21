@@ -1,11 +1,6 @@
 database: dbpcm_warehouse
 table: accrual_events
 source: mysql
-# Internal execution metadata; excluded from model-facing catalog exports.
-trino_join_keys:
-  employee_code:
-    column: employee_code_num
-    encoding: employee_ascii4_be_v1
 description: >
   Employee accrual-event log containing all types of accrual events, not only PTO or
   approved time-off requests. Includes time-off requests, payout requests, and other

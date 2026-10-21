@@ -1,7 +1,7 @@
-"""Scope resolver boundary for trusted grants; no physical schema discovery.
+"""Combine JWT and SQL access adapters once per authenticated request.
 
-The permission-query adapter currently grants the entire authored catalog.
-JWT claims cannot choose scope. None means unrestricted within the catalog;
+Both adapters currently grant the entire authored catalog by explicit policy.
+None means unrestricted within the catalog;
 an empty allowlist means deny all. Tenant row policies remain independent.
 """
 
@@ -32,15 +32,59 @@ class CatalogScope:
         )
 
 
-def query_permission_scope(principal: Principal) -> CatalogScope:
-    """Dummy permission query: grant all catalog schemas, tables, and columns.
+def jwt_permission_scope(principal: Principal) -> CatalogScope:
+    """JWT access adapter. Allow-all placeholder until the claim contract is defined."""
+    return CatalogScope()
 
-    This is the replacement point for a server-controlled, identity-parameterized
-    authorization query. The dummy does no I/O. Unrestricted here means the
-    authored catalog, subject to deployment restrictions and hidden columns;
-    it never grants access to uncatalogued physical relations or changes RLS.
+
+def sql_permission_scope(principal: Principal) -> CatalogScope:
+    """SQL access adapter. Allow-all placeholder until the access query is supplied.
+
+    The verified principal is also request-bound while this adapter runs, so its
+    future database calls can use that request's verified query identity. Never call
+    the public query service here: doing so would recurse into authorization.
     """
     return CatalogScope()
+
+
+def _validate_scope(scope: CatalogScope) -> None:
+    if not isinstance(scope, CatalogScope):
+        raise TypeError("Invalid permission result")
+    for grants in (scope.schemas, scope.columns):
+        if grants is not None and (
+            not isinstance(grants, frozenset)
+            or not all(isinstance(grant, str) and grant for grant in grants)
+        ):
+            raise ValueError("Invalid permission grants")
+
+
+def intersect_scopes(left: CatalogScope, right: CatalogScope) -> CatalogScope:
+    """None imposes no restriction; an empty set always denies access."""
+    from app.trino_metadata import canonical_database
+
+    _validate_scope(left)
+    _validate_scope(right)
+
+    def intersect(a, b, normalize):
+        a = None if a is None else frozenset(normalize(v) for v in a)
+        b = None if b is None else frozenset(normalize(v) for v in b)
+        return b if a is None else a if b is None else a & b
+
+    def column(value):
+        parts = value.split(".")
+        if len(parts) != 3 or not all(parts):
+            raise ValueError("Invalid column grant")
+        return ".".join([canonical_database(parts[0]), *parts[1:]])
+
+    return CatalogScope(
+        schemas=intersect(left.schemas, right.schemas, canonical_database),
+        columns=intersect(left.columns, right.columns, column),
+    )
+
+
+def query_permission_scope(principal: Principal) -> CatalogScope:
+    """Run both adapters once, then intersect their independent restrictions."""
+    return intersect_scopes(jwt_permission_scope(principal), sql_permission_scope(principal))
 
 
 def resolve_principal_permissions(principal: Principal) -> Principal:
@@ -49,20 +93,18 @@ def resolve_principal_permissions(principal: Principal) -> Principal:
 
     from app.errors import ClickHouseUnavailableError
 
+    from app.principal import current_principal
+
+    token = current_principal.set(principal)
     try:
         scope = query_permission_scope(principal)
-        if not isinstance(scope, CatalogScope):
-            raise TypeError("Invalid permission result")
-        for grants in (scope.schemas, scope.columns):
-            if grants is not None and (
-                not isinstance(grants, frozenset)
-                or not all(isinstance(grant, str) and grant for grant in grants)
-            ):
-                raise ValueError("Invalid permission grants")
+        _validate_scope(scope)
     except Exception:  # noqa: BLE001 — never leak authorization SQL or identity data
         raise ClickHouseUnavailableError(
             "Unable to resolve catalog permissions.", "SCOPE_RESOLUTION_UNAVAILABLE"
         ) from None
+    finally:
+        current_principal.reset(token)
     return replace(principal, catalog_scope=scope)
 
 

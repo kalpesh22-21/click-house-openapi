@@ -1,5 +1,5 @@
 # ruff: noqa: F811, F401
-"""Synthetic coverage of numeric join selection and one-shot execution fallback."""
+"""View translation preserves joins and executes each query only once."""
 from unittest.mock import MagicMock
 
 import pytest
@@ -27,9 +27,10 @@ SQL = ('SELECT e.employee_code FROM employee e JOIN accrual_balances b '
 def test_direct_join_preserves_projection_and_tenant(join_settings, join_principal):
     sql = trino_client.rewrite_query(SQL, join_settings)
     assert 'SELECT e.employee_code FROM' in sql
-    assert 'e.employee_code_num = b.employee_code_num' in sql
+    assert 'e.employee_code = b.employee_code' in sql
     assert 'e.client_code = b.client_code' in sql
-    assert 'employee_code_num' not in trino_client.rewrite_query(SQL, join_settings, optimize_employee_joins=False)
+    assert 'employee_code_num' not in sql
+    assert 'system.query' not in sql
 
 
 @pytest.mark.parametrize('query', [
@@ -65,24 +66,16 @@ def connections(monkeypatch, first_error, second_error=None, fetch_error=False):
 
 
 @pytest.mark.parametrize('fetch_error', [False, True])
-def test_fallback_once_discards_partial_rows(monkeypatch, join_settings, join_principal, fetch_error):
-    connect, conns = connections(monkeypatch, error(), fetch_error=fetch_error)
-    assert trino_client.execute_query(SQL, join_settings) == (['employee_code'], [['AB12']])
-    assert connect.call_count == 2
-    assert connect.call_args_list[0] == connect.call_args_list[1]
-    assert 'employee_code_num' in conns[0].cursor.return_value.execute.call_args.args[0]
-    assert 'employee_code_num' not in conns[1].cursor.return_value.execute.call_args.args[0]
-    for conn in conns:
-        conn.close.assert_called_once()
-        conn.cursor.return_value.close.assert_called_once()
-
-
-def test_both_attempts_fail_sanitized(monkeypatch, join_settings, join_principal):
-    connect, _ = connections(monkeypatch, error(), error('TYPE_MISMATCH'))
+@pytest.mark.parametrize('name', ['COLUMN_NOT_FOUND', 'TYPE_MISMATCH', 'OPERATOR_NOT_FOUND'])
+def test_query_error_not_retried(monkeypatch, join_settings, join_principal, fetch_error, name):
+    connect, conns = connections(monkeypatch, error(name), fetch_error=fetch_error)
     with pytest.raises(ClickHouseQueryError) as caught:
         trino_client.execute_query(SQL, join_settings)
-    assert connect.call_count == 2
+    assert connect.call_count == 1
     assert 'private SQL secret' not in str(caught.value)
+    assert 'employee_code_num' not in conns[0].cursor.return_value.execute.call_args.args[0]
+    conns[0].close.assert_called_once()
+    conns[0].cursor.return_value.close.assert_called_once()
 
 
 @pytest.mark.parametrize('name', ['PERMISSION_DENIED', 'EXCEEDED_TIME_LIMIT'])
@@ -114,7 +107,7 @@ def test_catalog_driven_new_entity_and_encoding_match(monkeypatch, join_settings
     catalog['dbpcm_warehouse.new_entity'] = dict(catalog['dbpcm_warehouse.accrual_balances'], table='new_entity')
     monkeypatch.setattr(trino_client, 'get_semantic_catalog', lambda: catalog)
     query = SQL.replace('accrual_balances', 'new_entity')
-    assert 'e.employee_code_num = b.employee_code_num' in trino_client.rewrite_query(query, join_settings)
+    assert 'e.employee_code = b.employee_code' in trino_client.rewrite_query(query, join_settings)
     catalog['dbpcm_warehouse.new_entity']['trino_join_keys'] = {'employee_code': {'column': 'other_key', 'encoding': 'different_v2'}}
     assert 'employee_code_num' not in trino_client.rewrite_query(query, join_settings)
     catalog['dbpcm_warehouse.new_entity'].pop('trino_join_keys')
@@ -132,7 +125,7 @@ def test_internal_mapping_not_exported():
 
 
 @pytest.mark.parametrize('mapping', [None, [], {'missing_column': {'column': 'key', 'encoding': 'v1'}}, {'employee_code': {'column': 'bad;sql', 'encoding': 'v1'}}])
-def test_invalid_catalog_mapping_rejected(tmp_path, mapping):
+def test_legacy_catalog_mapping_ignored(tmp_path, mapping):
     import yaml
 
     from app.semantic_catalog.loader import (
@@ -140,8 +133,7 @@ def test_invalid_catalog_mapping_rejected(tmp_path, mapping):
         _load_raw_table_entries,
     )
     (tmp_path / 'employee.yaml').write_text(yaml.safe_dump({'table': 'employee', 'source': 'mysql', 'columns': {'employee_code': {'type': 'String'}}, 'trino_join_keys': mapping}))
-    with pytest.raises(CatalogValidationError):
-        _load_raw_table_entries(tmp_path)
+    assert "trino_join_keys" not in _load_raw_table_entries(tmp_path)["dbpcm_warehouse.employee"]
 
 
 @pytest.mark.parametrize('enabled', [False, True])

@@ -362,3 +362,8 @@ class TestPrincipalContextLifecycle:
         assert captured["during"].claims["user_name"] == "carol"
         # Reset in the middleware's finally must clear it — no leak to the next request.
         assert captured["after"] is None
+
+
+@pytest.fixture(autouse=True)
+def _authorized_session_for_route_tests(prevalidated_session_scope):
+    """Session-scope auth is tested separately in test_session_catalog."""

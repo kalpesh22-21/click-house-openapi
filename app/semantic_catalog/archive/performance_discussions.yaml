@@ -1,11 +1,6 @@
 database: dbpcm_warehouse
 table: performance_discussions
 source: mysql
-# Internal join-key contract; physical views must expose this encoding.
-trino_join_keys:
-  employee_code:
-    column: employee_code_num
-    encoding: employee_ascii4_be_v1
 description: Performance discussion workflow and form-detail table. Use for writeups, coaching or disciplinary discussions, workflow state, acknowledgments, monitoring periods, uploaded-document filenames, and field-level discussion responses.
 
 grain: []

@@ -29,7 +29,7 @@ from app.errors import (
 from app.principal import get_current_principal
 from app.semantic_catalog.loader import DEFAULT_DATABASE, get_semantic_catalog
 from app.shard_routing import resolve_mysql_shard, validate_identifier
-from app.trino_errors import JOIN_FALLBACK_ERRORS, rewrite_trino_error
+from app.trino_errors import rewrite_trino_error
 
 logger = logging.getLogger(__name__)
 
@@ -359,9 +359,7 @@ def _map_clickhouse_functions(tree: exp.Query) -> None:
         func.replace(mapping.builder(func))
 
 
-def rewrite_query(
-    sql: str, settings: Settings, *, optimize_employee_joins: bool = True
-) -> str:
+def rewrite_query(sql: str, settings: Settings) -> str:
     """Route base relations, preserving CTE names, aliases and logical columns.
 
     Physical catalog names and scratch relations are intentionally inaccessible
@@ -372,7 +370,7 @@ def rewrite_query(
     before they propagate; the wire contract (raised codes) is unchanged.
     """
     try:
-        return _rewrite_query(sql, settings, optimize_employee_joins=optimize_employee_joins)
+        return _rewrite_query(sql, settings)
     except QueryValidationError as exc:
         logger.error(
             "trino transpile/validation rejected query: code=%s "
@@ -385,53 +383,7 @@ def rewrite_query(
         raise
 
 
-def _rewrite_employee_joins(tree: exp.Query, catalog: dict) -> None:
-    """Use audited packed keys only for direct, same-scope MySQL equality joins.
-
-    Requires the deployed employee-code domain contract. Execution fallback
-    handles missing keys/unsupported SQL, not silent encoding collisions.
-    CTE/derived outputs, USING, expressions, supervisor keys and OR predicates
-    are deliberately left alone. Public projections and tenant pins are intact.
-    """
-    for scope in traverse_scope(tree):
-        aliases = {}
-        for alias, (_, source) in scope.selected_sources.items():
-            if not isinstance(source, exp.Table) or source.catalog:
-                continue
-            entry = catalog.get(f"{source.db}.{source.name}", {})
-            if entry.get("source") == "mysql":
-                aliases[alias] = entry.get("trino_join_keys", {})
-        for join in scope.expression.args.get("joins", []):
-            condition = join.args.get("on")
-            if condition is None or join.args.get("method") or join.args.get("kind") in {"SEMI", "ANTI", "ASOF"}:
-                continue
-            pending = [condition]
-            while pending:
-                item = pending.pop().unnest()
-                if isinstance(item, exp.And):
-                    pending.extend((item.this, item.expression))
-                    continue
-                if not isinstance(item, exp.EQ):
-                    continue
-                left, right = item.this, item.expression
-                if not all(isinstance(c, exp.Column)
-                           and c.table in aliases and not c.db and not c.catalog
-                           for c in (left, right)):
-                    continue
-                if left.table == right.table:
-                    continue
-                mappings = [aliases[c.table].get(c.name) for c in (left, right)]
-                if not all(isinstance(m, dict) and m.get("column") and m.get("encoding") for m in mappings):
-                    continue
-                if mappings[0]["encoding"] != mappings[1]["encoding"]:
-                    continue
-                for column, mapping in zip((left, right), mappings):
-                    column.set("this", exp.to_identifier(validate_identifier(mapping["column"])))
-
-
-def _rewrite_query(
-    sql: str, settings: Settings, *, optimize_employee_joins: bool = True
-) -> str:
+def _rewrite_query(sql: str, settings: Settings) -> str:
     # All three identity claims are required and strictly validated, but only
     # client_code is a routing input (paycompy client-code RANGE model).
     identity = request_identity(settings)
@@ -473,14 +425,12 @@ def _rewrite_query(
 
         annotate_input_types(tree, catalog)
         from app.trino_metadata import canonical_database
-        from app.trino_native_sources import source_relation
+        from app.trino_sources import source_relation
 
         allowed = settings.allowed_databases_list()
         allowed = (
             None if allowed is None else {canonical_database(db) for db in allowed}
         )
-        if optimize_employee_joins:
-            _rewrite_employee_joins(tree, catalog)
         shard = None
         routed = set()
         replacements = []
@@ -515,18 +465,15 @@ def _rewrite_query(
                 raise QueryValidationError(
                     "Unsupported Trino relation.", "TRINO_UNSUPPORTED_SQL"
                 )
-        # Only introduce trusted table functions after every caller relation has
-        # passed the logical-table gate, including nested scopes and CTEs.
+        for count in tree.find_all(exp.Count):
+            if count.this is None:
+                count.set("this", exp.Star())
+        # Map caller expressions before inserting backend-native source SQL.
+        _map_clickhouse_functions(tree)
         for source, entry, resolved_shard in replacements:
             replacement = source_relation(entry, resolved_shard, identity, settings)
             replacement.set("alias", source.args.get("alias"))
             source.replace(replacement)
-        for count in tree.find_all(exp.Count):
-            if count.this is None:
-                count.set("this", exp.Star())
-        # ClickHouse-only function mapping: post-validation/routing, pre-render
-        # (see the map's docstring above).
-        _map_clickhouse_functions(tree)
         rendered = tree.sql(dialect="trino", unsupported_level=ErrorLevel.RAISE)
         return f"EXPLAIN {rendered}" if explain else rendered
     except SqlglotError as exc:
@@ -535,7 +482,7 @@ def _rewrite_query(
         ) from exc
 
 
-def uses_clickhouse_sources(sql: str) -> bool:
+def _uses_source(sql: str, source_kind: str) -> bool:
     """Inspect already validated logical SQL; CTE aliases are not physical sources."""
     inner = re.sub(r"^\s*EXPLAIN\s+", "", sql, count=1, flags=re.IGNORECASE)
     tree = qualify_tables(sqlglot.parse_one(normalize_logical_sql(inner), read="clickhouse"),
@@ -543,13 +490,17 @@ def uses_clickhouse_sources(sql: str) -> bool:
     catalog = get_semantic_catalog()
     return any(
         isinstance(source, exp.Table)
-        and catalog.get(f"{source.db}.{source.name}", {}).get("source", "clickhouse") == "clickhouse"
+        and catalog.get(f"{source.db}.{source.name}", {}).get("source", "clickhouse") == source_kind
         for scope in traverse_scope(tree)
         for _, source in scope.selected_sources.values()
     )
 
 
-def _connect(settings: Settings, user: str):
+def uses_clickhouse_sources(sql: str) -> bool:
+    return _uses_source(sql, "clickhouse")
+
+
+def _connect(settings: Settings, user: str, *, mysql_catalog: str | None = None):
     # Lazy import: existing ClickHouse-only installations keep working.
     from trino.auth import BasicAuthentication
     from trino.dbapi import connect
@@ -563,23 +514,29 @@ def _connect(settings: Settings, user: str):
         if settings.trino_user and settings.trino_password
         else None
     )
+    # Authentication identifies the service; the query user is the verified
+    # caller identity. Trino must authorize service-to-user impersonation.
+    session_properties = {"query_max_run_time": f"{settings.max_execution_time}s"}
+    if mysql_catalog:
+        validate_identifier(mysql_catalog.lower())
+        session_properties[f"{mysql_catalog}.aggregation_pushdown_enabled"] = "false"
     return connect(
         host=settings.trino_host,
         port=settings.trino_port,
         http_scheme=settings.trino_http_scheme,
-        user=settings.trino_user if auth else user,
+        user=user,
         auth=auth,
         source="clickhouse-api-mcp",
         request_timeout=settings.trino_request_timeout,
         max_attempts=1,
-        session_properties={"query_max_run_time": f"{settings.max_execution_time}s"},
+        session_properties=session_properties,
     )
 
 
-def _execute_physical_query(physical_sql: str, settings: Settings, identity: tuple[str, str, str]):
+def _execute_physical_query(physical_sql: str, settings: Settings, identity: tuple[str, str, str], *, mysql_catalog: str | None = None):
     conn = cursor = None
     try:
-        conn = _connect(settings, "|".join(identity))
+        conn = _connect(settings, "|".join(identity), mysql_catalog=mysql_catalog)
         cursor = conn.cursor()
         cursor.execute(physical_sql)
         rows = []
@@ -607,8 +564,8 @@ def execute_query(
     settings = settings or get_settings()
     if not settings.trino_security_ready:
         raise QueryValidationError(
-            "Provision Trino tenant/employee policies or secured views before setting TRINO_SECURITY_READY=true. "
-            "ClickHouse source policies must apply to the connector account and views.",
+            "Validate MySQL source SQL and ClickHouse row policies before setting TRINO_SECURITY_READY=true. "
+            "ClickHouse source policies must apply to the connector account.",
             "TRINO_SECURITY_NOT_CONFIGURED",
         )
     if parameters:
@@ -618,25 +575,15 @@ def execute_query(
         )
     identity = request_identity(settings)
     physical_sql = rewrite_query(sql, settings)
+    mysql_catalog = (
+        resolve_mysql_shard(identity[1], settings) if _uses_source(sql, "mysql") else None
+    )
     if uses_clickhouse_sources(sql):
         # Do not refresh for MySQL-only requests; validate/compile before I/O.
         from app.employee_access import ensure_employee_access_fresh
         ensure_employee_access_fresh(settings)
     try:
-        try:
-            return _execute_physical_query(physical_sql, settings, identity)
-        except Exception as first_error:
-            from trino.exceptions import TrinoUserError
-
-            # Only coordinator query errors trigger fallback. Never repeat a
-            # timeout, transport failure, authorization denial, or result cap.
-            if not isinstance(first_error, TrinoUserError) or first_error.error_name not in JOIN_FALLBACK_ERRORS:
-                raise
-            original_sql = rewrite_query(sql, settings, optimize_employee_joins=False)
-            if original_sql == physical_sql:
-                raise
-            logger.error("Trino numeric employee join failed; retrying original string join once")
-            return _execute_physical_query(original_sql, settings, identity)
+        return _execute_physical_query(physical_sql, settings, identity, mysql_catalog=mysql_catalog)
     except QueryValidationError:
         raise
     except Exception as exc:

@@ -22,7 +22,7 @@ staleness check when the agent's fixture path is available (see that script's
 docstring).
 
 The authored catalog also supplies the schema used for query provenance and
-scope validation. Physical source alignment is verified at startup; request
+scope validation. Physical sources are resolved for the caller at execution time; request
 validation never discovers columns or silently removes unavailable entries.
 
 Backend-scoped notes (`trino_notes` / `clickhouse_notes`)
@@ -80,9 +80,9 @@ above. This is enforced by
 Caching
 -------
 The YAML catalog changes on deployment and is cached once per process.
-Startup verification checks deployed sources against this contract. The explicit
+Startup validates the local catalog without tenant-source probes. The explicit
 `invalidate_semantic_catalog_cache()` hook is for tests; production catalog
-changes require a verified restart.
+changes require a restart.
 """
 
 from __future__ import annotations
@@ -401,18 +401,13 @@ def _load_raw_table_entries(schema_dir: Path | str) -> dict[str, dict[str, Any]]
             raise CatalogValidationError(
                 f"{qualified_key}: source must be 'clickhouse' or 'mysql'."
             )
-        mappings = entry.get("trino_join_keys", {})
-        if not isinstance(mappings, dict):
-            raise CatalogValidationError(f"{qualified_key}: trino_join_keys must be a mapping.")
-        for logical, mapping in mappings.items():
-            if (
-                entry.get("source") != "mysql"
-                or logical not in raw_columns
-                or not isinstance(mapping, dict)
-                or set(mapping) != {"column", "encoding"}
-                or any(not isinstance(mapping.get(k), str) or not re.fullmatch(r"[a-z][a-z0-9_]*", mapping[k]) for k in ("column", "encoding"))
-            ):
-                raise CatalogValidationError(f"{qualified_key}: invalid internal Trino join-key mapping.")
+        for name, column in raw_columns.items():
+            if isinstance(column, dict) and "context_sql" in column:
+                if not isinstance(column["context_sql"], str) or not column["context_sql"].strip():
+                    raise CatalogValidationError(f"{qualified_key}.{name}: context_sql must be non-empty SQL")
+                # Backend-native syntax is validated at execution, where the
+                # active backend is known. Never embed private SQL in diagnostics.
+        entry.pop("trino_join_keys", None)  # Retired execution optimization.
         entry["database"] = database
         result[qualified_key] = entry
 

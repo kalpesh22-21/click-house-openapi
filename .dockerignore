@@ -55,3 +55,4 @@ helm/
 
 # CI
 .github/
+app/semantic_catalog/mysql_views/

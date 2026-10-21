@@ -732,3 +732,8 @@ class TestDropRouteCrossSession:
         assert resp.status_code == 403
         assert resp.json()["code"] == "SCRATCH_SESSION_VIOLATION"
         assert no_connect.called is False
+
+
+@pytest.fixture(autouse=True)
+def _authorized_session_for_route_tests(prevalidated_session_scope):
+    """Session-scope auth is tested separately in test_session_catalog."""

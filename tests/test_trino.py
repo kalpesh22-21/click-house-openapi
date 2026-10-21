@@ -121,14 +121,12 @@ def make_settings(registry_path: str, **overrides) -> Settings:
     base = dict(
         _env_file=None,
         trino_enabled=True,
-        trino_mysql_view_catalog="",
         trino_security_ready=True,
         trino_http_scheme="http",
         trino_itdba_url=(registry_path if registry_path.startswith("https://") else "https://registry.test" + registry_path),
         trino_host="localhost",
         trino_user="",
         trino_password="",
-        trino_mysql_source_mode="views",
         trino_catalog_check_enabled=False,
         employee_access_enabled=False,
         allowed_databases="dbpcm_warehouse",
@@ -138,8 +136,10 @@ def make_settings(registry_path: str, **overrides) -> Settings:
 
 
 @pytest.fixture
-def trino_settings(shard_registry_path):
-    return make_settings(str(shard_registry_path))
+def trino_settings(shard_registry_path, tmp_path):
+    from tests.source_helpers import write_mysql_sources
+    sources = write_mysql_sources(tmp_path / "sources")
+    return make_settings(str(shard_registry_path), trino_mysql_sources_dir=str(sources))
 
 
 @pytest.fixture
@@ -160,10 +160,15 @@ def principal():
 
 
 def tables(sql):
-    return {
-        (t.catalog, t.db, t.name)
-        for t in sqlglot.parse_one(sql, read="trino").find_all(exp.Table)
-    }
+    tree = sqlglot.parse_one(sql, read="trino")
+    physical = {(t.catalog, t.db, t.name) for t in tree.find_all(exp.Table)
+                if isinstance(t.this, exp.Identifier) and t.catalog}
+    # Include native ClickHouse relations from generated pass-through literals.
+    for literal in tree.find_all(exp.Literal):
+        if literal.is_string and literal.this.startswith("SELECT * FROM `"):
+            native = sqlglot.parse_one(literal.this, read="clickhouse")
+            physical.update(("clickhouse", t.db, t.name) for t in native.find_all(exp.Table))
+    return physical
 
 
 def test_mixed_sources_and_qualified_columns(trino_settings, principal):
@@ -175,10 +180,9 @@ def test_mixed_sources_and_qualified_columns(trino_settings, principal):
     )
     assert tables(sql) == {
         ("online__okc__01__dbonline", "dbonline", "employee"),
-        ("", "", ""),  # Trusted TABLE(clickhouse.system.query(...)).
+        ("clickhouse", "dbpcm_warehouse", "payroll"),
     }
-    assert '"clickhouse".system.query' in sql
-    assert '`dbpcm_warehouse`.`payroll`' in sql
+    assert "system.query" in sql
     assert "employee.employee_code" in sql
     assert "dbpcm_warehouse.employee.employee_code" not in sql
 
@@ -191,7 +195,7 @@ def test_cte_shadowing_nested_union_and_strings(trino_settings, principal):
         "(SELECT employee_code FROM dbpcm_warehouse.employee) x",
         trino_settings,
     )
-    assert sql.count('"online__okc__01__dbonline"."dbonline".employee') == 2
+    assert sql.count('"online__okc__01__dbonline".dbonline.employee') == 2
     assert "FROM employee AS employee" in sql
     assert sql.count("'employee'") == 2
 
@@ -207,10 +211,9 @@ def test_self_join_preserves_aliases(trino_settings, principal):
 
 
 def test_view_catalog_mode(trino_settings, principal):
-    trino_settings.trino_mysql_view_catalog = "dbpcm_datawarehouse"
     assert tables(
         trino_client.rewrite_query("SELECT * FROM employee", trino_settings)
-    ) == {("dbpcm_datawarehouse", "online__okc__01__dbonline", "employee")}
+    ) == {("online__okc__01__dbonline", "dbonline", "employee")}
 
 
 def test_explain_and_count_translation(trino_settings, principal):
@@ -435,6 +438,8 @@ def test_nonmedian_quantile_rejected_before_dispatch(trino_settings, principal):
         "SELECT * FROM system.tables",
         "SELECT * FROM other.employee",
         "SELECT * FROM mysql('remote', 'db', 'employee')",
+        "SELECT * FROM TABLE(clickhouse.system.query(query => 'SELECT 1'))",
+        "WITH x AS (SELECT * FROM TABLE(mysql.system.query(query => 'SELECT 1'))) SELECT * FROM x",
         "SELECT 1; SELECT 2",
         "SHOW TABLES",
         "EXPLAIN ANALYZE SELECT 1",
@@ -649,7 +654,7 @@ def test_execution_identity_and_cleanup(monkeypatch, trino_settings, principal):
     assert trino_client.execute_query(
         "SELECT count() FROM employee", trino_settings
     ) == (["employee_count"], [[4]])
-    connect.assert_called_once_with(trino_settings, "pc1|10R37|alice")
+    connect.assert_called_once_with(trino_settings, "pc1|10R37|alice", mysql_catalog="online__okc__01__dbonline")
     assert "COUNT(*)" in cursor.execute.call_args.args[0]
     cursor.close.assert_called_once()
     conn.close.assert_called_once()
@@ -707,13 +712,12 @@ def test_blueprint_active_headcount_transpiles_to_exact_count_distinct(
     bound_sql = blueprint["sql_template"].replace(
         "{department}", slot["optional_pattern"]
     )
-    trino_settings.trino_mysql_view_catalog = "dbpcm_datawarehouse"
     physical = trino_client.rewrite_query(bound_sql, trino_settings)
     assert "COUNT(DISTINCT employee_code)" in physical
     assert "UNIQEXACT" not in physical.upper()
     assert tables(physical) == {
-        ("dbpcm_datawarehouse", "online__okc__01__dbonline", "department"),
-        ("dbpcm_datawarehouse", "online__okc__01__dbonline", "employee"),
+        ("online__okc__01__dbonline", "dbonline", "department"),
+        ("online__okc__01__dbonline", "dbonline", "employee"),
     }
 
 
@@ -868,7 +872,7 @@ def test_service_flag_routes_query_and_explain(monkeypatch, trino_settings, prin
 
 
 def test_logical_metadata_never_reads_clickhouse(
-    monkeypatch, trino_settings, authored_discovery
+    monkeypatch, trino_settings
 ):
     monkeypatch.setattr(
         service, "execute_query", MagicMock(side_effect=AssertionError("CH metadata"))
@@ -884,7 +888,7 @@ def test_logical_metadata_never_reads_clickhouse(
 
 
 def test_sample_uses_authored_columns(
-    monkeypatch, trino_settings, principal, authored_discovery
+    monkeypatch, trino_settings, principal
 ):
     trino = MagicMock(return_value=(["employee_code"], [["E1"]]))
     monkeypatch.setattr(trino_client, "execute_query", trino)
@@ -897,7 +901,7 @@ def test_sample_uses_authored_columns(
 
 
 def test_trino_column_scope_is_still_enforced(
-    monkeypatch, trino_settings, principal, authored_discovery
+    monkeypatch, trino_settings, principal
 ):
     from app.errors import ColumnScopeError
     from app.principal import current_scope
@@ -919,7 +923,7 @@ def test_trino_column_scope_is_still_enforced(
 
 
 def test_trino_provenance_uses_logical_names(
-    monkeypatch, trino_settings, principal, authored_discovery
+    monkeypatch, trino_settings, principal
 ):
     monkeypatch.setattr("app.catalog.get_settings", lambda: trino_settings)
     monkeypatch.setattr(
@@ -949,13 +953,13 @@ def test_tls_and_authenticated_user_configuration(monkeypatch, trino_settings):
     trino_settings.trino_http_scheme = "https"
     trino_client._connect(trino_settings, "pc1|10R37|alice")
     kwargs = connect.call_args.kwargs
-    assert kwargs["user"] == "service-user"
+    assert kwargs["user"] == "pc1|10R37|alice"
     assert kwargs["auth"] is not None
     assert kwargs["session_properties"]["query_max_run_time"] == "30s"
 
 
 def test_get_table_schema_gates_backend_notes_per_active_backend(
-    monkeypatch, trino_settings, principal, authored_discovery
+    monkeypatch, trino_settings, principal
 ):
     """Service-level wiring: getTableSchema carries expense's trino_notes only
     when the serving deployment's active backend IS Trino. The reverse leg
@@ -993,83 +997,13 @@ def test_get_table_schema_gates_backend_notes_per_active_backend(
     assert "physical type" not in json.dumps(response)
 
 
-# --- Live discovery + public-database alias (ported from fork 59ad12a; adapted
-# to the client-code range registry model — proc_center is NOT a routing input) ---
-@pytest.fixture
-def authored_discovery(monkeypatch):
-    from app import trino_metadata
-
-    def fake(settings, database=None, table=None):
-        return {
-            key: {
-                **entry,
-                "columns": {
-                    name: {**info, "physical_type": "varchar"}
-                    for name, info in entry["columns"].items()
-                },
-            }
-            for key, entry in trino_metadata.logical_catalog(settings).items()
-            if (
-                database is None
-                or entry["database"] == trino_metadata.canonical_database(database)
-            )
-            and (table is None or entry["table"] == table)
-        }
-
-    monkeypatch.setattr(trino_metadata, "discover", fake)
-
-
-def discovery_connection(monkeypatch, rows):
-    conn, cursor = MagicMock(), MagicMock()
-    conn.cursor.return_value = cursor
-    cursor.fetchone.return_value = [1]
-
-    def execute(sql, parameters=None):
-        cursor.fetchmany.side_effect = (
-            [rows, []] if "information_schema" in sql else [[]]
-        )
-
-    cursor.execute.side_effect = execute
-    connect = MagicMock(return_value=conn)
-    monkeypatch.setattr(trino_client, "_connect", connect)
-    return connect, conn, cursor
-
-
-def test_live_discovery_intersects_and_probes(monkeypatch, trino_settings, principal):
-    from app import trino_metadata
-
-    trino_settings.trino_mysql_view_catalog = "dbpcm_datawarehouse"
-    connect, conn, cursor = discovery_connection(
-        monkeypatch,
-        [
-            ["employee", "employee_code", "varchar"],
-            ["employee", "department_name", "varchar(100)"],
-            ["employee", "secret_extra", "varchar"],
-            ["uncatalogued", "employee_code", "varchar"],
-        ],
-    )
-    result = trino_metadata.discover(trino_settings, "dbpcm_datawarehouse", "employee")
-    assert set(result) == {"dbpcm_warehouse.employee"}
-    assert set(result["dbpcm_warehouse.employee"]["columns"]) == {
-        "employee_code",
-        "department_name",
-    }
-    connect.assert_called_once_with(trino_settings, "pc1|10R37|alice")
-    calls = cursor.execute.call_args_list
-    assert calls[0].args == ("SELECT 1",)
-    assert calls[1].args[1] == ["online__okc__01__dbonline", "employee"]
-    assert '"dbpcm_datawarehouse".information_schema.columns' in calls[1].args[0]
-    assert (
-        '"dbpcm_datawarehouse"."online__okc__01__dbonline".employee AS metadata_source LIMIT 0'
-        in calls[2].args[0]
-    )
-    cursor.close.assert_called_once()
-    conn.close.assert_called_once()
+# --- Authored metadata and public database aliases ---
 
 
 def test_catalog_metadata_does_not_depend_on_live_views(monkeypatch, trino_settings, principal):
     from app.trino_metadata import logical_catalog
-    connect, _, _ = discovery_connection(monkeypatch, [])
+    connect = MagicMock(side_effect=AssertionError("unexpected metadata I/O"))
+    monkeypatch.setattr(trino_client, "_connect", connect)
     assert service.list_databases(trino_settings) == [{"name": "dbpcm_datawarehouse"}]
     assert {t["name"] for t in service.list_tables("dbpcm_datawarehouse", trino_settings)} == {
         e["table"] for e in logical_catalog(trino_settings).values()
@@ -1088,37 +1022,19 @@ def test_catalog_metadata_does_not_resolve_shards(monkeypatch, tmp_path, princip
     connect.assert_not_called()
 
 
-def test_discovery_failure_is_sanitized_and_closed(
-    monkeypatch, trino_settings, principal
-):
-    from app import trino_metadata
-
-    _, conn, cursor = discovery_connection(monkeypatch, [])
-    cursor.execute.side_effect = RuntimeError("secret endpoint")
-    with pytest.raises(ClickHouseUnavailableError) as error:
-        trino_metadata.discover(trino_settings)
-    assert error.value.code == "TRINO_DISCOVERY_UNAVAILABLE"
-    assert "secret" not in str(error.value)
-    cursor.close.assert_called_once()
-    conn.close.assert_called_once()
-
-
 def test_public_alias_routes_with_default_view_catalog(trino_settings, principal):
     # Track the shipped default without constructing a bare Settings() — full
     # construction is environment-coupled (employee-access validation).
-    trino_settings.trino_mysql_view_catalog = Settings.model_fields[
-        "trino_mysql_view_catalog"
-    ].default
     assert tables(
         trino_client.rewrite_query(
             "SELECT dbpcm_datawarehouse.employee.employee_code FROM dbpcm_datawarehouse.employee",
             trino_settings,
         )
-    ) == {("dbpcm_datawarehouse", "online__okc__01__dbonline", "employee")}
+    ) == {("online__okc__01__dbonline", "dbonline", "employee")}
 
 
 def test_public_alias_preserves_scope_checks(
-    monkeypatch, trino_settings, principal, authored_discovery
+    monkeypatch, trino_settings, principal
 ):
     from app.errors import ColumnScopeError
     from app.principal import current_scope
@@ -1145,44 +1061,15 @@ def test_public_alias_preserves_scope_checks(
         current_scope.reset(token)
 
 
-def test_discovery_is_fresh_for_each_tenant(monkeypatch, trino_settings):
-    from app.trino_metadata import discover
-
-    trino_settings.trino_mysql_view_catalog = "dbpcm_datawarehouse"
-    connect, _, cursor = discovery_connection(
-        monkeypatch, [["employee", "employee_code", "varchar"]]
-    )
-    # Routing diversity comes from client_code alone (proc_center is NOT a
-    # routing input): 10R37 -> prod_01, 12ABC -> prod_02 per the registry ranges.
-    for pc, code, shard in [
-        ("pc1", "10R37", "online__okc__01__dbonline"),
-        ("pc2", "12ABC", "online__okc__02__dbonline"),
-    ]:
-        token = current_principal.set(
-            Principal(
-                "subject",
-                {"proc_center": pc, "clientcode": code, "user_name": "alice"},
-            )
-        )
-        try:
-            discover(trino_settings, "dbpcm_datawarehouse", "employee")
-            assert connect.call_args.args[1] == f"{pc}|{code}|alice"
-            assert cursor.execute.call_args_list[-2].args[1] == [shard, "employee"]
-        finally:
-            current_principal.reset(token)
-    assert connect.call_count == 2
-
-
 def test_public_alias_allowlist_and_explain(
-    monkeypatch, trino_settings, principal, authored_discovery
+    monkeypatch, trino_settings, principal
 ):
     trino_settings.allowed_databases = "dbpcm_datawarehouse"
-    trino_settings.trino_mysql_view_catalog = "dbpcm_datawarehouse"
     assert tables(
         trino_client.rewrite_query(
             "SELECT employee_code FROM dbpcm_datawarehouse.employee", trino_settings
         )
-    ) == {("dbpcm_datawarehouse", "online__okc__01__dbonline", "employee")}
+    ) == {("online__okc__01__dbonline", "dbonline", "employee")}
     assert service.list_tables("dbpcm_datawarehouse", trino_settings)
     execute = MagicMock(return_value=(["plan"], [["plan text"]]))
     monkeypatch.setattr(trino_client, "execute_query", execute)
@@ -1202,51 +1089,15 @@ def test_physical_view_cannot_bypass_routing(trino_settings, principal):
         )
 
 
-# --- Lazy shard resolution (post-cherry-pick review, MAJOR) -------------------
-# discover() must mirror rewrite_query's laziness: the MySQL shard is resolved
-# only when the candidate set actually contains a mysql-source entry. A tenant
-# with NO registry route must still reach clickhouse-source relations, while a
-# mysql-source candidate still fails CLOSED before any network I/O.
-
-
-# --- Per-request discovery memoization (post-cherry-pick review, HIGH) --------
-# The transports bind trino_metadata.discovery_memo next to the principal for
-# the life of one request, so one MCP operation pays ONE live discovery sweep
-# (previously up to three) and later shapes project from it in memory. Failures
-# are never cached; the memo dies with the request context; another identity in
-# the same context never inherits a sweep.
-
-
-@pytest.fixture
-def request_memo():
-    """Bind the per-request discovery memo exactly like the MCP middleware does."""
-    from app import trino_metadata
-
-    token = trino_metadata.discovery_memo.set({})
-    yield
-    trino_metadata.discovery_memo.reset(token)
-
-
-def _full_sweep_rows(settings):
-    """information_schema rows covering one column of every allowed catalog table."""
-    from app import trino_metadata
-
-    return [
-        [entry["table"], next(iter(entry["columns"])), "varchar"]
-        for entry in trino_metadata.logical_catalog(settings).values()
-    ]
-
-
 def test_scoped_get_table_schema_never_connects(
-    monkeypatch, trino_settings, principal, request_memo
+    monkeypatch, trino_settings, principal
 ):
     """Scoped getTableSchema: no metadata connections."""
     from app.principal import current_scope
 
     monkeypatch.setattr("app.catalog.get_settings", lambda: trino_settings)
-    connect, _, _ = discovery_connection(
-        monkeypatch, _full_sweep_rows(trino_settings)
-    )
+    connect = MagicMock(side_effect=AssertionError("unexpected metadata I/O"))
+    monkeypatch.setattr(trino_client, "_connect", connect)
     token = current_scope.set(
         frozenset({"dbpcm_warehouse.employee.employee_code"})
     )
@@ -1262,13 +1113,12 @@ def test_scoped_get_table_schema_never_connects(
 
 
 def test_sample_rows_makes_zero_discovery_and_one_execution(
-    monkeypatch, trino_settings, principal, request_memo
+    monkeypatch, trino_settings, principal
 ):
     """sampleRows on the RLS-hidden employee view: 0 discovery + 1 execution."""
     monkeypatch.setattr("app.catalog.get_settings", lambda: trino_settings)
-    connect, _, _ = discovery_connection(
-        monkeypatch, _full_sweep_rows(trino_settings)
-    )
+    connect = MagicMock(side_effect=AssertionError("unexpected metadata I/O"))
+    monkeypatch.setattr(trino_client, "_connect", connect)
     execute = MagicMock(return_value=(["employee_code"], [["E1"]]))
     monkeypatch.setattr(trino_client, "execute_query", execute)
     result = service.sample_rows(
@@ -1283,13 +1133,12 @@ def test_sample_rows_makes_zero_discovery_and_one_execution(
 
 
 def test_run_query_makes_zero_discovery_and_one_execution(
-    monkeypatch, trino_settings, principal, request_memo
+    monkeypatch, trino_settings, principal
 ):
     """runQuery with provenance: still 0 discovery + 1 execution connection."""
     monkeypatch.setattr("app.catalog.get_settings", lambda: trino_settings)
-    connect, _, _ = discovery_connection(
-        monkeypatch, _full_sweep_rows(trino_settings)
-    )
+    connect = MagicMock(side_effect=AssertionError("unexpected metadata I/O"))
+    monkeypatch.setattr(trino_client, "_connect", connect)
     execute = MagicMock(return_value=(["n"], [[1]]))
     monkeypatch.setattr(trino_client, "execute_query", execute)
     service.run_query(
@@ -1301,113 +1150,17 @@ def test_run_query_makes_zero_discovery_and_one_execution(
     execute.assert_called_once()
 
 
-def test_memo_skips_failures_and_dies_with_context(
-    monkeypatch, trino_settings, principal
-):
-    from app import trino_metadata
-
-    rows = _full_sweep_rows(trino_settings)
-    token = trino_metadata.discovery_memo.set({})
-    try:
-        connect, _, cursor = discovery_connection(monkeypatch, rows)
-        cursor.execute.side_effect = RuntimeError("boom")
-        with pytest.raises(ClickHouseUnavailableError):
-            trino_metadata.discover(trino_settings)
-        assert connect.call_count == 1
-        # Failures are NOT cached: an in-request retry probes Trino afresh ...
-        connect, _, _ = discovery_connection(monkeypatch, rows)
-        trino_metadata.discover(trino_settings)
-        assert connect.call_count == 1
-        # ... and only THEN do later shapes project from the memo in memory.
-        trino_metadata.discover(trino_settings, "dbpcm_datawarehouse", "employee")
-        trino_metadata.catalog_schema(trino_settings)
-        assert connect.call_count == 1
-    finally:
-        trino_metadata.discovery_memo.reset(token)
-    # The memo dies with its context: unbound callers stay one-shot-per-call.
-    connect, _, _ = discovery_connection(monkeypatch, rows)
-    trino_metadata.discover(trino_settings, "dbpcm_datawarehouse", "employee")
-    trino_metadata.discover(trino_settings, "dbpcm_datawarehouse", "employee")
-    assert connect.call_count == 2
-
-
-def test_memo_preserves_identity_isolation(monkeypatch, trino_settings):
-    from app import trino_metadata
-
-    trino_settings.trino_mysql_view_catalog = "dbpcm_datawarehouse"
-    rows = _full_sweep_rows(trino_settings)
-    token = trino_metadata.discovery_memo.set({})
-    try:
-        connect, _, cursor = discovery_connection(monkeypatch, rows)
-        # Routing diversity comes from client_code: 10R37 -> prod_01, 12ABC -> prod_02.
-        for code, shard in [
-            ("10R37", "online__okc__01__dbonline"),
-            ("12ABC", "online__okc__02__dbonline"),
-        ]:
-            principal_token = current_principal.set(
-                Principal(
-                    "s",
-                    {"proc_center": "pc1", "clientcode": code, "user_name": "alice", "jti": "alice-jti"},
-                )
-            )
-            try:
-                trino_metadata.discover(
-                    trino_settings, "dbpcm_datawarehouse", "employee"
-                )
-            finally:
-                current_principal.reset(principal_token)
-        # Two identities = two sweeps: a memo NEVER crosses identities.
-        assert connect.call_count == 2
-        assert [c.args[1] for c in connect.call_args_list] == [
-            "pc1|10R37|alice",
-            "pc1|12ABC|alice",
-        ]
-        mysql_info_calls = [
-            c
-            for c in cursor.execute.call_args_list
-            if "information_schema" in c.args[0] and c.args[1][0] != "dbpcm_warehouse"
-        ]
-        assert [c.args[1][0] for c in mysql_info_calls] == [
-            "online__okc__01__dbonline",
-            "online__okc__02__dbonline",
-        ]
-        # A repeat under the FIRST identity is memo-served (same request, same identity).
-        principal_token = current_principal.set(
-            Principal(
-                "s", {"proc_center": "pc1", "clientcode": "10R37", "user_name": "alice", "jti": "alice-jti"}
-            )
-        )
-        try:
-            trino_metadata.discover(trino_settings, "dbpcm_datawarehouse", "employee")
-        finally:
-            current_principal.reset(principal_token)
-        assert connect.call_count == 2
-    finally:
-        trino_metadata.discovery_memo.reset(token)
-
-
 # --- Boot-time validation of Trino routing identifiers (review follow-up) -----
-# trino_mysql_schema / trino_clickhouse_catalog / trino_mysql_view_catalog are
+# trino_mysql_schema / trino_clickhouse_catalog / trino_itdba_name are
 # interpolated into physical SQL names; a value that fails validate_identifier
 # now fails Settings() construction instead of the first query.
-
-
-def test_trino_mysql_view_catalog_rejected_at_boot():
-    # The reviewer's shape: construction itself fails, not the first request —
-    # and it fails even with TRINO_ENABLED unset (a misconfig is a misconfig).
-    with pytest.raises(ValidationError, match="trino_mysql_view_catalog"):
-        Settings(
-            _env_file=None,
-            employee_access_enabled=False,
-            trino_mysql_view_catalog="Bad;Name",
-        )
 
 
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("trino_mysql_view_catalog", "1lead_digit"),
-        ("trino_mysql_view_catalog", "Upper_Case"),
+        ("trino_itdba_name", "1lead_digit"),
+        ("trino_itdba_name", "Upper_Case"),
         ("trino_clickhouse_catalog", "bad-name"),
         ("trino_mysql_schema", "bad name"),
         ("trino_mysql_schema", 'db"online'),
@@ -1421,23 +1174,10 @@ def test_trino_routing_identifier_rejected_at_boot(field, value):
 
 
 def test_trino_routing_identifiers_accept_valid_values():
-    # Empty view catalog stays legal (direct source-catalog routing).
-    assert (
-        Settings(
-            _env_file=None, employee_access_enabled=False, trino_mysql_view_catalog=""
-        ).trino_mysql_view_catalog
-        == ""
-    )
-    settings = Settings(
-        _env_file=None,
-        employee_access_enabled=False,
-        trino_mysql_view_catalog="custom_view_catalog",
-        trino_clickhouse_catalog="ch_federated",
-        trino_mysql_schema="dbreplica_2",
-    )
-    assert settings.trino_mysql_view_catalog == "custom_view_catalog"
+    settings = Settings(_env_file=None, employee_access_enabled=False,
+                        trino_clickhouse_catalog="ch_federated", trino_mysql_schema="dbonline")
     assert settings.trino_clickhouse_catalog == "ch_federated"
-    assert settings.trino_mysql_schema == "dbreplica_2"
+    assert settings.trino_mysql_schema == "dbonline"
 
 
 def test_scalar_constant_routing(trino_settings, principal):
@@ -1476,7 +1216,9 @@ def test_schema_authoring_types_preserve_nullability(monkeypatch, trino_settings
             "hire_date": {"type": "Nullable(Date)", "physical_type": "date"},
         }}
     })
-    assert trino_metadata.column_rows("dbpcm_datawarehouse", "employee", trino_settings) == [
-        ["annual_salary", "Nullable(Decimal(18,6))", ""],
-        ["hire_date", "Nullable(Date)", ""],
-    ]
+    assert trino_metadata.catalog_schema(trino_settings) == {
+        "dbpcm_warehouse.employee": {
+            "annual_salary": "Nullable(Decimal(18,6))",
+            "hire_date": "Nullable(Date)",
+        }
+    }

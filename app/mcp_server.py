@@ -332,6 +332,9 @@ def list_tables(
         "and descriptive comments — preventing type-mismatch errors and helping "
         "you write correct WHERE clauses and aggregations. "
         "Columns and catalog entries outside your permitted access scope are omitted. "
+        "Columns may include live context lookup rows for configured codes and descriptions. "
+        "These are caller-bound evidence within the documented column scope; use them directly "
+        "without resolveValues when they answer the question. Context SQL stays server-only. "
         "Use the optional 'columns' argument to fetch the FULL documentation for specific "
         "columns when a schema preview showed them as name/type only: pass the exact column "
         "names, spelled as the schema spells them (matching is case-sensitive). The table-level "
@@ -763,12 +766,18 @@ class JWTAuthMiddleware:
                 )
                 return
 
-        from app.catalog_scope import resolve_principal_permissions
-        from app.errors import ClickHouseUnavailableError
+        from app.session_catalog import SESSION_PATH, SCOPE_HEADER, SessionScopeError, verify_scope
+        from app.catalog_scope import CatalogScope
+        from dataclasses import replace
         try:
-            principal = await anyio.to_thread.run_sync(resolve_principal_permissions, principal)
-        except ClickHouseUnavailableError as exc:
-            await _send_json_response(send, 503, {"error": exc.message, "code": exc.code})
+            if path == SESSION_PATH:
+                # Bootstrap authenticates the JWT, but only the handler calculates scope.
+                principal = replace(principal, catalog_scope=CatalogScope(columns=frozenset()))
+            else:
+                headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+                principal = verify_scope(principal, session_id_value, headers.get(SCOPE_HEADER.lower()), self.settings)
+        except SessionScopeError as exc:
+            await _send_json_response(send, exc.status, {"error": exc.message, "code": exc.code})
             return
 
         ctx_token = current_principal.set(principal)
@@ -954,25 +963,35 @@ async def health_check(request: Request) -> JSONResponse:
 # bootstrap endpoint MUST live here (not on the separate REST app) or the fetch
 # 404s in every real split-deployment topology.
 #
-# It rides on the same MCP app behind JWTAuthMiddleware, so a valid Bearer JWT is
-# required (default-deny: not in the middleware's public_paths). It is
-# scope-INDEPENDENT and session-INDEPENDENT by design: it returns the FULL catalog
-# (every table, every column) for any authenticated principal, and never consults
-# the caller's column scope or X-Session-Id. That is safe because this is
-# trusted-runtime bootstrap data consumed by the agent process, NOT model-facing
-# data (contrast getTableSchema, which scope-filters columns).
+# Session bootstrap computes permissions once. User exports require a signed
+# session scope and are trimmed; infrastructure service-key exports remain full.
 # ---------------------------------------------------------------------------
+
+@mcp.custom_route("/session/catalog", methods=["POST"])
+async def session_catalog_route(request: Request) -> JSONResponse:
+    from app.session_catalog import materialize, SessionScopeError
+    from app.errors import ClickHouseUnavailableError
+    from app.principal import get_current_principal, get_current_session_id
+    try:
+        result = await anyio.to_thread.run_sync(
+            materialize, get_current_principal(), get_current_session_id(), settings
+        )
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    except SessionScopeError as exc:
+        return JSONResponse({"error": exc.message, "code": exc.code}, status_code=exc.status)
+    except ClickHouseUnavailableError as exc:
+        return JSONResponse({"error": exc.message, "code": exc.code}, status_code=503)
+
 
 @mcp.custom_route("/catalog/export", methods=["GET"])
 async def catalog_export_route(request: Request) -> JSONResponse:
-    """Return the full, scope-independent semantic catalog export (D-Wave1a).
-
-    Auth is enforced by JWTAuthMiddleware (a valid Bearer token is required; the
-    path is default-deny). The body is ``build_catalog_export()`` verbatim: the
-    ``catalog_sha`` content fingerprint plus every catalogued table's full overlay.
-    No column-scope filtering is applied — every valid principal gets the identical
-    payload.
-    """
+    """Export the scoped user catalog, or the full infrastructure catalog by service key."""
+    from app.principal import get_current_principal
+    if get_current_principal() is not None:
+        from app.catalog_scope import scoped_catalog
+        from app.semantic_catalog import get_semantic_catalog, get_catalog_sha
+        from app.semantic_catalog.export import build_catalog_export_from
+        return JSONResponse(build_catalog_export_from(scoped_catalog(get_semantic_catalog()), get_catalog_sha(), trino_enabled=settings.trino_enabled))
     return JSONResponse(build_catalog_export())
 
 
@@ -1383,18 +1402,18 @@ def _parse_args() -> argparse.Namespace:
 
 
 def create_http_app():
-    """Verify once at ASGI startup, never in FastMCP's per-request lifespan."""
+    """Validate the local catalog once at ASGI startup, without tenant probes."""
     app = mcp.streamable_http_app()
     original_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
-    async def verified_lifespan(application):
-        from app.catalog_verification import verify_catalog
-        await anyio.to_thread.run_sync(verify_catalog, settings)
+    async def catalog_lifespan(application):
+        from app.semantic_catalog.loader import get_semantic_catalog
+        await anyio.to_thread.run_sync(get_semantic_catalog)
         async with original_lifespan(application) as state:
             yield state
 
-    app.router.lifespan_context = verified_lifespan
+    app.router.lifespan_context = catalog_lifespan
     return app
 
 
@@ -1442,8 +1461,8 @@ def main() -> None:
     configure_logging(settings.log_level, stdio=transport == "stdio")
 
     if transport == "stdio":
-        from app.catalog_verification import verify_catalog
-        verify_catalog(settings)
+        from app.semantic_catalog.loader import get_semantic_catalog
+        get_semantic_catalog()
         logger.info("Starting MCP server (stdio transport)")
         mcp.run(transport="stdio")
     elif transport == "http":

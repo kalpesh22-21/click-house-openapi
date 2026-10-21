@@ -333,7 +333,7 @@ def _has_limit(sql: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def validate_and_sanitize(sql: str, default_limit: int) -> str:
+def validate_and_sanitize(sql: str, default_limit: int, *, inject_limit: bool = True) -> str:
     """Validate *sql* and return a safe version ready to send to ClickHouse.
 
     Raises HTTPException(400) with a descriptive message on any violation so
@@ -346,7 +346,7 @@ def validate_and_sanitize(sql: str, default_limit: int) -> str:
          semicolon inside a quoted value is not misread as a separator).
       3. Allowlist check.
       4. Denylist check (including table-function names).
-      5. Inject LIMIT if absent.
+      5. Inject LIMIT if absent (unless a trusted caller disables injection).
 
     Returns the (possibly modified) SQL string.
     """
@@ -440,7 +440,7 @@ def validate_and_sanitize(sql: str, default_limit: int) -> str:
     # 5. Auto-inject LIMIT on SELECT queries that have none.
     #    We only do this for SELECT / WITH — SHOW / DESCRIBE / EXPLAIN manage
     #    their own output sizes.
-    if normalised.startswith(("select", "with")) and not _has_limit(stripped):
+    if inject_limit and normalised.startswith(("select", "with")) and not _has_limit(stripped):
         stripped = f"{stripped} LIMIT {default_limit}"
 
     return stripped

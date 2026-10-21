@@ -687,6 +687,10 @@ def get_table_schema(
         # the deployment's ACTIVE backend (trino_notes here iff Trino serves).
         trino_enabled=settings.trino_enabled,
     )
+    if database != settings.scratch_database:
+        from app.catalog_context import enrich_column_context
+        entry = get_semantic_catalog().get(f"{database}.{table}", {})
+        enrich_column_context(response, entry, settings)
     response["catalog_sha"] = get_catalog_sha()
     if settings.trino_enabled:
         from app.trino_metadata import public_database

@@ -6,7 +6,7 @@ import logging
 from functools import lru_cache
 from typing import Annotated, Dict, List, Literal, Optional
 
-from pydantic import Field, PrivateAttr, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.constants import SCRATCH_DATABASE
@@ -74,16 +74,20 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    session_scope_ttl_seconds: int = Field(3600, ge=60, le=86400)
+
+    # Per-column context is complete-or-error, never silently truncated.
+    catalog_context_max_rows: int = Field(1000, ge=1)
+    catalog_context_max_bytes: int = Field(1048576, ge=1)
+
     # --- Execution backend ---
     # Experimental federation. Logical SQL/column permissions remain unchanged;
     # physical names are resolved only after the service guardrails run.
-    # Deployment-owned JSON identities used only for startup contract checks.
-    catalog_verification_targets_path: str = ""
-    _verified_catalog_shards: frozenset[str] | None = PrivateAttr(default=None)
     trino_enabled: bool = False
     trino_host: str = ""
     trino_port: int = Field(443, ge=1, le=65535)
     trino_http_scheme: Literal["http", "https"] = "https"
+    # Authenticated service principal; query user remains the verified caller.
     trino_user: str = ""
     trino_password: str = Field("", repr=False)
     trino_request_timeout: float = Field(30, gt=0)
@@ -92,13 +96,8 @@ class Settings(BaseSettings):
     # dbonline); any registry row whose database differs is ineligible.
     trino_mysql_schema: str = "dbonline"
     trino_clickhouse_catalog: str = "clickhouse"
-    # View-hosting catalog: dbpcm_datawarehouse.<shard>.employee.
-    # Empty means connector catalogs: <shard>.dbonline.employee.
-    trino_mysql_view_catalog: str = "dbpcm_datawarehouse"
-    trino_mysql_source_mode: Literal["views", "system_query"] = "system_query"
-    # Private, deployment-owned native SQL and projection contracts. Never export
-    # these definitions through the semantic catalog or include them in images.
-    trino_mysql_native_sources_dir: str = "docker/trino/native_sources"
+    # Private read-only Trino SELECT templates, mounted at runtime.
+    trino_mysql_sources_dir: str = "app/semantic_catalog/mysql_views"
     trino_client_code_claim: str = "clientcode"
     trino_proc_center_claim: str = "proc_center"
     trino_username_claim: str = "user_name"
@@ -120,7 +119,7 @@ class Settings(BaseSettings):
         ),
     )
     # Switching drivers cannot preserve ClickHouse getSetting-based RLS by
-    # itself. Enable only after deploying equivalent secured views/policies.
+    # itself. Enable only after validating source SQL and connector row policies.
     trino_security_ready: bool = False
 
     # --- ClickHouse connection ---
@@ -384,7 +383,8 @@ class Settings(BaseSettings):
         description=(
             "Static shared secret accepted on the MCP export routes via the "
             "X-Service-Key header (constant-time compared), as an EITHER-OR "
-            "alternative to a user JWT. Export-paths only. Empty → feature OFF "
+            "alternative to a user JWT on export paths. Also signs session scope tokens; "
+            "required for session initialization. Empty → feature OFF "
             "and fail-closed (an empty key never matches). Secret; from Vault "
             "when enabled."
         ),
@@ -751,7 +751,7 @@ class Settings(BaseSettings):
         return _normalise_public_key(v)
 
     @field_validator(
-        "trino_mysql_schema", "trino_clickhouse_catalog", "trino_mysql_view_catalog", "trino_itdba_name"
+        "trino_mysql_schema", "trino_clickhouse_catalog", "trino_itdba_name"
     )
     @classmethod
     def _validate_trino_routing_identifiers(cls, v: str, info) -> str:
@@ -760,14 +760,11 @@ class Settings(BaseSettings):
         These three values are concatenated into rewritten SQL physical names
         (catalog/schema positions), so they must satisfy the same identifier
         grammar app.shard_routing.validate_identifier enforces at query time
-        (``[a-z][a-z0-9_]*``). trino_mysql_view_catalog may legitimately be
-        EMPTY (direct source-catalog routing); the other two always carry an
-        identifier. The import of shard_routing is function-level on purpose:
+        (``[a-z][a-z0-9_]*``). The import of shard_routing is function-level
+        on purpose:
         app.shard_routing imports app.config at module scope, so a module-level
         import here would be a cycle (mirrors _validate_scratch_db_single_source).
         """
-        if info.field_name == "trino_mysql_view_catalog" and not v.strip():
-            return v
         from app.errors import QueryValidationError
         from app.shard_routing import validate_identifier
 
