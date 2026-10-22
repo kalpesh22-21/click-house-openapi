@@ -309,6 +309,15 @@ columns:
     type: Nullable(Date32)
     description: Date the corporate card expires.
 rules:
+- id: expense_employee_detail_population
+  predicate: employee.employee_status IN ('Active', 'On Leave')
+  applies_when: >
+    Employee-detail requests, even with a period filter.
+    Does not apply to period fact totals or aggregates, including by employee or department; use all accessible records.
+  description: >
+    Default to current Active and On Leave. Explicit user scope overrides this default.
+    Apply per result and blueprint slot; disclose population briefly.
+    Filter via a tenant-scoped employee semijoin to avoid duplicating records.
 - id: approved_expenses
   predicate: expense_status IN ('Approved', 'Paid', 'Marked as Paid')
   applies_when: User asks about reimbursable or approved spend.

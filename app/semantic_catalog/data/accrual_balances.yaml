@@ -86,3 +86,14 @@ columns:
 
 row_scope:
   implicit_filters: [client_code, proc_center]
+
+rules:
+- id: accrual_balances_employee_detail_population
+  predicate: employee.employee_status IN ('Active', 'On Leave')
+  applies_when: >
+    Employee-detail requests, even with a period filter.
+    Does not apply to period fact totals or aggregates, including by employee or department; use all accessible records.
+  description: >
+    Default to current Active and On Leave. Explicit user scope overrides this default.
+    Apply per result and blueprint slot; disclose population briefly.
+    Filter via a tenant-scoped employee semijoin to avoid duplicating records.

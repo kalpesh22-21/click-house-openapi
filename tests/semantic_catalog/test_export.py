@@ -56,6 +56,16 @@ class TestBuildCatalogExport:
         #  - description-col linkage carried on the column block (not padded elsewhere)
         assert payroll["columns"]["type_code"]["description_col"] == "type_code_description"
 
+    def test_employee_population_default_survives_export(self):
+        employee = export.build_catalog_export()["catalog"]["dbpcm_warehouse.employee"]
+        rules = {rule["id"]: rule for rule in employee["rules"]}
+        assert "exclude_not_hired_default" not in rules
+        default = rules["default_employee_population"]
+        assert default["predicate"] == "employee_status IN ('Active', 'On Leave')"
+        assert "Does not apply to fact totals" in default["applies_when"]
+        assert "Explicit user scope overrides" in default["description"]
+        assert rules["active_employee"]["predicate"] == "employee_status = 'Active'"
+
     def test_result_is_json_serializable(self):
         result = export.build_catalog_export()
         # Round-trips through JSON without custom encoders (pure data).
@@ -88,3 +98,14 @@ class TestBuildCatalogExportFrom:
         result = export.build_catalog_export_from(fake, "sha")
         result["catalog"]["dbpcm_warehouse.t"]["table"] = "changed"
         assert fake["dbpcm_warehouse.t"]["table"] == "t"
+
+
+@pytest.mark.parametrize("table", ["accrual_balances", "accrual_events", "expense", "payroll", "total_earning", "punch_pair", "employee_change"])
+def test_module_detail_population_rule_survives_export(table):
+    entry = export.build_catalog_export()["catalog"][f"dbpcm_warehouse.{table}"]
+    rule = next(r for r in entry["rules"] if r["id"] == f"{table}_employee_detail_population")
+    assert rule["predicate"] == "employee.employee_status IN ('Active', 'On Leave')"
+    assert "Does not apply to period fact totals" in rule["applies_when"]
+    assert "period filter" in rule["applies_when"]
+    assert "Explicit user scope overrides" in rule["description"]
+    assert "semijoin" in rule["description"]

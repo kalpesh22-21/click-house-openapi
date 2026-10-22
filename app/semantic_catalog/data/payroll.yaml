@@ -250,6 +250,15 @@ measures:
     defined_over: Hours-bearing rows, usually narrowed by register_type and type_code depending on whether the user wants
       worked, paid, PTO, overtime, or all hours.
 rules:
+- id: payroll_employee_detail_population
+  predicate: employee.employee_status IN ('Active', 'On Leave')
+  applies_when: >
+    Employee-detail requests, even with a period filter.
+    Does not apply to period fact totals or aggregates, including by employee or department; use all accessible records.
+  description: >
+    Default to current Active and On Leave. Explicit user scope overrides this default.
+    Apply per result and blueprint slot; disclose population briefly.
+    Filter via a tenant-scoped employee semijoin to avoid duplicating records.
 - id: gross_earnings
   predicate: register_type = 'EARN'
   applies_when: gross earnings or payroll earnings questions
