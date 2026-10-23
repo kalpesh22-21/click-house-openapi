@@ -69,3 +69,17 @@ def test_paging_with_unprojected_order_is_rejected():
     tree = sqlglot.parse_one('SELECT * FROM (SELECT x FROM employee ORDER BY y) AS page_src LIMIT 25', read='clickhouse')
     with pytest.raises(QueryValidationError):
         preserve_paging_order(tree)
+
+
+def test_paging_maps_qualified_sort_key_to_projected_display_alias():
+    from app.trino_constructs import preserve_paging_order
+    tree = sqlglot.parse_one('SELECT * FROM (SELECT u.employee_code AS "Employee Code", u.bonus AS Bonus FROM uploaded u ORDER BY u.employee_code, u.bonus DESC) p LIMIT 10 OFFSET 1', read='clickhouse')
+    preserve_paging_order(tree)
+    assert tree.args['order'].sql(dialect='trino') == 'ORDER BY "Employee Code", "Bonus" DESC'
+
+
+def test_paging_rejects_ambiguous_projected_alias():
+    from app.trino_constructs import preserve_paging_order
+    tree = sqlglot.parse_one('SELECT * FROM (SELECT u.x AS n, u.y AS n FROM uploaded u ORDER BY u.x) p LIMIT 10', read='clickhouse')
+    with pytest.raises(QueryValidationError):
+        preserve_paging_order(tree)

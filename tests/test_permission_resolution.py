@@ -164,7 +164,7 @@ def test_sample_projects_catalog_columns_without_introspection(monkeypatch):
     execute = MagicMock(return_value=(["id", "name"], [[1, "A"]]))
     monkeypatch.setattr(service, "_execute", execute)
     assert service.list_tables("db") == [
-        {"database": "db", "name": "t", "engine": "ClickHouse"}
+        {"database": "db", "name": "t", "engine": "ClickHouse", "description": ""}
     ]
     assert service.get_table_schema("db", "t")["catalogued"]
     execute.assert_not_called()

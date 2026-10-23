@@ -98,8 +98,8 @@ def preserve_paging_order(tree):
     """Carry projected ordering through SELECT * paging wrappers.
 
     Trino may discard a derived table ORDER BY when its parent applies paging.
-    Only identity wrappers are admitted; never invent ordering expressions for
-    renamed, filtered, joined or aggregated projections.
+    Only identity wrappers are admitted. A projected source column may be
+    referenced by its unique output alias; unprojected sort keys remain rejected.
     """
     for select in tree.find_all(exp.Select):
         if not (select.args.get("limit") or select.args.get("offset")) or select.args.get("order"):
@@ -121,6 +121,12 @@ def preserve_paging_order(tree):
             key = item.this
             if isinstance(key, exp.Column) and not key.table and names.count(key.name) == 1:
                 continue
+            if isinstance(key, exp.Column):
+                matches = [projection for projection in source.this.expressions
+                           if (projection.this if isinstance(projection, exp.Alias) else projection) == key]
+                if len(matches) == 1 and names.count(matches[0].alias_or_name) == 1:
+                    item.set("this", exp.column(matches[0].alias_or_name, quoted=True))
+                    continue
             if isinstance(key, exp.Literal) and not key.is_string and key.this.isdigit() and 1 <= int(key.this) <= len(names):
                 continue
             unsupported("Paging over an ordered subquery requires ordering by projected column names or positions.")

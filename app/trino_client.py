@@ -378,7 +378,16 @@ def _concat_with_separator_as_concat_ws(func: exp.Func) -> exp.Expression:
     return exp.ConcatWs(expressions=list(func.expressions), coalesce=False)
 
 
+def _lower_utf8(func: exp.Func) -> exp.Expression:
+    from app.trino_semantics import require_type
+    from app.trino_constructs import unsupported
+    if require_type(func.expressions[0], "lowerUTF8").kind not in {"string", "null"}:
+        unsupported("lowerUTF8 requires a string input.")
+    return exp.Lower(this=func.expressions[0].copy())
+
+
 _CLICKHOUSE_FUNCTION_MAP: dict[str, _FunctionMapping] = {
+    "lowerutf8": _FunctionMapping(_lower_utf8, lambda n: n == 1),
     "uniqexact": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n == 1),
     "countdistinct": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n == 1),
     "now": _FunctionMapping(lambda _: exp.CurrentTimestamp(), lambda n: n == 0),
@@ -442,8 +451,8 @@ def _map_clickhouse_functions(tree: exp.Query) -> None:
 def rewrite_query(sql: str, settings: Settings) -> str:
     """Route base relations, preserving CTE names, aliases and logical columns.
 
-    Physical catalog names and scratch relations are intentionally inaccessible
-    to caller SQL. SELECT/UNION and plain EXPLAIN SELECT are the initial surface.
+    Physical catalog names are inaccessible to caller SQL; session-owned
+    scratch relations use the configured ClickHouse connector. SELECT/UNION and plain EXPLAIN SELECT are the initial surface.
 
     Transpile/validation rejections are logged at ERROR (sanitized: error
     code + failure class only — never SQL text, identity values, or row data)
@@ -500,7 +509,8 @@ def _rewrite_query(sql: str, settings: Settings) -> str:
                     for node in list(clause.walk(prune=lambda n: isinstance(n, (exp.Subquery, exp.Select)))):
                         if isinstance(node, exp.Column) and not node.table and node.name in aliases:
                             node.replace(aliases[node.name].copy())
-        catalog = get_semantic_catalog()
+        from app.scratch_metadata import catalog_entries as scratch_catalog_entries
+        catalog = {**get_semantic_catalog(), **scratch_catalog_entries(tree, settings)}
         from app.trino_semantics import annotate_input_types
 
         annotate_input_types(tree, catalog)
@@ -528,7 +538,7 @@ def _rewrite_query(sql: str, settings: Settings) -> str:
                     allowed is not None and source.db not in allowed
                 ):
                     raise QueryValidationError(
-                        "Trino accepts only allowed logical catalog tables; scratch is not supported.",
+                        "Trino accepts only allowed catalog tables and session-owned scratch tables.",
                         "TABLE_NOT_ALLOWED",
                     )
                 entry = catalog[key]
@@ -551,7 +561,13 @@ def _rewrite_query(sql: str, settings: Settings) -> str:
         # Map caller expressions before inserting backend-native source SQL.
         _map_clickhouse_functions(tree)
         for source, entry, resolved_shard in replacements:
-            replacement = source_relation(entry, resolved_shard, identity, settings)
+            if entry.get("source") == "scratch":
+                replacement = exp.Table(
+                    this=exp.to_identifier(entry["table"], quoted=True),
+                    db=exp.to_identifier(entry["database"], quoted=True),
+                    catalog=exp.to_identifier(validate_identifier(settings.trino_clickhouse_catalog), quoted=True))
+            else:
+                replacement = source_relation(entry, resolved_shard, identity, settings)
             replacement.set("alias", source.args.get("alias"))
             source.replace(replacement)
         rendered = tree.sql(dialect="trino", unsupported_level=ErrorLevel.RAISE)

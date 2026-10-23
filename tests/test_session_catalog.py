@@ -32,6 +32,7 @@ def setup(monkeypatch):
 def test_materialize_once_then_verify_without_permission_sql(setup):
     settings, principal, permissions = setup
     snapshot = materialize(principal, 's1', settings)
+    assert snapshot['scratch_database'] == settings.scratch_database
     assert set(snapshot['catalog']['db.t']['columns']) == {'id', 'name'}
     assert 'context_sql' not in snapshot['catalog']['db.t']['columns']['name']
     for _ in range(3):

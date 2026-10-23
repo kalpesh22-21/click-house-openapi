@@ -459,7 +459,7 @@ def list_databases(settings: Settings | None = None) -> list[dict[str, str]]:
     # Scratch schemas are dynamic and session-owned, not part of the warehouse
     # catalog. Expose their namespace only to callers with a bound session.
     allowed = settings.allowed_databases_list()
-    if not settings.trino_enabled and get_current_session_id() and (allowed is None or settings.scratch_database in allowed):
+    if get_current_session_id() and (allowed is None or settings.scratch_database in allowed):
         names.add(settings.scratch_database)
     return [{"name": public_database(name) if settings.trino_enabled else name} for name in sorted(names)]
 
@@ -474,14 +474,18 @@ def list_tables(database: str, settings: Settings | None = None) -> list[dict[st
     _check_database_allowed(database, settings)
     if database == settings.scratch_database:
         session_id = get_current_session_id()
-        if session_id is None or settings.trino_enabled:
+        if session_id is None:
             return []
-        _, rows = _execute(
-            "SELECT database, name, engine FROM system.tables WHERE database = %(db)s ORDER BY name",
-            settings, parameters={"db": database},
-        )
+        from app.scratch_metadata import is_uploaded_table, uploaded_tables
+        if settings.trino_enabled:
+            rows = uploaded_tables(settings)
+        else:
+            _, rows = _execute(
+                "SELECT database, name, engine FROM system.tables WHERE database = %(db)s ORDER BY name",
+                settings, parameters={"db": database},
+            )
         return [{"database": row[0], "name": row[1], "engine": row[2]} for row in rows
-                if scratch_table_belongs_to_session(row[1], session_id)]
+                if is_uploaded_table(row[1], session_id)]
     return [
         {"database": public_database(database) if settings.trino_enabled else database,
          "name": entry["table"], "engine": "Trino" if settings.trino_enabled else "ClickHouse",
@@ -639,7 +643,8 @@ def get_table_schema(
             )
 
     if database == settings.scratch_database and settings.trino_enabled:
-        rows = []  # Scratch relations are not supported by the Trino backend.
+        from app.scratch_metadata import columns as scratch_columns
+        rows = scratch_columns(table, settings)
     elif database == settings.scratch_database:
         _, rows = _execute(
             "SELECT name, type, comment FROM system.columns "
@@ -675,6 +680,9 @@ def get_table_schema(
     # rules[]/ambiguities[] when scope-filtering is actually active (FIX 1,
     # security review) — skip the extra query entirely when enforcement is a
     # no-op (scope is None or the empty/allow-all frozenset).
+    # Scratch is authorized by session ownership above, not static catalog columns.
+    if database == settings.scratch_database:
+        scope = None
     introspected_schema = get_catalog_schema() if scope else None
     response = build_table_schema_response(
         database=database,
@@ -827,6 +835,11 @@ def sample_rows(
     uses = None
     if need_provenance:
         catalog = get_catalog_schema()
+        if settings.trino_enabled and references_scratch:
+            from app.scratch_metadata import columns as scratch_columns
+            catalog = {**catalog, f"{database}.{table}": {
+                row[0]: row[1] for row in scratch_columns(table, settings)
+            }}
 
         try:
             uses = extract_column_provenance(sql, catalog, session_id=session_id)
@@ -1031,6 +1044,14 @@ def _enforce_query_guardrails(
             )
 
         catalog = get_catalog_schema()
+        if settings.trino_enabled and references_scratch:
+            import sqlglot
+            from app.scratch_metadata import catalog_entries
+            dynamic = catalog_entries(sqlglot.parse_one(clean_sql, read="clickhouse"), settings)
+            catalog = {**catalog, **{
+                key: {name: info["type"] for name, info in entry["columns"].items()}
+                for key, entry in dynamic.items()
+            }}
 
         try:
             uses = extract_column_provenance(clean_sql, catalog, session_id=session_id)

@@ -69,7 +69,7 @@ def materialize(principal: Principal, session_id: str | None, settings: Settings
                    catalog_sha=snapshot_sha, version=1, jti=uuid.uuid4().hex,
                    grants=base64.urlsafe_b64encode(zlib.compress(encoded_grants)).decode())
     signed = jwt.encode(payload, key, algorithm="HS256", headers={"typ": "mcp-session-scope+jwt"})
-    return {**export, "source_sha": source_sha, "scope_token": signed, "expires_at": expires,
+    return {**export, "scratch_database": settings.scratch_database, "source_sha": source_sha, "scope_token": signed, "expires_at": expires,
             "owner": owner, "session_id": session_id, "columns": grants}
 
 

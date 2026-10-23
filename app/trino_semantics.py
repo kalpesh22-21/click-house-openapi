@@ -178,6 +178,8 @@ def value_type(node):
                     return ValueType("integer", source.nullable, True)
                 if name == "tonullable":
                     return replace(source, nullable=True)
+                if name == "lowerutf8" and source.kind in {"string", "null"}:
+                    return source
                 kinds = {"tofloat64": "float", "tostring": "string", "todate": "datetime", "todate32": "datetime", "todatetime": "datetime"}
                 if name in kinds:
                     return replace(source, kind=kinds[name], year_safe=kinds[name] == "datetime")

@@ -459,3 +459,24 @@ signature/schema guidance without an invented replacement. Examples remain
 ClickHouse SQL and preserve exactness, NULL rules, filters and grouping; a
 replacement result shape is offered only when it meets the user's request.
 This guidance does not expand the transpiler's supported semantic domain.
+
+### Session scratch tables
+
+The session catalog reports `scratch_database` from API settings; the agent uses
+that value instead of configuring a physical namespace. Scratch data is still
+materialized in ClickHouse. With Trino enabled, consumers
+read `dbpcm_scratch.s_<session>_*` through the configured ClickHouse connector,
+including joins to MySQL-backed tables. The API checks session ownership before
+metadata access or execution; scratch types are inspected live, not added to the
+shared semantic catalog. New user uploads (`s_<session>_upload_*`) are advertised
+through `listTables` only to their owning session. Blueprint intermediates
+(`s_<session>_bp_*`) stay hidden; the executor binds them directly into dependent
+DAG steps. Explicit schema inspection still checks session ownership. Legacy
+uploads used the same `bp_*` pattern as intermediates and cannot be classified
+from their names; re-upload them to make them discoverable.
+
+Enable `dbpcm_scratch` in `ALLOWED_DATABASES`. The scratch writer and Trino's
+ClickHouse connector must reach the same scratch tables; the connector user needs
+`SELECT ON dbpcm_scratch.*`. Keep existing scratch writer privileges and TTL
+configuration. Blueprint templates retain `scratch.<output>` placeholders; the
+agent substitutes the fully qualified name returned by materialization.

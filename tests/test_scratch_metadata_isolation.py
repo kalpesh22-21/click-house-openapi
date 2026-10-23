@@ -61,9 +61,9 @@ _SCRATCH_DB = get_settings().scratch_database  # "dbpcm_scratch"
 _SESSION_A = "sessaaa111"
 _SESSION_B = "sessbbb222"
 
-_A_TABLE_1 = f"s_{_SESSION_A}_bp_deadbeef"
-_A_TABLE_2 = f"s_{_SESSION_A}_bp_cafef00d"
-_B_TABLE_1 = f"s_{_SESSION_B}_bp_0badf00d"
+_A_TABLE_1 = f"s_{_SESSION_A}_upload_deadbeef"
+_A_TABLE_2 = f"s_{_SESSION_A}_upload_cafef00d"
+_B_TABLE_1 = f"s_{_SESSION_B}_upload_0badf00d"
 
 # The raw system.tables rows list_tables would see for the scratch database:
 # every session's scratch tables live in one physical database.

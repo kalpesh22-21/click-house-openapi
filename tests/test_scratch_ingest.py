@@ -542,3 +542,18 @@ class TestDropRoute:
 @pytest.fixture(autouse=True)
 def _authorized_session_for_route_tests(prevalidated_session_scope):
     """Session-scope auth is tested separately in test_session_catalog."""
+
+
+def test_uploaded_materialization_is_discoverable_and_drop_is_session_gated(fake_client, settings):
+    from app.scratch_metadata import is_uploaded_table
+
+    result = scratch_ingest.materialize(
+        "session", [{"name": "amount", "type": "Int64"}], [[10]], settings, uploaded=True
+    )
+    bare = result["table"].split(".")[1]
+    assert is_uploaded_table(bare, "session")
+    assert not is_uploaded_table(bare, "other")
+    assert _bare_scratch_name(result["table"], "session") == bare
+    with pytest.raises(ScratchWriteError):
+        _bare_scratch_name(result["table"], "other")
+    assert not is_uploaded_table(scratch_table_name("session"), "session")

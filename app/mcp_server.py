@@ -1369,7 +1369,7 @@ async def scratch_upload_route(request: Request) -> JSONResponse:
         columns, rows = parse_upload(content, filename, settings_now.scratch_max_rows)
         columns, rows = apply_mapping(columns, rows, mapping)
         # The table name derives ONLY from the D92-bound session_id, never the body.
-        return scratch_materialize(session_id, columns, rows, settings_now)
+        return scratch_materialize(session_id, columns, rows, settings_now, uploaded=True)
 
     try:
         # Blocking parse + ClickHouse DDL/insert — run off the event loop.

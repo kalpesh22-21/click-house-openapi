@@ -1,0 +1,130 @@
+{
+  "date": "2026-10-23",
+  "environment": "Local synthetic HR fixtures; live Fireworks model, ClickHouse, MySQL, Trino and MCP. No production employee data.",
+  "api_namespace": {
+    "source": "POST /session/catalog scratch_database",
+    "reported": "dbpcm_scratch",
+    "agent_hardcoded_physical_names": false,
+    "alternate_namespace_and_concurrent_session_unit_tests": "passed"
+  },
+  "llm_upload": {
+    "model": "accounts/fireworks/models/deepseek-v4p1-flash",
+    "retrieval_enabled": false,
+    "upload_path": "Data-agent BFF /api/upload/analyze -> runtime /upload/analyze -> MCP; then /api/upload -> runtime /upload -> MCP",
+    "csv": "emp_id,bonus\nE001,100\nE002,200\nE003,300\n",
+    "mapping": {
+      "emp_id": "EmployeeCode"
+    },
+    "analyze_http_status": 200,
+    "upload_http_status": 200,
+    "session": "sa34683dcfa924022ad12f4d3ba8c0ba4",
+    "elapsed_seconds": 107.98,
+    "tool_calls": 17,
+    "status": "done",
+    "review": {
+      "status": "approved",
+      "attempts": 0,
+      "site": "exit_table"
+    },
+    "answer_sql": "WITH bonus AS (\n  SELECT employee_code, MAX(bonus) AS bonus\n  FROM dbpcm_scratch.s_sa34683dcfa924022ad12f4d3ba8c0ba4_upload_e5cf6339b49d4a9b9e6a79892e3d354a\n  GROUP BY employee_code\n),\nearn AS (\n  SELECT employee_code, SUM(amount) AS gross_earnings\n  FROM dbpcm_datawarehouse.payroll\n  WHERE register_type = 'EARN'\n    AND pay_date >= toDate('2026-09-01')\n    AND pay_date < toDate('2026-10-01')\n  GROUP BY employee_code\n)\nSELECT\n  b.employee_code AS `Employee Code`,\n  e.employee_name AS `Employee Name`,\n  e.department_name AS `Department`,\n  COALESCE(n.gross_earnings, 0) AS `September 2026 Gross Earnings`,\n  b.bonus AS `Uploaded Bonus`,\n  COALESCE(n.gross_earnings, 0) + b.bonus AS `Gross Earnings Plus Bonus`\nFROM bonus b\nLEFT JOIN earn n ON b.employee_code = n.employee_code\nLEFT JOIN dbpcm_datawarehouse.employee e ON b.employee_code = e.employee_code\nORDER BY b.employee_code",
+    "answer_tables_returned": 1,
+    "ui_page_http_status": 200,
+    "columns": [
+      "Employee Code",
+      "Employee Name",
+      "Department",
+      "September 2026 Gross Earnings",
+      "Uploaded Bonus",
+      "Gross Earnings Plus Bonus"
+    ],
+    "rows": [
+      [
+        "E001",
+        "Synthetic Employee 01",
+        "Human Resources",
+        "607.00",
+        100,
+        "707.00"
+      ],
+      [
+        "E002",
+        "Synthetic Employee 02",
+        "Engineering",
+        "1821.00",
+        200,
+        "2021.00"
+      ],
+      [
+        "E003",
+        "Synthetic Employee 03",
+        "Operations",
+        "3035.00",
+        300,
+        "3335.00"
+      ]
+    ],
+    "offset_page": {
+      "limit": 1,
+      "offset": 1,
+      "expected_employee": "E002",
+      "passed": true
+    },
+    "independent_truth": "Native ClickHouse EARN totals for CLIENT_A, Sep 2026: E001=607, E002=1821, E003=3035; add uploaded bonuses once."
+  },
+  "blueprint_dag": {
+    "id": "bp-earnings-by-department-via-scratch-join",
+    "bindings": {
+      "department": "Engineering"
+    },
+    "path": [
+      "native ClickHouse payroll aggregate",
+      "MCP materialize into ClickHouse scratch",
+      "Trino scratch + MySQL employee join",
+      "grain verification"
+    ],
+    "status": "verified",
+    "result": [
+      [
+        "Engineering",
+        345600.0
+      ]
+    ],
+    "direct_query_result": [
+      [
+        "Engineering",
+        345600.0
+      ]
+    ],
+    "cross_session_query": "denied",
+    "cross_session_schema": "denied",
+    "scratch_sample": "passed",
+    "temporary_table_drop": "passed"
+  },
+  "regression": {
+    "backend_release_snapshot": "2346 passed, 87 skipped, 1 xfailed; staged snapshot excludes private accrual changes",
+    "agent": "5024 passed, 6 skipped, 10 pre-existing failures; all 10 reproduce at starting commit 857e3aa",
+    "baseline_agent_failures_reproduced": 10,
+    "baseline_agent_failure_ids": [
+      "tests/runtime/mcp/test_tool_schema.py::test_update_analysis_state_schema_declares_exactly_three_item_properties",
+      "tests/runtime/retrieval/test_corpus_loader_structural_key_qa.py::test_the_hermetic_fixture_has_not_drifted_from_the_real_canon",
+      "tests/runtime/retrieval/test_corpus_loader_structural_key_qa.py::test_the_hermetic_fixture_matches_the_real_canon_on_every_field",
+      "tests/runtime/test_prompt_routing_contract.py::test_prompt_is_bounded_and_byte_stable",
+      "tests/runtime/test_remote_runtime_changes.py::test_data_widget_opens_on_no_verdict_but_preserves_explicit_refusal[verdict0-True]",
+      "tests/runtime/test_remote_runtime_changes.py::test_help_unavailable_cannot_launder_instructions[getHelpCenterDocument-ok-payload2]",
+      "tests/runtime/test_remote_runtime_changes.py::test_help_unavailable_cannot_launder_instructions[getHelpCenterDocument-ok-payload3]",
+      "tests/runtime/test_remote_runtime_changes.py::test_help_unavailable_cannot_launder_instructions[searchHelpCenter-error-None]",
+      "tests/runtime/test_remote_runtime_changes.py::test_help_unavailable_cannot_launder_instructions[searchHelpCenter-ok-payload1]",
+      "tests/runtime/test_remote_runtime_changes.py::test_v2_refused_card_repick_fixture"
+    ]
+  },
+  "configuration_cleanup": [
+    "Removed obsolete UI direct-to-MCP upload base configuration/helper; uploads use RUNTIME_URL and runtime session scope.",
+    "Removed ignored local backend API_KEY setting; MCP_SERVICE_KEY remains the current service configuration.",
+    "Corrected deployment catalog configuration comments; retained active hydration, retrieval and credential settings."
+  ],
+  "limitations": [
+    "Live model test uses retrieval_enabled=false; blueprint execution is separately tested with the real executor and an in-memory lookup of the authored blueprint.",
+    "UI verified through its HTTP upload/table endpoints, not a browser rendering test.",
+    "Legacy uploads without an upload origin marker cannot be distinguished from blueprint intermediates."
+  ]
+}

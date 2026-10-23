@@ -65,11 +65,11 @@ logger = logging.getLogger(__name__)
 # this is rejected to avoid a collision.
 _TTL_COLUMN = "_scratch_created_at"
 
-# The server-generated suffix on every scratch table name: `bp_<uuid4hex>` (32
-# lowercase hex chars).  It is the ONLY shape ``materialize`` produces, so the
+# Server-generated suffix: `bp_<uuid4hex>` for intermediates or
+# `upload_<uuid4hex>` for user uploads. These are the only shapes produced, so the
 # drop authorizer can require it verbatim — a drop target that this session's
 # materialize could not have created is refused (see ``_bare_scratch_name``).
-_BP_SUFFIX_RE = r"bp_[0-9a-f]{32}"
+_SCRATCH_SUFFIX_RE = r"(?:bp|upload)_[0-9a-f]{32}"
 
 
 # ---------------------------------------------------------------------------
@@ -146,8 +146,8 @@ def build_scratch_client(settings: Settings) -> Client:
 # ---------------------------------------------------------------------------
 
 
-def scratch_table_name(session_id: str) -> str:
-    """Return a fresh ``s_<session_id>_bp_<uuid4hex>`` scratch table name.
+def scratch_table_name(session_id: str, *, uploaded: bool = False) -> str:
+    """Return a fresh session-owned name, with an upload marker when requested.
 
     The ``s_<session_id>_`` prefix is byte-compatible with the read-side
     ``_validate_scratch_name`` check, so the very table written here is one the
@@ -184,7 +184,8 @@ def scratch_table_name(session_id: str) -> str:
             "'_'-delimited; a '_' in the session id breaks ownership extraction).",
             code="SCRATCH_MATERIALIZE_REJECTED",
         )
-    name = f"s_{session_id}_bp_{uuid.uuid4().hex}"
+    kind = "upload" if uploaded else "bp"
+    name = f"s_{session_id}_{kind}_{uuid.uuid4().hex}"
     try:
         validate_identifier(name)
     except ValueError as exc:
@@ -224,7 +225,7 @@ def _bare_scratch_name(table: str, session_id: str) -> str:
             "Missing 'table' in drop request.", code="SCRATCH_MATERIALIZE_REJECTED"
         )
     bare = table.split(".", 1)[1] if "." in table else table
-    own_pattern = re.compile(r"^s_" + re.escape(session_id) + r"_" + _BP_SUFFIX_RE + r"$")
+    own_pattern = re.compile(r"^s_" + re.escape(session_id) + r"_" + _SCRATCH_SUFFIX_RE + r"$")
     if not own_pattern.match(bare):
         # Not a table this session's materialize could have created — a foreign or
         # malformed target.  Fail closed (defense-in-depth mirror of the D64 read
@@ -453,6 +454,8 @@ def materialize(
     columns: Any,
     rows: Any,
     settings: Settings,
+    *,
+    uploaded: bool = False,
 ) -> dict[str, Any]:
     """Create a session-scoped scratch table, native-bulk-load the rows, return it.
 
@@ -460,7 +463,8 @@ def materialize(
     never from the body.  Returns ``{"table": "scratch.s_<sid>_bp_<uuid>",
     "row_count": <int>}``.
     """
-    table = scratch_table_name(session_id)
+    # Only the upload route sets this marker; it is not accepted from request JSON.
+    table = scratch_table_name(session_id, uploaded=uploaded)
     validated_cols = _validate_columns(columns)
     validated_rows = _validate_rows(rows, len(validated_cols), settings.scratch_max_rows)
 
