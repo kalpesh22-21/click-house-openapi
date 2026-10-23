@@ -1,0 +1,986 @@
+{
+  "date": "2026-10-23",
+  "environment": "Local synthetic HR fixtures; live Fireworks DeepSeek v4.1 Flash, real agent /turn SSE, MCP, Trino, MySQL, ClickHouse, Neo4j, embedding and reranker. UI tables fetched through /query/page; no browser rendering verification.",
+  "backend_commit": "3d69639",
+  "agent_commit": "abc17e8",
+  "retrieval_enabled": true,
+  "model": "accounts/fireworks/models/deepseek-v4p1-flash",
+  "summary": {
+    "distinct_questions": 10,
+    "final_numeric_answers": 8,
+    "appropriate_clarifications": 1,
+    "appropriate_unavailability_answers": 1,
+    "average_final_tool_calls": 10,
+    "average_final_seconds": 59.76
+  },
+  "truth": {
+    "payroll_by_employee": [
+      {
+        "employee_code": "E024",
+        "earnings": 28529
+      },
+      {
+        "employee_code": "E023",
+        "earnings": 27315
+      },
+      {
+        "employee_code": "E022",
+        "earnings": 26101
+      },
+      {
+        "employee_code": "E021",
+        "earnings": 24887
+      },
+      {
+        "employee_code": "E020",
+        "earnings": 23673
+      },
+      {
+        "employee_code": "E019",
+        "earnings": 22459
+      },
+      {
+        "employee_code": "E018",
+        "earnings": 21245
+      },
+      {
+        "employee_code": "E017",
+        "earnings": 20031
+      },
+      {
+        "employee_code": "E016",
+        "earnings": 18817
+      },
+      {
+        "employee_code": "E015",
+        "earnings": 17603
+      },
+      {
+        "employee_code": "E014",
+        "earnings": 16389
+      },
+      {
+        "employee_code": "E013",
+        "earnings": 15175
+      },
+      {
+        "employee_code": "E012",
+        "earnings": 13961
+      },
+      {
+        "employee_code": "E011",
+        "earnings": 12747
+      },
+      {
+        "employee_code": "E010",
+        "earnings": 11533
+      },
+      {
+        "employee_code": "E009",
+        "earnings": 10319
+      },
+      {
+        "employee_code": "E008",
+        "earnings": 9105
+      },
+      {
+        "employee_code": "E007",
+        "earnings": 7891
+      },
+      {
+        "employee_code": "E006",
+        "earnings": 6677
+      },
+      {
+        "employee_code": "E005",
+        "earnings": 5463
+      },
+      {
+        "employee_code": "E004",
+        "earnings": 4249
+      },
+      {
+        "employee_code": "E003",
+        "earnings": 3035
+      },
+      {
+        "employee_code": "E002",
+        "earnings": 1821
+      },
+      {
+        "employee_code": "E001",
+        "earnings": 607
+      }
+    ],
+    "payroll_total": "349632",
+    "workforce_departments": [
+      [
+        "D01",
+        "Human Resources",
+        7
+      ],
+      [
+        "D02",
+        "Engineering",
+        7
+      ],
+      [
+        "D03",
+        "Operations",
+        6
+      ]
+    ],
+    "hires_2025": 4,
+    "top_earners": [
+      [
+        "E024",
+        "Synthetic Employee 24",
+        "28529"
+      ],
+      [
+        "E023",
+        "Synthetic Employee 23",
+        "27315"
+      ],
+      [
+        "E022",
+        "Synthetic Employee 22",
+        "26101"
+      ],
+      [
+        "E021",
+        "Synthetic Employee 21",
+        "24887"
+      ],
+      [
+        "E020",
+        "Synthetic Employee 20",
+        "23673"
+      ]
+    ],
+    "department_earnings": [
+      [
+        "D01",
+        "Human Resources",
+        "106832"
+      ],
+      [
+        "D02",
+        "Engineering",
+        "116544"
+      ],
+      [
+        "D03",
+        "Operations",
+        "126256"
+      ]
+    ],
+    "accrual_totals": {
+      "beginning_balance": "1260.000000",
+      "average_accrued": "24.000000",
+      "rows": 24
+    },
+    "expense_september_paid_approved": "0",
+    "expense_september_incurred_approved": "5400.00"
+  },
+  "cases": [
+    {
+      "label": "hires_2025",
+      "question": "How many employees were hired in calendar year 2025? Include all employee statuses.",
+      "session": "sa64a50cff575420581dc26e3eb5c7682",
+      "seconds": 40.6,
+      "tool_calls": 6,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table",
+        "completion": "full"
+      },
+      "blueprint": {
+        "blueprint_id": "bp-employee-date-summary",
+        "slots": {
+          "date_basis": "original_hire",
+          "group_by": "company",
+          "period_start": "2025-01-01",
+          "period_end": "2026-01-01"
+        }
+      },
+      "answer": "4 employees were hired during calendar year 2025, counting current employee records of any status whose original hire date falls in 2025. This reflects current employee records in the accessible data rather than a complete employment-event history.",
+      "pending_question": null,
+      "tables": [
+        {
+          "http_status": 200,
+          "payload": {
+            "columns": [
+              "Group",
+              "Employee Count"
+            ],
+            "rows": [
+              [
+                "Company",
+                4
+              ]
+            ],
+            "limit": 100,
+            "offset": 0,
+            "has_more": false
+          }
+        }
+      ],
+      "sql": [
+        "SELECT CASE 'company' WHEN 'month' THEN SUBSTRING(toString(CASE 'original_hire' WHEN 'most_recent_hire' THEN e.most_recent_hire_date WHEN 'termination' THEN e.termination_date ELSE e.hire_date END), 1, 7) WHEN 'department' THEN e.department_name WHEN 'status' THEN e.employee_status ELSE 'Company' END AS \"Group\", uniqExact(e.employee_code) AS \"Employee Count\" FROM dbpcm_warehouse.employee AS e WHERE TRUE AND TRUE AND TRUE AND (CASE 'original_hire' WHEN 'most_recent_hire' THEN e.most_recent_hire_date WHEN 'termination' THEN e.termination_date ELSE e.hire_date END) >= toDate('2025-01-01') AND (CASE 'original_hire' WHEN 'most_recent_hire' THEN e.most_recent_hire_date WHEN 'termination' THEN e.termination_date ELSE e.hire_date END) < toDate('2026-01-01') GROUP BY \"Group\" ORDER BY \"Group\""
+      ],
+      "recovered_errors": [],
+      "verification": "numeric source comparison passed"
+    },
+    {
+      "label": "workforce_departments",
+      "question": "How many Active and On Leave employees are in each department? Show department code, name and headcount.",
+      "session": "sa21c49d9fea140778cb548fe620784dd",
+      "seconds": 41.53,
+      "tool_calls": 5,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "blueprint": {
+        "blueprint_id": "bp-active-headcount-by-department",
+        "slots": {}
+      },
+      "answer": "Active and On Leave headcount by department. All departments in the directory are shown, including any with no matching employees.",
+      "pending_question": null,
+      "tables": [
+        {
+          "http_status": 200,
+          "payload": {
+            "columns": [
+              "department_code",
+              "department",
+              "headcount"
+            ],
+            "rows": [
+              [
+                "D03",
+                "Operations",
+                6
+              ],
+              [
+                "D02",
+                "Engineering",
+                7
+              ],
+              [
+                "D01",
+                "Human Resources",
+                7
+              ]
+            ],
+            "limit": 100,
+            "offset": 0,
+            "has_more": false
+          }
+        }
+      ],
+      "sql": [
+        "SELECT d.department_code AS department_code, d.department_name AS department, coalesce(e.active_count, 0) AS headcount FROM dbpcm_warehouse.department AS d LEFT JOIN (SELECT department_code, uniqExact(employee_code) AS active_count FROM dbpcm_warehouse.employee WHERE (employee_status IN ('Active', 'On Leave') OR employee_status IN ('Active', 'On Leave')) GROUP BY department_code) AS e ON d.department_code = e.department_code WHERE TRUE ORDER BY headcount, department, department_code"
+      ],
+      "recovered_errors": [],
+      "verification": "numeric source comparison passed"
+    },
+    {
+      "label": "accrual_totals",
+      "question": "Summarize accrual balances: total beginning balance and average accrued amount across all accessible records, including all employee statuses.",
+      "session": "s4239878bfac7490fa5ed9dfc77488cae",
+      "seconds": 81.62,
+      "tool_calls": 9,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "blueprint": null,
+      "answer": "Across all accessible accrual-balance records (no employee-status filter), the total beginning balance is 1,260.00 and the average accrued amount is 24.00 per record, across 24 records and 24 employees. Totals combine all accrual plans, so treat them as a cross-plan sum rather than a single-plan balance.",
+      "pending_question": null,
+      "tables": [
+        {
+          "http_status": 200,
+          "payload": {
+            "columns": [
+              "Source Balance Records",
+              "Employee Count",
+              "Total Beginning Balance",
+              "Average Accrued Amount"
+            ],
+            "rows": [
+              [
+                24,
+                24,
+                "1260.000000",
+                24.0
+              ]
+            ],
+            "limit": 100,
+            "offset": 0,
+            "has_more": false
+          }
+        }
+      ],
+      "sql": [
+        "WITH b AS (SELECT employee_code, accrual_code, sum(beginning_balance) AS beginning, sum(accrued_amount) AS accrued, sum(awarded_amount) AS awarded, sum(taken_amount) AS taken, count(*) AS balance_rows FROM dbpcm_warehouse.accrual_balances WHERE TRUE GROUP BY employee_code, accrual_code) SELECT CASE 'company' WHEN 'department' THEN e.department_name WHEN 'plan' THEN b.accrual_code ELSE 'Company' END AS \"Group\", sum(CAST(b.beginning AS Nullable(Decimal(38, 6)))) AS \"Beginning Balance\", sum(CAST(b.accrued AS Nullable(Decimal(38, 6)))) AS \"Accrued Amount\", sum(CAST(b.awarded AS Nullable(Decimal(38, 6)))) AS \"Awarded Amount\", sum(CAST(b.taken AS Nullable(Decimal(38, 6)))) AS \"Taken Amount\", sum(CAST(b.balance_rows AS Nullable(Decimal(20, 0)))) AS \"Source Balance Rows\", uniqExact(b.employee_code) AS \"Employee Count\" FROM b LEFT JOIN dbpcm_warehouse.employee AS e ON b.employee_code = e.employee_code WHERE TRUE AND TRUE AND TRUE GROUP BY CASE 'company' WHEN 'department' THEN e.department_name WHEN 'plan' THEN b.accrual_code ELSE 'Company' END ORDER BY \"Group\"",
+        "SELECT count(*) AS `Source Balance Records`, count(DISTINCT employee_code) AS `Employee Count`, sum(beginning_balance) AS `Total Beginning Balance`, avg(accrued_amount) AS `Average Accrued Amount` FROM dbpcm_datawarehouse.accrual_balances"
+      ],
+      "recovered_errors": [],
+      "verification": "numeric source comparison passed"
+    },
+    {
+      "label": "expense_september",
+      "question": "What is the total expense amount for September 2026 across all employee statuses?",
+      "session": "s874c28fed06c4f95af08f3be8b3bf425",
+      "seconds": 82.13,
+      "tool_calls": 16,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "blueprint": null,
+      "answer": "September 2026 expenses total $5,400.00 across 24 expense lines and 24 employees, with no employee-status filter applied.\n\nThe month is based on when each expense was incurred (payment and approval dates are not recorded on these lines), and the amount is the approved reimbursement amount. This covers the expense records available to you.",
+      "pending_question": null,
+      "tables": [
+        {
+          "http_status": 200,
+          "payload": {
+            "columns": [
+              "Total Approved Expense Amount",
+              "Expense Line Count",
+              "Employees With Expenses",
+              "Expense Reports"
+            ],
+            "rows": [
+              [
+                "5400.00",
+                24,
+                24,
+                0
+              ]
+            ],
+            "limit": 100,
+            "offset": 0,
+            "has_more": false
+          }
+        }
+      ],
+      "sql": [
+        "SELECT sum(amount_approved) AS `Total Approved Expense Amount`, count(*) AS `Expense Line Count`, count(DISTINCT employee_code) AS `Employees With Expenses` FROM dbpcm_datawarehouse.expense WHERE toDate(expense_paid_date) >= toDate('2026-09-01') AND toDate(expense_paid_date) < toDate('2026-10-01')",
+        "SELECT toYear(toDate(expense_paid_date)) AS `Paid Year`, toMonth(toDate(expense_paid_date)) AS `Paid Month`, count(*) AS `Expense Line Count`, sum(amount_approved) AS `Total Approved Expense Amount` FROM dbpcm_datawarehouse.expense WHERE expense_paid_date IS NOT NULL GROUP BY 1, 2 ORDER BY 1 DESC, 2 DESC LIMIT 12",
+        "SELECT count(*) AS `Total Expense Lines`, count(expense_paid_date) AS `Lines With Paid Date`, count(individual_expense_date) AS `Lines With Expense Date`, count(approved_date) AS `Lines With Approved Date`, count(date_time_submitted) AS `Lines With Submitted Date`, count(amount_approved) AS `Lines With Approved Amount`, min(individual_expense_date) AS `Earliest Expense Date`, max(individual_expense_date) AS `Latest Expense Date` FROM dbpcm_datawarehouse.expense",
+        "SELECT sum(amount_approved) AS `Total Approved Expense Amount`, count(*) AS `Expense Line Count`, count(DISTINCT employee_code) AS `Employees With Expenses`, count(DISTINCT expense_report) AS `Expense Reports` FROM dbpcm_datawarehouse.expense WHERE toDate(individual_expense_date) >= toDate('2026-09-01') AND toDate(individual_expense_date) < toDate('2026-10-01')",
+        "SELECT expense_status AS `Expense Status`, count(*) AS `Expense Line Count`, sum(amount_approved) AS `Total Approved Expense Amount` FROM dbpcm_datawarehouse.expense WHERE toDate(individual_expense_date) >= toDate('2026-09-01') AND toDate(individual_expense_date) < toDate('2026-10-01') GROUP BY 1 ORDER BY 3 DESC"
+      ],
+      "recovered_errors": [
+        {
+          "tool_name": "runQuery",
+          "tool_call_id": "call_36dcf6c5afcc4fdca4102912",
+          "error_code": "SQL_UNSUPPORTED_CONSTRUCT",
+          "lifecycle": "denied"
+        }
+      ],
+      "verification": "numeric source comparison passed"
+    },
+    {
+      "label": "payroll_september",
+      "question": "What are total gross payroll earnings for September 2026? Use pay dates September 1 inclusive through October 1 exclusive, earnings only, all employee statuses.",
+      "session": "s1f8d1cf9c2ef481586d0f61241040e38",
+      "seconds": 19.91,
+      "tool_calls": 5,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "blueprint": {
+        "blueprint_id": "bp-payroll-summary",
+        "slots": {
+          "group_by": "month",
+          "register_type": "EARN",
+          "period_start": "2026-09-01",
+          "period_end": "2026-10-01"
+        }
+      },
+      "answer": "Total gross payroll earnings (register type EARN) for September 2026 were $349,632.00, across 14,568 payroll source lines and 24 employees with pay dates from September 1 up to (but not including) October 1. All employee statuses were included, so the population covers every employee record with September pay dates that your access allows.",
+      "pending_question": null,
+      "tables": [
+        {
+          "http_status": 200,
+          "payload": {
+            "columns": [
+              "Group",
+              "Payroll Amount",
+              "Source Line Count",
+              "Employee Count"
+            ],
+            "rows": [
+              [
+                "2026-09",
+                "349632.00",
+                "14568",
+                24
+              ]
+            ],
+            "limit": 100,
+            "offset": 0,
+            "has_more": false
+          }
+        }
+      ],
+      "sql": [
+        "WITH p AS (SELECT employee_code, SUBSTRING(toString(pay_date), 1, 7) AS month, sum(amount) AS amount, count(*) AS line_count FROM dbpcm_warehouse.payroll WHERE register_type = 'EARN' AND TRUE AND toDate(pay_date) >= toDate('2026-09-01') AND toDate(pay_date) < toDate('2026-10-01') GROUP BY employee_code, SUBSTRING(toString(pay_date), 1, 7)) SELECT CASE 'month' WHEN 'department' THEN e.department_name WHEN 'month' THEN toString(p.month) ELSE 'Company' END AS \"Group\", sum(CAST(p.amount AS Nullable(Decimal(38, 2)))) AS \"Payroll Amount\", sum(CAST(p.line_count AS Nullable(Decimal(20, 0)))) AS \"Source Line Count\", uniqExact(p.employee_code) AS \"Employee Count\" FROM p LEFT JOIN dbpcm_warehouse.employee AS e ON p.employee_code = e.employee_code WHERE TRUE AND TRUE AND TRUE GROUP BY CASE 'month' WHEN 'department' THEN e.department_name WHEN 'month' THEN toString(p.month) ELSE 'Company' END ORDER BY \"Group\""
+      ],
+      "recovered_errors": [],
+      "verification": "numeric source comparison passed"
+    },
+    {
+      "label": "top_earners",
+      "question": "Show the five highest-paid employees by gross payroll earnings for September 2026, with employee code and name. Include all employee statuses; use earnings, not deductions.",
+      "session": "se3472c85fac246979c3763851e89f8e3",
+      "seconds": 63.66,
+      "tool_calls": 9,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "blueprint": null,
+      "answer": "These are the five employees with the highest gross payroll earnings paid in September 2026, across all employee statuses.",
+      "pending_question": null,
+      "tables": [
+        {
+          "http_status": 200,
+          "payload": {
+            "columns": [
+              "Employee Code",
+              "Employee Name",
+              "Gross Earnings"
+            ],
+            "rows": [
+              [
+                "E024",
+                "Synthetic Employee 24",
+                "28529.00"
+              ],
+              [
+                "E023",
+                "Synthetic Employee 23",
+                "27315.00"
+              ],
+              [
+                "E022",
+                "Synthetic Employee 22",
+                "26101.00"
+              ],
+              [
+                "E021",
+                "Synthetic Employee 21",
+                "24887.00"
+              ],
+              [
+                "E020",
+                "Synthetic Employee 20",
+                "23673.00"
+              ]
+            ],
+            "limit": 100,
+            "offset": 0,
+            "has_more": false
+          }
+        }
+      ],
+      "sql": [
+        "WITH e AS (\n  SELECT employee_code, sum(amount) AS gross_earnings\n  FROM dbpcm_warehouse.payroll\n  WHERE register_type = 'EARN'\n    AND toDate(pay_date) >= toDate('2026-09-01')\n    AND toDate(pay_date) < toDate('2026-10-01')\n  GROUP BY employee_code\n)\nSELECT e.employee_code AS `Employee Code`,\n       emp.employee_name AS `Employee Name`,\n       CAST(e.gross_earnings AS Nullable(Decimal(19, 2))) AS `Gross Earnings`\nFROM e\nLEFT JOIN dbpcm_warehouse.employee emp ON e.employee_code = emp.employee_code\nORDER BY `Gross Earnings` DESC, `Employee Code`\nLIMIT 5"
+      ],
+      "recovered_errors": [],
+      "verification": "numeric source comparison passed"
+    },
+    {
+      "label": "department_earnings",
+      "question": "Show September 2026 gross payroll earnings by employee home department, including department code and name. Include all employee statuses.",
+      "session": "s752bfcbf818d4f1390d792189143a0dd",
+      "seconds": 44.1,
+      "tool_calls": 9,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "blueprint": null,
+      "answer": "September 2026 gross payroll earnings (finalized earnings-register amounts, by pay date) totaled across three home departments: Operations $126,256.00, Engineering $116,544.00, and Human Resources $106,832.00. All employee statuses were included. Figures cover the payroll records you are authorized to access.",
+      "pending_question": null,
+      "tables": [
+        {
+          "http_status": 200,
+          "payload": {
+            "columns": [
+              "Department Code",
+              "Department Name",
+              "Gross Earnings"
+            ],
+            "rows": [
+              [
+                "D03",
+                "Operations",
+                "126256.00"
+              ],
+              [
+                "D02",
+                "Engineering",
+                "116544.00"
+              ],
+              [
+                "D01",
+                "Human Resources",
+                "106832.00"
+              ]
+            ],
+            "limit": 100,
+            "offset": 0,
+            "has_more": false
+          }
+        }
+      ],
+      "sql": [
+        "SELECT coalesce(e.department_code, 'Unassigned') AS `Department Code`,\n       coalesce(e.department_name, 'Unassigned') AS `Department Name`,\n       sum(CAST(p.amount AS Nullable(Decimal(38, 2)))) AS `Gross Earnings`\nFROM dbpcm_warehouse.payroll p\nLEFT JOIN dbpcm_warehouse.employee e ON p.employee_code = e.employee_code\nWHERE p.register_type = 'EARN'\n  AND toDate(p.pay_date) >= toDate('2026-09-01')\n  AND toDate(p.pay_date) < toDate('2026-10-01')\nGROUP BY coalesce(e.department_code, 'Unassigned'), coalesce(e.department_name, 'Unassigned')\nORDER BY `Gross Earnings` DESC"
+      ],
+      "recovered_errors": [],
+      "verification": "numeric source comparison passed"
+    },
+    {
+      "label": "uploaded_bonuses",
+      "question": "For each employee in my uploaded bonus file, show employee code, name, department, September 2026 gross payroll earnings, uploaded bonus and earnings plus bonus. Include all employee statuses.",
+      "session": "sdf9e6a7a698a4bbe8b1edd09cf575805",
+      "seconds": 90.53,
+      "tool_calls": 17,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "blueprint": null,
+      "answer": "Here are the three employees in your uploaded bonus file with their September 2026 gross payroll earnings and bonus totals. All employee statuses were included, and none of the three had a September earnings gap.",
+      "pending_question": null,
+      "tables": [
+        {
+          "http_status": 200,
+          "payload": {
+            "columns": [
+              "Employee Code",
+              "Employee Name",
+              "Department",
+              "September 2026 Gross Earnings",
+              "Uploaded Bonus",
+              "Earnings Plus Bonus"
+            ],
+            "rows": [
+              [
+                "E001",
+                "Synthetic Employee 01",
+                "Human Resources",
+                "607.00",
+                100,
+                "707.00"
+              ],
+              [
+                "E002",
+                "Synthetic Employee 02",
+                "Engineering",
+                "1821.00",
+                200,
+                "2021.00"
+              ],
+              [
+                "E003",
+                "Synthetic Employee 03",
+                "Operations",
+                "3035.00",
+                300,
+                "3335.00"
+              ]
+            ],
+            "limit": 100,
+            "offset": 0,
+            "has_more": false
+          }
+        }
+      ],
+      "sql": [
+        "WITH sep AS (\n  SELECT CAST(employee_code AS String) AS emp_code, SUM(amount) AS earnings\n  FROM dbpcm_datawarehouse.payroll\n  WHERE register_type = 'EARN'\n    AND pay_period_start_date >= toDate32('2026-09-01')\n    AND pay_period_start_date < toDate32('2026-10-01')\n  GROUP BY CAST(employee_code AS String)\n)\nSELECT u.employee_code AS `Employee Code`,\n       e.employee_name AS `Employee Name`,\n       e.department_name AS `Department`,\n       COALESCE(sep.earnings, 0) AS `September 2026 Gross Earnings`,\n       u.bonus AS `Uploaded Bonus`,\n       COALESCE(sep.earnings, 0) + u.bonus AS `Earnings Plus Bonus`\nFROM dbpcm_scratch.s_sdf9e6a7a698a4bbe8b1edd09cf575805_upload_4a9a576e2ffa439ba4d4fa70d783ccbf AS u\nLEFT JOIN dbpcm_datawarehouse.employee AS e ON u.employee_code = e.employee_code\nLEFT JOIN sep ON u.employee_code = sep.emp_code\nORDER BY u.employee_code",
+        "SELECT CAST(employee_code AS String) AS `Employee Code`,\n       CAST(pay_period_start_date AS String) AS `Pay Period Start`,\n       CAST(pay_period_end_date AS String) AS `Pay Period End`,\n       CAST(pay_date AS String) AS `Pay Date`,\n       SUM(amount) AS `Gross Earnings`\nFROM dbpcm_datawarehouse.payroll\nWHERE register_type = 'EARN'\n  AND CAST(employee_code AS String) IN ('E001','E002','E003')\nGROUP BY CAST(employee_code AS String), CAST(pay_period_start_date AS String), CAST(pay_period_end_date AS String), CAST(pay_date AS String)\nORDER BY `Employee Code`, `Pay Period Start`",
+        "SELECT CAST(employee_code AS String) AS `Employee Code`,\n       SUM(amount) AS `Gross Earnings`\nFROM dbpcm_datawarehouse.payroll\nWHERE register_type = 'EARN'\n  AND pay_date >= toDate32('2026-09-01')\n  AND pay_date < toDate32('2026-10-01')\n  AND CAST(employee_code AS String) IN ('E001','E002','E003')\nGROUP BY CAST(employee_code AS String)\nORDER BY `Employee Code`",
+        "SELECT COUNT(*) AS `Earn Rows`,\n       MIN(CAST(pay_period_start_date AS String)) AS `Min Period Start`,\n       MAX(CAST(pay_period_start_date AS String)) AS `Max Period Start`,\n       COUNT(DISTINCT CAST(pay_period_start_date AS String)) AS `Distinct Period Starts`\nFROM dbpcm_datawarehouse.payroll\nWHERE register_type = 'EARN'",
+        "WITH sep AS (\n  SELECT CAST(employee_code AS String) AS emp_code, SUM(amount) AS earnings\n  FROM dbpcm_datawarehouse.payroll\n  WHERE register_type = 'EARN'\n    AND pay_date >= toDate32('2026-09-01')\n    AND pay_date < toDate32('2026-10-01')\n  GROUP BY CAST(employee_code AS String)\n)\nSELECT u.employee_code AS `Employee Code`,\n       e.employee_name AS `Employee Name`,\n       e.department_name AS `Department`,\n       COALESCE(sep.earnings, 0) AS `September 2026 Gross Earnings`,\n       u.bonus AS `Uploaded Bonus`,\n       COALESCE(sep.earnings, 0) + u.bonus AS `Earnings Plus Bonus`\nFROM dbpcm_scratch.s_sdf9e6a7a698a4bbe8b1edd09cf575805_upload_4a9a576e2ffa439ba4d4fa70d783ccbf AS u\nLEFT JOIN dbpcm_datawarehouse.employee AS e ON u.employee_code = e.employee_code\nLEFT JOIN sep ON u.employee_code = sep.emp_code\nORDER BY u.employee_code"
+      ],
+      "recovered_errors": [
+        {
+          "tool_name": "runQuery",
+          "tool_call_id": "call_35c45c6274564cc2b2a59080",
+          "error_code": "SQL_EXECUTION_ERROR",
+          "lifecycle": "denied"
+        }
+      ],
+      "verification": "numeric source comparison passed"
+    },
+    {
+      "label": "ambiguous_cost",
+      "question": "What is our total payroll cost?",
+      "session": "s1e04884ddd77499b9dce57cdcd8e7066",
+      "seconds": 32.86,
+      "tool_calls": 5,
+      "status": "paused_ask_user",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "ask_user"
+      },
+      "blueprint": null,
+      "answer": " ",
+      "pending_question": {
+        "question": "Which cost basis should \"total payroll cost\" use?",
+        "options": [
+          "Gross earnings \u2014 all earnings paid to employees (gross pay)",
+          "Gross earnings plus employer payroll taxes (closest to total employer cost)",
+          "Net pay \u2014 take-home pay distributed to employees",
+          "Employee tax withholding",
+          "Deductions and employee benefit contributions"
+        ]
+      },
+      "tables": [],
+      "sql": null,
+      "recovered_errors": [],
+      "verification": "appropriate clarification"
+    },
+    {
+      "label": "unavailable_schedule",
+      "question": "Which employees are scheduled to start after 9 AM tomorrow?",
+      "session": "s484ae5789a814e3596fbb410b226b7bf",
+      "seconds": 100.67,
+      "tool_calls": 19,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "blueprint": null,
+      "answer": "I can't identify employees starting after 9 AM tomorrow \u2014 the reporting data available to me doesn't contain scheduled shift start times. The only schedule-related field on employee records is a schedule-group assignment, and it is empty for all 24 employee records I can access (no shift times are stored there). Matched clock-in/clock-out punch pairs are actual recorded punches, not planned schedules, so they cannot answer a question about tomorrow's scheduled start.\n\nI did not treat the missing schedule data as an empty answer: it's a coverage limitation, not a finding that no one starts after 9 AM.\n\nIf you need this, the schedule/shift-time detail would have to come from a scheduling module outside the current reporting data.",
+      "pending_question": null,
+      "tables": [
+        {
+          "http_status": 200,
+          "payload": {
+            "columns": [
+              "Employee Records",
+              "With Schedule Group"
+            ],
+            "rows": [
+              [
+                24,
+                0
+              ]
+            ],
+            "limit": 100,
+            "offset": 0,
+            "has_more": false
+          }
+        }
+      ],
+      "sql": [
+        "SELECT DISTINCT `Schedule Group` FROM (SELECT schedule_group AS `Schedule Group` FROM dbpcm_datawarehouse.employee WHERE schedule_group IS NOT NULL AND schedule_group <> '') ORDER BY `Schedule Group` LIMIT 50",
+        "SELECT `Allocation Type`, `Allocation Description` FROM (SELECT code AS `Allocation Type`, description AS `Allocation Description` FROM dbpcm_datawarehouse.labor_allocation) ORDER BY `Allocation Type` LIMIT 200",
+        "SELECT count(*) AS `Employee Records`, countIf(schedule_group IS NOT NULL AND schedule_group <> '') AS `With Schedule Group` FROM dbpcm_datawarehouse.employee"
+      ],
+      "recovered_errors": [
+        {
+          "tool_name": "sampleRows",
+          "tool_call_id": "call_af4672aee0944a37bb140579",
+          "error_code": "SQL_EXECUTION_ERROR",
+          "lifecycle": "denied"
+        }
+      ],
+      "verification": "correctly disclosed unavailable planned schedule data; coverage table fetched"
+    }
+  ],
+  "all_attempts": [
+    {
+      "label": "hires_2025",
+      "run": "question-battery",
+      "seconds": 40.6,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table",
+        "completion": "full"
+      },
+      "failure": null,
+      "tool_calls": 6,
+      "table_count": 1
+    },
+    {
+      "label": "workforce_departments",
+      "run": "question-battery",
+      "seconds": 41.53,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "failure": null,
+      "tool_calls": 5,
+      "table_count": 1
+    },
+    {
+      "label": "accrual_totals",
+      "run": "question-battery",
+      "seconds": 81.62,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "failure": null,
+      "tool_calls": 9,
+      "table_count": 1
+    },
+    {
+      "label": "expense_september",
+      "run": "question-battery",
+      "seconds": 82.13,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "failure": null,
+      "tool_calls": 16,
+      "table_count": 1
+    },
+    {
+      "label": "payroll_september",
+      "run": "question-battery",
+      "seconds": 151.61,
+      "status": "done",
+      "review": {
+        "status": "exhausted",
+        "attempts": 0,
+        "site": "exit_prose",
+        "reason": "I couldn't verify the answer before review ended. Please try again."
+      },
+      "failure": null,
+      "tool_calls": 4,
+      "table_count": 0
+    },
+    {
+      "label": "top_earners",
+      "run": "question-battery",
+      "seconds": 151.51,
+      "status": "done",
+      "review": {
+        "status": "exhausted",
+        "attempts": 0,
+        "site": "exit_prose",
+        "reason": "I couldn't verify the answer before review ended. Please try again."
+      },
+      "failure": null,
+      "tool_calls": 6,
+      "table_count": 0
+    },
+    {
+      "label": "department_earnings",
+      "run": "question-battery",
+      "seconds": 7.68,
+      "status": "done",
+      "review": {
+        "status": "exhausted",
+        "attempts": 0,
+        "site": "exit_prose",
+        "reason": "I couldn't verify the answer before review ended. Please try again."
+      },
+      "failure": {
+        "code": "DEPENDENCY_FAILURE",
+        "dependency": "model",
+        "reason": "connection",
+        "retryable": true
+      },
+      "tool_calls": 0,
+      "table_count": 0
+    },
+    {
+      "label": "uploaded_bonuses",
+      "run": "question-battery",
+      "seconds": 7.41,
+      "status": "done",
+      "review": {
+        "status": "exhausted",
+        "attempts": 0,
+        "site": "exit_prose",
+        "reason": "I couldn't verify the answer before review ended. Please try again."
+      },
+      "failure": {
+        "code": "DEPENDENCY_FAILURE",
+        "dependency": "model",
+        "reason": "connection",
+        "retryable": true
+      },
+      "tool_calls": 0,
+      "table_count": 0
+    },
+    {
+      "label": "ambiguous_cost",
+      "run": "question-battery",
+      "seconds": 7.1,
+      "status": "done",
+      "review": {
+        "status": "exhausted",
+        "attempts": 0,
+        "site": "exit_prose",
+        "reason": "I couldn't verify the answer before review ended. Please try again."
+      },
+      "failure": {
+        "code": "DEPENDENCY_FAILURE",
+        "dependency": "model",
+        "reason": "connection",
+        "retryable": true
+      },
+      "tool_calls": 0,
+      "table_count": 0
+    },
+    {
+      "label": "unavailable_schedule",
+      "run": "question-battery",
+      "seconds": 7.44,
+      "status": "done",
+      "review": {
+        "status": "exhausted",
+        "attempts": 0,
+        "site": "exit_prose",
+        "reason": "I couldn't verify the answer before review ended. Please try again."
+      },
+      "failure": {
+        "code": "DEPENDENCY_FAILURE",
+        "dependency": "model",
+        "reason": "connection",
+        "retryable": true
+      },
+      "tool_calls": 0,
+      "table_count": 0
+    },
+    {
+      "label": "department_earnings",
+      "run": "question-battery-retry",
+      "seconds": 44.1,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "failure": null,
+      "tool_calls": 9,
+      "table_count": 1
+    },
+    {
+      "label": "uploaded_bonuses",
+      "run": "question-battery-retry",
+      "seconds": 90.53,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "failure": null,
+      "tool_calls": 17,
+      "table_count": 1
+    },
+    {
+      "label": "ambiguous_cost",
+      "run": "question-battery-retry",
+      "seconds": 32.86,
+      "status": "paused_ask_user",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "ask_user"
+      },
+      "failure": null,
+      "tool_calls": 5,
+      "table_count": 0
+    },
+    {
+      "label": "unavailable_schedule",
+      "run": "question-battery-retry",
+      "seconds": 100.67,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "failure": null,
+      "tool_calls": 19,
+      "table_count": 1
+    },
+    {
+      "label": "payroll_september",
+      "run": "question-battery-retry-payroll",
+      "seconds": 19.91,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "failure": null,
+      "tool_calls": 5,
+      "table_count": 1
+    },
+    {
+      "label": "top_earners",
+      "run": "question-battery-retry-payroll",
+      "seconds": 63.66,
+      "status": "done",
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "failure": null,
+      "tool_calls": 9,
+      "table_count": 1
+    }
+  ],
+  "findings": [
+    "Initial concurrency-two batch: two model calls stalled for 120 seconds after successful SQL/blueprint execution (2.444s payroll blueprint; 0.710s top-earner query). No tool loop. Salvage and four subsequent turns raised APIConnectionError. Provider/network/shared HTTP transport cause unresolved; fresh-process serial retries completed.",
+    "Expense exploratory dateTrunc/group-by query was rejected pre-dispatch with SQL_UNSUPPORTED_CONSTRUCT; model recovered. September answer explicitly uses incurred dates, because paid dates are absent in fixture.",
+    "Upload exploratory query hit Trino EXPRESSION_NOT_AGGREGATE. Diagnostic shows projection CAST(employee_code AS VARCHAR), but GROUP BY CAST(CAST(employee_code AS VARCHAR) AS VARCHAR), consistent with alias expansion introducing an extra cast. Agent recovered; conversion issue remains open.",
+    "Unavailable-schedule turn used 19 calls and about 101 seconds; sampleRows returned SQL_EXECUTION_ERROR and an analysis-state update referenced unresolved evidence. Both recovered; this path remains too expensive for a missing-data answer.",
+    "Upload and schedule judge calls required timeout retries before successful delivery. Final approved review envelopes report attempts=0, so that field does not measure all judge invocations."
+  ],
+  "limitations": [
+    "Synthetic fixtures, not production-data correctness coverage.",
+    "Retries are included explicitly; this is not a clean first-attempt 10/10 pass.",
+    "Private accrual_events.yaml remained local and was not committed.",
+    "Numeric comparisons use independent native ClickHouse payroll aggregates and raw MCP source rows for MySQL facts."
+  ]
+}
