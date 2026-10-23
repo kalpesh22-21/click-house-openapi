@@ -62,7 +62,8 @@ class TestBuildCatalogExport:
         assert "exclude_not_hired_default" not in rules
         default = rules["default_employee_population"]
         assert default["predicate"] == "employee_status IN ('Active', 'On Leave')"
-        assert "Does not apply to fact totals" in default["applies_when"]
+        assert "current-workforce attribute metrics (tenure, age, compensation)" in default["applies_when"]
+        assert "Does not apply to payroll, accrual, expense, or time fact aggregates" in default["applies_when"]
         assert "Explicit user scope overrides" in default["description"]
         assert rules["active_employee"]["predicate"] == "employee_status = 'Active'"
 

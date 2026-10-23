@@ -190,6 +190,18 @@ def _to_date_as_cast_date(func: exp.Func) -> exp.Expression:
         value = exp.Literal.string(parsed.date().isoformat())
     elif info.kind == "string":
         value = exp.Cast(this=value, to=exp.DataType.build("TIMESTAMP(9)"))
+    elif info.kind == "datetime":
+        from app.trino_semantics import truncate_timestamp_seconds
+        # CH Date stores unsigned 16-bit epoch days. Timestamp inputs wrap,
+        # unlike Date32; preserve that behavior even for pre-1970 DOBs.
+        value = truncate_timestamp_seconds(exp.Cast(this=value.copy(), to=exp.DataType.build("TIMESTAMP(9)")))
+        days = exp.DateDiff(this=exp.Cast(this=value, to=exp.DataType.build("DATE")),
+                            expression=exp.Cast(this=exp.Literal.string("1970-01-01"), to=exp.DataType.build("DATE")),
+                            unit=exp.Var(this="DAY"))
+        wrapped = exp.Mod(this=exp.Paren(this=exp.Add(this=exp.Mod(this=days, expression=exp.Literal.number(65536)),
+                                      expression=exp.Literal.number(65536))), expression=exp.Literal.number(65536))
+        return exp.Anonymous(this="DATE_ADD", expressions=[exp.Literal.string("day"), wrapped,
+            exp.Cast(this=exp.Literal.string("1970-01-01"), to=exp.DataType.build("DATE"))])
     elif info.kind not in {"datetime", "null"}:
         unsupported("toDate numeric epochs require an explicit temporal conversion first.")
     return exp.Cast(this=value, to=exp.DataType.build("DATE"))
@@ -401,7 +413,7 @@ def _map_clickhouse_functions(tree: exp.Query) -> None:
     # These names are handled by the type/construct passes below. Validate
     # caller nodes before those passes introduce Trino-native helper functions.
     semantic_names = {
-        "toyear", "toint64", "intdiv", "todatetime", "tonullable",
+        "toyear", "tomonth", "todayofmonth", "toint64", "intdiv", "todatetime", "tonullable",
         "sumif", "avgif", "minif", "maxif", "today", "groupuniqarray",
         "arraysort", "arraystringconcat", "formatreadablequantity",
     }

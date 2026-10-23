@@ -3,7 +3,8 @@ intent: How many employees make over a salary amount? Count employees earning ab
   a specified annual salary. Returns one employee count, not an employee list. Count employees whose recorded annual
   salary is above, at least, exactly equal to or below a whole-currency threshold. Optional current status, department
   and employee. NULL salary never matches. Returns a scalar zero for no matches. Fractional-currency thresholds
-  require direct SQL.
+  require direct SQL. Defaults to Active + On Leave; employee_status selects another status or All to remove the
+  filter.
 slots_summary: comparison, salary, employee_status, department, employee
 status: validated
 drift_status: clean
@@ -28,6 +29,7 @@ slots:
   min_value: 0
   max_value: 1000000000
 - name: employee_status
+  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
   type: enum
   required: false
   enum_values:
@@ -40,8 +42,9 @@ slots:
   - Not Hired
   - Prehire
   - Unknown
+  - All
   binds_to: dbpcm_warehouse.employee.employee_status
-  optional_pattern: 'TRUE'
+  optional_pattern: e.employee_status IN ('Active', 'On Leave')
 - name: department
   type: entity
   required: false
@@ -53,7 +56,8 @@ slots:
   binds_to: dbpcm_warehouse.employee.employee_code
   optional_pattern: 'TRUE'
 result_grain: []
-sql_template: SELECT count(DISTINCT e.employee_code) AS `Employee Count` FROM dbpcm_warehouse.employee e WHERE e.employee_status
-  = {employee_status} AND e.department_name = {department} AND e.employee_code = {employee} AND (({comparison} =
-  'above' AND e.annual_salary > {salary}) OR ({comparison} = 'at_least' AND e.annual_salary >= {salary}) OR ({comparison}
-  = 'equal' AND e.annual_salary = {salary}) OR ({comparison} = 'below' AND e.annual_salary < {salary}))
+sql_template: SELECT count(DISTINCT e.employee_code) AS `Employee Count` FROM dbpcm_warehouse.employee e WHERE (e.employee_status
+  = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department} AND e.employee_code = {employee}
+  AND (({comparison} = 'above' AND e.annual_salary > {salary}) OR ({comparison} = 'at_least' AND e.annual_salary
+  >= {salary}) OR ({comparison} = 'equal' AND e.annual_salary = {salary}) OR ({comparison} = 'below' AND e.annual_salary
+  < {salary}))

@@ -1,0 +1,20 @@
+id: kn-age-calculation
+title: Computing employee age from date of birth
+doc_id: hr-reporting-employee
+status: validated
+text: >
+  Compute whole-year age from employee.date_of_birth as:
+  toYear(today()) - toYear(date_of_birth) - CASE WHEN
+  addYears(toDate32(date_of_birth), toYear(today()) - toYear(date_of_birth)) > today()
+  THEN 1 ELSE 0 END. The birthday adjustment is mandatory; Feb-29 birthdays clamp to Feb 28.
+  Use toDate32 for DOB, not toDate (which can wrap pre-1970 timestamp dates).
+  Ignore birth time. dateDiff('year', ...) counts January-1 crossings,
+  not completed birthdays, so do not use it for age. Exclude unknown/sentinel DOB with
+  date_of_birth IS NOT NULL AND toDate32(date_of_birth) > toDate32('1900-01-01');
+  exclude future dates with toDate32(date_of_birth) <= today(). Report usable-DOB coverage separately.
+  For an as-of date, replace today() with a typed toDate('2026-06-30') value.
+  Bands: floor((<age expression>) / {band_width}) * {band_width}, or CASE on that expression.
+  toMonth and toDayOfMonth support timezone-free calendar inputs. Avoid unnecessary non-nullable casts.
+  Age distributions and other workforce attribute metrics default to Active + On Leave;
+  explicit user population overrides this default. Historical payroll/accrual/expense/time totals
+  remain all accessible records by default.

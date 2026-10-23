@@ -76,15 +76,19 @@ def value_type(node):
     if isinstance(node, exp.DateDiff):
         start, end = value_type(node.expression), value_type(node.this)
         if (start and end and start.kind == end.kind == "datetime"
-                and node.text("unit").upper() == "DAY"
+                and node.text("unit").upper() in {"DAY", "YEAR"}
                 and node.args.get("zone") is None):
+            if node.text("unit").upper() == "YEAR" and not (start.year_safe and end.year_safe):
+                return None
             return ValueType("integer", start.nullable or end.nullable)
     if isinstance(node, exp.Cast):
         target = declared_type(node.args["to"])
         source = value_type(node.this)
         # Trino CAST does not enforce CH non-nullability. Do not hide a
         # source-side NULL conversion error behind a successful aggregate.
-        if target and not target.nullable and (source is None or source.nullable):
+        if target and not target.nullable and (
+            source is None or source.nullable and not node.this.meta.get("ch_nonnull_after_filter")
+        ):
             return None
         return target
     if isinstance(node, (exp.Count, exp.CountIf)):
@@ -140,6 +144,12 @@ def value_type(node):
     if isinstance(node, (exp.Anonymous, exp.AnonymousAggFunc)):
         name = node.name.lower()
         args = node.expressions
+        if name == "multiif" and len(args) >= 3 and len(args) % 2 == 1:
+            branches = [value_type(value) for value in [*args[1:-1:2], args[-1]]]
+            if all(branch is not None for branch in branches):
+                kind = _common_kind(node, [branch for branch in branches if branch.kind != "null"])
+                if kind:
+                    return ValueType(kind, any(branch.nullable for branch in branches))
         if name == "todatetime64" and len(args) == 2:
             source = value_type(args[0])
             return replace(source, kind="datetime", year_safe=True) if source else None
@@ -164,7 +174,7 @@ def value_type(node):
         if len(args) == 1:
             source = value_type(args[0])
             if source:
-                if name in {"toint64", "toyear"}:
+                if name in {"toint64", "toyear", "tomonth", "todayofmonth"}:
                     return ValueType("integer", source.nullable, True)
                 if name == "tonullable":
                     return replace(source, nullable=True)
@@ -228,6 +238,7 @@ def annotate_input_types(tree, catalog):
             # are installed into the executable query.
             original[origin].meta["ch_value_type"] = value_type(node)
             original[origin].meta["ch_outer_join_unknown"] = node.meta.get("ch_outer_join_unknown", False)
+            original[origin].meta["ch_nonnull_after_filter"] = node.meta.get("ch_nonnull_after_filter", False)
 
 
 def _annotate_scoped_types(tree, catalog):
@@ -251,6 +262,19 @@ def _annotate_scoped_types(tree, catalog):
             outputs[id(scope)] = merged
             continue
         sources = scope.selected_sources
+        nonnull = set()
+        def collect_nonnull(node):
+            if isinstance(node, (exp.Paren, exp.Where)):
+                collect_nonnull(node.this)
+            elif isinstance(node, exp.And):
+                collect_nonnull(node.this)
+                collect_nonnull(node.expression)
+            elif isinstance(node, exp.Not):
+                predicate = node.this.unnest()
+                if (isinstance(predicate, exp.Is) and isinstance(predicate.this, exp.Column)
+                        and isinstance(predicate.expression, exp.Null)):
+                    nonnull.add((predicate.this.table, predicate.this.name))
+        collect_nonnull(scope.expression.args.get("where"))
         unknown_outer = set()
         source = scope.expression.args.get("from_")
         seen = {source.this.alias_or_name} if source else set()
@@ -277,6 +301,12 @@ def _annotate_scoped_types(tree, catalog):
             unambiguous = bool(column.table) or len(sources) == 1
             outer = column.table in unknown_outer if column.table else bool(unknown_outer)
             column.meta["ch_outer_join_unknown"] = outer
+            # A local AND-conjunct proves a direct column CAST cannot see NULL.
+            # Keep the logical column nullable: nullable aggregate empty-set
+            # defaults must not change merely because WHERE removes null rows.
+            column.meta["ch_nonnull_after_filter"] = (
+                (column.table, column.name) in nonnull and not outer and unambiguous
+            )
             column.meta["ch_value_type"] = candidates[0] if len(candidates) == 1 and not outer and unambiguous else None
         projected = {}
         for item in scope.expression.selects:
@@ -382,14 +412,15 @@ def exact_median(node):
     return exp.Coalesce(this=result, expressions=[default])
 
 
-def map_to_year(node):
+def map_calendar_part(node):
+    name = node.name.lower()
     if len(node.expressions) != 1:
-        unsupported("toYear supports one date/timestamp argument without timezone overrides.")
+        unsupported(f"{node.name} supports one date/timestamp argument without timezone overrides.")
     value = node.expressions[0]
-    info = require_type(value, "toYear")
+    info = require_type(value, node.name)
     if info.kind != "datetime" or not info.year_safe:
-        unsupported("toYear requires a known Date/Date32 or timezone-free timestamp contract; string, numeric and timezone overloads are unverified.")
-    return exp.Year(this=value.copy())
+        unsupported(f"{node.name} requires a known Date/Date32 or timezone-free timestamp contract; string, numeric and timezone overloads are unverified.")
+    return {"toyear": exp.Year, "tomonth": exp.Month, "todayofmonth": exp.DayOfMonth}[name](this=value.copy())
 
 
 def map_to_int64(node):
@@ -559,6 +590,18 @@ def map_datetime(node):
     return exp.Cast(this=exp.Anonymous(this="FROM_UNIXTIME", expressions=[seconds]), to=exp.DataType.build("TIMESTAMP(0)"))
 
 
+def truncate_timestamp_seconds(value):
+    """CH DateTime64 scale reduction truncates epoch ticks toward zero."""
+    from sqlglot import parse_one
+    result = parse_one(
+        "CASE WHEN x < TIMESTAMP '1970-01-01 00:00:00' "
+        "AND x <> DATE_TRUNC('second', x) THEN DATE_ADD('second', 1, DATE_TRUNC('second', x)) "
+        "ELSE DATE_TRUNC('second', x) END", read="trino")
+    for column in list(result.find_all(exp.Column)):
+        column.replace(value.copy())
+    return result
+
+
 def normalize_semantics(tree):
     # Snapshot types before replacing child nodes (casts can lose nullable flags
     # during target rendering). Store on each original expression for builders.
@@ -575,7 +618,30 @@ def normalize_semantics(tree):
                     "with its optional_pattern, not just the value placeholder."
                 )
     for node in reversed(list(tree.walk())):
-        if isinstance(node, exp.ParameterizedAgg):
+        if (isinstance(node, exp.Cast) and node.args["to"].this == exp.DataType.Type.DATETIME64
+                and node.args["to"].expressions
+                and node.args["to"].expressions[0].this == exp.Literal.number(0)
+                and (source := value_type(node.this)) and source.kind == "datetime"):
+            # CH reduces DateTime64 scale by truncating epoch ticks toward zero;
+            # Trino's lower-precision timestamp CAST rounds instead.
+            node.set("this", truncate_timestamp_seconds(node.this))
+        elif (isinstance(node, exp.Round) and (info := value_type(node.this))
+                and info.kind == "float" and (
+                    node.args.get("decimals") is None
+                    or isinstance(node.args.get("decimals"), exp.Literal)
+                    and node.args["decimals"].this == "0")):
+            # CH Float64 ROUND uses ties-to-even; Trino ROUND uses ties away
+            # from zero. Preserve the former at whole-year precision.
+            from sqlglot import parse_one
+            replacement = parse_one(
+                "CASE WHEN x - FLOOR(x) = 0.5 THEN "
+                "CASE WHEN MOD(FLOOR(x), 2) = 0 THEN FLOOR(x) ELSE CEIL(x) END "
+                "ELSE ROUND(x, 0) END", read="trino")
+            for column in list(replacement.find_all(exp.Column)):
+                column.replace(node.this.copy())
+            replacement.meta["ch_value_type"] = info
+            node.replace(replacement)
+        elif isinstance(node, exp.ParameterizedAgg):
             node.replace(exact_median(node))
         elif isinstance(node, (exp.Window, exp.Filter)):
             if isinstance(node, exp.Filter) and isinstance(node.parent, exp.Window):
@@ -597,9 +663,16 @@ def normalize_semantics(tree):
             if isinstance(node.parent, (exp.Window, exp.Filter)):
                 continue
             node.replace(aggregate(node))
-        elif isinstance(node, exp.DateDiff) and node.text("unit").upper() == "DAY":
+        elif isinstance(node, exp.DateDiff) and node.text("unit").upper() in {"DAY", "YEAR"}:
             if value_type(node) is None:
-                unsupported("Day dateDiff requires known date/timestamp inputs without an explicit timezone override.")
+                unsupported("Day/year dateDiff requires known date/timestamp inputs without an explicit timezone override.")
+            if node.text("unit").upper() == "YEAR":
+                # CH counts January-1 boundaries, not complete elapsed years.
+                replacement = exp.Sub(this=exp.Year(this=node.this.copy()),
+                                      expression=exp.Year(this=node.expression.copy()))
+                replacement.meta["ch_value_type"] = value_type(node)
+                node.replace(replacement)
+                continue
             # CH counts calendar-day boundaries; Trino timestamp date_diff
             # counts complete days. Cast both endpoints to DATE first.
             node.set("this", exp.Cast(this=node.this.copy(), to=exp.DataType.build("DATE")))
@@ -614,8 +687,8 @@ def normalize_semantics(tree):
             node.replace(map_json_string(node))
         elif isinstance(node, (exp.Anonymous, exp.AnonymousAggFunc)):
             name = node.name.lower()
-            if name == "toyear":
-                replacement = map_to_year(node)
+            if name in {"toyear", "tomonth", "todayofmonth"}:
+                replacement = map_calendar_part(node)
                 replacement.meta["ch_value_type"] = value_type(node)
                 node.replace(replacement)
             elif name == "toint64":

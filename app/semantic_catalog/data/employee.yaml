@@ -641,8 +641,10 @@ rules:
 - id: default_employee_population
   predicate: employee_status IN ('Active', 'On Leave')
   applies_when: >
-    Employee lists, headcounts, snapshots, and cross-module employee details, even with a period filter.
-    Does not apply to fact totals or aggregates, including by employee or department; use all accessible records.
+    Employee lists, headcounts, current-workforce attribute metrics (tenure, age, compensation),
+    snapshots, and cross-module employee details, including grouping by department.
+    Does not apply to payroll, accrual, expense, or time fact aggregates, even by employee or department;
+    use all accessible records for those. Explicit historical or other population scope overrides this default.
   description: >
     Default to current Active and On Leave. Explicit user scope overrides this default.
     Apply per result and blueprint slot; disclose population briefly.

@@ -57,6 +57,7 @@ _BLUEPRINT_IDS = {
     "bp-average-annual-salary-by-status",
 }
 _KNOWLEDGE_IDS = {
+    "kn-age-calculation",
     "kn-overtime-multiplier",
     "kn-pay-period-definition",
     "kn-register-type",

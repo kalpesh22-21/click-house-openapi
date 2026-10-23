@@ -307,6 +307,7 @@ def list_databases() -> list[dict[str, Any]]:
          "are omitted by getTableSchema; connection failures return an error. "
          if settings.trino_enabled else
          "Return all tables (and their storage engines) inside the specified database. ") +
+        "Includes catalog descriptions to help select relevant tables. "
         "Call listDatabases first if you are unsure which databases are available. "
         "The 'database' parameter must be a database name returned by listDatabases."
     ),

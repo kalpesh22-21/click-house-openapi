@@ -1,8 +1,8 @@
 id: bp-salary-distribution
 intent: Annual salary distribution with configurable positive whole-currency band width. Lower bound inclusive,
   upper bound exclusive; no formatted-label rounding. Counts and percentage denominator include only selected recorded
-  salaries, not employees missing salaries. Required population selects recorded or positive only. No implicit active
-  filter.
+  salaries, not employees missing salaries. Required population selects recorded or positive only. Defaults to Active
+  + On Leave; employee_status selects another status or All to remove the filter.
 slots_summary: band_width, salary_population, employee_status, department, employee
 status: validated
 drift_status: clean
@@ -25,6 +25,7 @@ slots:
   - recorded
   - positive
 - name: employee_status
+  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
   type: enum
   required: false
   enum_values:
@@ -37,8 +38,9 @@ slots:
   - Not Hired
   - Prehire
   - Unknown
+  - All
   binds_to: dbpcm_warehouse.employee.employee_status
-  optional_pattern: 'TRUE'
+  optional_pattern: e.employee_status IN ('Active', 'On Leave')
 - name: department
   type: entity
   required: false
@@ -53,7 +55,7 @@ result_grain:
 - Lower Bound
 sql_template: "SELECT intDiv(e.annual_salary, {band_width}) * {band_width} AS `Lower Bound`,\n (intDiv(e.annual_salary,\
   \ {band_width}) + 1) * {band_width} AS `Upper Bound Exclusive`,\n count(*) AS `Employee Count`, 100.0 * count(*)\
-  \ / sum(count(*)) OVER () AS `Percent of Selected Recorded Salaries`\nFROM dbpcm_warehouse.employee e WHERE e.employee_status\
-  \ = {employee_status} AND e.department_name = {department} AND e.employee_code = {employee} AND e.annual_salary\
-  \ IS NOT NULL\n AND ({salary_population} = 'recorded' OR e.annual_salary > 0)\nGROUP BY intDiv(e.annual_salary,\
-  \ {band_width}) ORDER BY `Lower Bound`"
+  \ / sum(count(*)) OVER () AS `Percent of Selected Recorded Salaries`\nFROM dbpcm_warehouse.employee e WHERE (e.employee_status\
+  \ = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department} AND e.employee_code =\
+  \ {employee} AND e.annual_salary IS NOT NULL\n AND ({salary_population} = 'recorded' OR e.annual_salary > 0)\n\
+  GROUP BY intDiv(e.annual_salary, {band_width}) ORDER BY `Lower Bound`"

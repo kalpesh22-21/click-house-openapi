@@ -1,6 +1,7 @@
 id: bp-average-salary-by-department
 intent: Average annual salary and employee headcount by department; optional employee status and department; omitted
-  filters include all accessible employees. Average excludes NULL salaries; headcount includes them.
+  department filter includes all departments. Average excludes NULL salaries; headcount includes them. Defaults
+  to Active + On Leave; employee_status selects another status or All to remove the filter.
 slots_summary: department, employee_status
 status: validated
 drift_status: clean
@@ -19,6 +20,7 @@ slots:
   binds_to: dbpcm_warehouse.employee.department_name
   optional_pattern: 'TRUE'
 - name: employee_status
+  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
   type: enum
   required: false
   enum_values:
@@ -31,10 +33,11 @@ slots:
   - Not Hired
   - Prehire
   - Unknown
+  - All
   binds_to: dbpcm_warehouse.employee.employee_status
-  optional_pattern: 'TRUE'
+  optional_pattern: employee_status IN ('Active', 'On Leave')
 result_grain:
 - Department
 sql_template: "SELECT department_name AS department,\n       AVG(annual_salary) AS avg_salary,\n       COUNT(DISTINCT\
-  \ employee_code) AS headcount\nFROM dbpcm_warehouse.employee\nWHERE department_name = {department}\n  AND employee_status\
-  \ = {employee_status}\nGROUP BY department_name\n"
+  \ employee_code) AS headcount\nFROM dbpcm_warehouse.employee\nWHERE department_name = {department}\n  AND (employee_status\
+  \ = {employee_status} OR {employee_status} = 'All')\nGROUP BY department_name\n"

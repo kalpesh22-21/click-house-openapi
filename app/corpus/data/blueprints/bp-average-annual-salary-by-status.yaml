@@ -1,5 +1,6 @@
 id: bp-average-annual-salary-by-status
-intent: Calculate the average annual salary per employee filtered by employee status.
+intent: Calculate the average annual salary per employee filtered by employee status. Defaults to Active + On Leave;
+  employee_status selects another status or All to remove the filter.
 slots_summary: employee_status
 status: validated
 drift_status: clean
@@ -9,9 +10,10 @@ uses:
 - dbpcm_warehouse.employee.employee_status
 slots:
 - name: employee_status
+  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
   type: enum
   binds_to: dbpcm_warehouse.employee.employee_status
-  required: true
+  required: false
   enum_values:
   - Active
   - Deceased
@@ -22,7 +24,9 @@ slots:
   - Not Hired
   - Prehire
   - Unknown
+  - All
+  optional_pattern: employee_status IN ('Active', 'On Leave')
 sql_template: SELECT avg(annual_salary) AS average_annual_salary_per_employee FROM dbpcm_warehouse.employee WHERE
-  employee_status = {employee_status}
+  (employee_status = {employee_status} OR {employee_status} = 'All')
 resolves:
   average annual salary per employee: dbpcm_warehouse.employee.annual_salary

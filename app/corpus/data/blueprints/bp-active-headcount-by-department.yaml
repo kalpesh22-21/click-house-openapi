@@ -1,7 +1,7 @@
 id: bp-active-headcount-by-department
-intent: Active employee headcount by department, including departments with no active employees (active-only; for
-  other/all statuses use bp-employee-summary)
-slots_summary: department
+intent: Employee headcount by department, including departments with no matching employees. Defaults to Active +
+  On Leave; employee_status selects another status or All to remove the filter.
+slots_summary: department, employee_status
 status: validated
 drift_status: clean
 catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
@@ -17,12 +17,29 @@ slots:
   required: false
   binds_to: dbpcm_warehouse.department.department_name
   optional_pattern: 'TRUE'
+- name: employee_status
+  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
+  type: enum
+  binds_to: dbpcm_warehouse.employee.employee_status
+  required: false
+  enum_values:
+  - Active
+  - Deceased
+  - Inactive
+  - Retired
+  - Terminated
+  - On Leave
+  - Not Hired
+  - Prehire
+  - Unknown
+  - All
+  optional_pattern: employee_status IN ('Active', 'On Leave')
 uses_rules:
-- active_employee
+- default_employee_population
 result_grain:
 - department_code
 sql_template: "SELECT\n    d.department_code AS department_code,\n    d.department_name AS department,\n    coalesce(e.active_count,\
   \ 0) AS headcount\nFROM dbpcm_warehouse.department AS d\nLEFT JOIN (\n    SELECT department_code, uniqExact(employee_code)\
-  \ AS active_count\n    FROM dbpcm_warehouse.employee\n    WHERE employee_status = 'Active'\n    GROUP BY department_code\n\
-  ) AS e ON d.department_code = e.department_code\nWHERE d.department_name = {department}\nORDER BY headcount, department,\
-  \ department_code\n"
+  \ AS active_count\n    FROM dbpcm_warehouse.employee\n    WHERE (employee_status = {employee_status} OR {employee_status}\
+  \ = 'All')\n    GROUP BY department_code\n) AS e ON d.department_code = e.department_code\nWHERE d.department_name\
+  \ = {department}\nORDER BY headcount, department, department_code\n"

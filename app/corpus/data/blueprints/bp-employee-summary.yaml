@@ -1,8 +1,8 @@
 id: bp-employee-summary
 intent: Employee headcount, salary sum/average/minimum/maximum and known-salary count, grouped by company, department
-  or status. Optional status, department and employee filters; omit to include all. Salary statistics exclude NULLs;
-  no implicit active-only filter. One employee row per authorized employee is required. No date-period or salary-threshold
-  filter.
+  or status. Optional status, department and employee filters. Salary statistics exclude NULLs. One employee row
+  per authorized employee is required. No date-period or salary-threshold filter. Defaults to Active + On Leave;
+  employee_status selects another status or All to remove the filter.
 slots_summary: group_by, employee_status, department, employee
 status: validated
 drift_status: clean
@@ -21,6 +21,7 @@ slots:
   - department
   - status
 - name: employee_status
+  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
   type: enum
   required: false
   enum_values:
@@ -33,8 +34,9 @@ slots:
   - Not Hired
   - Prehire
   - Unknown
+  - All
   binds_to: dbpcm_warehouse.employee.employee_status
-  optional_pattern: 'TRUE'
+  optional_pattern: e.employee_status IN ('Active', 'On Leave')
 - name: department
   type: entity
   required: false
@@ -50,6 +52,7 @@ result_grain:
 sql_template: "SELECT CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'status' THEN e.employee_status\
   \ ELSE 'Company' END AS `Group`,\n uniqExact(e.employee_code) AS `Employee Count`,\n count(e.annual_salary) AS\
   \ `Known Salary Count`,\n sum(e.annual_salary) AS `Salary Sum`, avg(e.annual_salary) AS `Average Salary`,\n min(e.annual_salary)\
-  \ AS `Minimum Salary`, max(e.annual_salary) AS `Maximum Salary`\nFROM dbpcm_warehouse.employee e\nWHERE e.employee_status\
-  \ = {employee_status} AND e.department_name = {department} AND e.employee_code = {employee}\nGROUP BY CASE {group_by}\
-  \ WHEN 'department' THEN e.department_name WHEN 'status' THEN e.employee_status ELSE 'Company' END\nORDER BY `Group`\n"
+  \ AS `Minimum Salary`, max(e.annual_salary) AS `Maximum Salary`\nFROM dbpcm_warehouse.employee e\nWHERE (e.employee_status\
+  \ = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department} AND e.employee_code =\
+  \ {employee}\nGROUP BY CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'status' THEN e.employee_status\
+  \ ELSE 'Company' END\nORDER BY `Group`\n"

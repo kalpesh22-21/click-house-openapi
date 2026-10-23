@@ -1,8 +1,8 @@
 id: bp-salary-exact-median
 intent: Exact annual salary median (middle-pair mean), average, minimum, maximum and recorded-salary count by company,
   department or current status. No approximation. Required salary_population chooses all recorded values including
-  zero, or positive salaries only. NULL salaries excluded; no implicit active filter. Does not compute arbitrary
-  percentiles.
+  zero, or positive salaries only. NULL salaries excluded; Does not compute arbitrary percentiles. Defaults to Active
+  + On Leave; employee_status selects another status or All to remove the filter.
 slots_summary: group_by, salary_population, employee_status, department, employee
 status: validated
 drift_status: clean
@@ -27,6 +27,7 @@ slots:
   - recorded
   - positive
 - name: employee_status
+  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
   type: enum
   required: false
   enum_values:
@@ -39,8 +40,9 @@ slots:
   - Not Hired
   - Prehire
   - Unknown
+  - All
   binds_to: dbpcm_warehouse.employee.employee_status
-  optional_pattern: 'TRUE'
+  optional_pattern: e.employee_status IN ('Active', 'On Leave')
 - name: department
   type: entity
   required: false
@@ -57,7 +59,7 @@ sql_template: "SELECT CASE {group_by} WHEN 'department' THEN e.department_name W
   \ ELSE 'Company' END AS `Group`, count(e.annual_salary) AS `Recorded Salary Count`,\n (quantileExactLow(0.5)(e.annual_salary)\
   \ + quantileExactHigh(0.5)(e.annual_salary)) / 2 AS `Exact Median Salary`,\n avg(e.annual_salary) AS `Average\
   \ Salary`, min(e.annual_salary) AS `Minimum Salary`, max(e.annual_salary) AS `Maximum Salary`\nFROM dbpcm_warehouse.employee\
-  \ e WHERE e.employee_status = {employee_status} AND e.department_name = {department} AND e.employee_code = {employee}\n\
-  \ AND e.annual_salary IS NOT NULL AND ({salary_population} = 'recorded' OR e.annual_salary > 0)\nGROUP BY CASE\
-  \ {group_by} WHEN 'department' THEN e.department_name WHEN 'status' THEN e.employee_status ELSE 'Company' END\
-  \ ORDER BY `Group`"
+  \ e WHERE (e.employee_status = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department}\
+  \ AND e.employee_code = {employee}\n AND e.annual_salary IS NOT NULL AND ({salary_population} = 'recorded' OR\
+  \ e.annual_salary > 0)\nGROUP BY CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'status' THEN e.employee_status\
+  \ ELSE 'Company' END ORDER BY `Group`"

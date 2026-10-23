@@ -484,7 +484,8 @@ def list_tables(database: str, settings: Settings | None = None) -> list[dict[st
                 if scratch_table_belongs_to_session(row[1], session_id)]
     return [
         {"database": public_database(database) if settings.trino_enabled else database,
-         "name": entry["table"], "engine": "Trino" if settings.trino_enabled else "ClickHouse"}
+         "name": entry["table"], "engine": "Trino" if settings.trino_enabled else "ClickHouse",
+         "description": entry.get("description") or ""}
         for _, entry in sorted(scoped_catalog(_catalog_entries(settings)).items())
         if entry["database"] == database
     ]
