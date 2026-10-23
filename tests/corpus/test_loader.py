@@ -61,6 +61,7 @@ _KNOWLEDGE_IDS = {
     "kn-pay-period-definition",
     "kn-register-type",
     "kn-clickhouse-median",
+    "kn-stale-blueprint-recovery",
 }
 
 

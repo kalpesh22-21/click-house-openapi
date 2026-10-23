@@ -32,6 +32,7 @@ slots:
   - month
 - name: period
   type: period_range
+  temporal_type: date
   required: true
 - name: employee_status
   type: enum

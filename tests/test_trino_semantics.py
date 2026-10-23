@@ -64,6 +64,36 @@ def test_catalog_nullability_survives_alias_and_derived_scope():
     assert "SELECT SUM(x), COALESCE(SUM(y), 0)" in sql
 
 
+@pytest.mark.parametrize("cte", [False, True])
+@pytest.mark.parametrize("empty, expected", [(False, (3, 2)), (True, (0, 0))])
+def test_aggregate_over_derived_exact_distinct_count(cte, empty, expected):
+    inner = "SELECT uniqExact(name) AS n FROM staff"
+    if empty:
+        inner += " WHERE 0=1"
+    inner += " GROUP BY stamp"
+    sql = (f"WITH counts AS ({inner}) SELECT sum(n), count() FROM counts" if cte
+           else f"SELECT sum(n), count() FROM ({inner}) counts")
+    # Duplicate and NULL names must not change the exact count; empty grouped
+    # input must retain ClickHouse's zero SUM default across the scope boundary.
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute("CREATE TABLE staff(name TEXT, stamp INTEGER)")
+        connection.executemany("INSERT INTO staff VALUES (?, ?)",
+                               [("A", 1), ("A", 1), (None, 1), ("B", 2), ("C", 2)])
+        assert connection.execute(convert(sql, "sqlite")).fetchone() == expected
+    assert "COUNT(DISTINCT name)" in convert(sql)
+
+
+@pytest.mark.parametrize("predicate", ["name = TRUE", "FALSE != name", "name = false"])
+def test_boolean_literal_is_not_a_string_slot_value(predicate):
+    with pytest.raises(QueryValidationError, match="entire predicate"):
+        convert(f"SELECT name FROM staff WHERE {predicate}")
+
+
+def test_omitted_predicate_and_literal_string_true_remain_valid():
+    assert "WHERE TRUE" in convert("SELECT name FROM staff WHERE TRUE")
+    assert "'TRUE'" in convert("SELECT name FROM staff WHERE name = 'TRUE'")
+
+
 def test_same_name_columns_are_bound_by_source():
     sql = convert("SELECT sum(a.salary),sum(b.amount) FROM staff a JOIN staff b ON a.stamp=b.stamp")
     assert "SUM(a.salary), COALESCE(SUM(b.amount), 0)" in sql
@@ -76,12 +106,10 @@ def test_having_alias_expansion_columns_are_typed():
 
 @pytest.mark.parametrize("sql", [
     "SELECT sum(unknown) FROM staff",
-    "SELECT sum(x) FROM (SELECT 1 x UNION ALL SELECT NULL x)",
     "SELECT sum(b.amount) FROM staff a LEFT JOIN staff b ON a.stamp=b.stamp",
     "SELECT sum(CAST(salary AS Float64)) FROM staff",
     "SELECT sumIf(3)", "SELECT avgIf(3,1,2)",
     "SELECT argMax((1,2),1)",
-    "SELECT argMax(name,stamp) OVER () FROM staff",
     "SELECT length(unknown) FROM staff",
     "SELECT toDateTime(unknown) FROM staff",
     "SELECT toDateTime(CAST(3 AS Decimal(18,2)))",
@@ -209,7 +237,6 @@ def test_derived_case_type_survives_cte():
     'SELECT sum(CASE WHEN stamp>0 THEN unknown_function(amount) ELSE 0 END) FROM staff',
     'SELECT sum(round(toFloat64(amount),2)) FROM staff',
     'SELECT sum(CASE WHEN a.stamp>0 THEN b.amount ELSE 0 END) FROM staff a LEFT JOIN staff b ON a.stamp=b.stamp',
-    'SELECT sum(coalesce(x,0)) FROM (SELECT amount x FROM staff UNION ALL SELECT salary x FROM staff)',
 ])
 def test_library_inference_does_not_override_semantic_guards(sql):
     with pytest.raises(QueryValidationError):
@@ -412,3 +439,133 @@ def test_to_int64_minimum_signed_literal():
 def test_outer_join_rejection_explains_structural_cause():
     with pytest.raises(QueryValidationError, match="after an outer join"):
         convert("SELECT sum(b.salary) FROM dbpcm_warehouse.staff a LEFT JOIN dbpcm_warehouse.staff b ON a.name=b.name")
+
+
+@pytest.mark.parametrize("function", ["countDistinct", "COUNTDISTINCT", "CountDistinct"])
+@pytest.mark.parametrize("values,expected", [(["A", "A", None, "B"], 2), ([None], 0), ([], 0)])
+def test_count_distinct_alias_preserves_duplicates_nulls_and_empty(function, values, expected):
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute("CREATE TABLE staff(name TEXT)")
+        connection.executemany("INSERT INTO staff VALUES (?)", [(v,) for v in values])
+        assert connection.execute(convert(f"SELECT {function}(name) FROM staff", "sqlite")).fetchone() == (expected,)
+
+
+@pytest.mark.parametrize("function", ["addYears", "ADDYEARS", "AddYears"])
+def test_add_years_current_year_boundary(function):
+    assert convert(f"SELECT {function}(toStartOfYear(today()), 1)") == "SELECT DATE_ADD('YEAR', 1, DATE_TRUNC('YEAR', CURRENT_DATE))"
+
+
+@pytest.mark.parametrize("function", ["date_diff", "dateDiff", "DATE_DIFF"])
+def test_day_difference_accepts_now_and_keeps_calendar_boundaries(function):
+    tree = sqlglot.parse_one(f"SELECT avg({function}('day', hire_date, now())) FROM employee", read="clickhouse")
+    annotate_input_types(tree, {"dbpcm_warehouse.employee": {"columns": {"hire_date": {"type": "Nullable(DateTime64(6))"}}}})
+    _map_clickhouse_functions(tree)
+    emitted = tree.sql(dialect="trino")
+    assert "DATE_DIFF('DAY', CAST(hire_date AS DATE), CAST(CURRENT_TIMESTAMP AS DATE))" in emitted
+    assert "AVG(" in emitted
+
+
+@pytest.mark.parametrize("expression", [
+    "addYears(today())", "addYears(today(), 1.5)", "addYears('2024-01-01', 1)",
+    "countDistinct()", "countDistinct(name, stamp)", "now('UTC')",
+])
+def test_new_function_overloads_fail_closed(expression):
+    with pytest.raises(QueryValidationError):
+        convert(f"SELECT {expression} FROM staff")
+
+
+@pytest.mark.parametrize("expression, expected", [
+    ("sum(3) FILTER(WHERE 0)", 0),
+    ("sum(toNullable(3)) FILTER(WHERE 0)", None),
+    ("sum(3) FILTER(WHERE 1)", 3),
+    ("avg(toNullable(3)) FILTER(WHERE 0)", None),
+    ("avg(3) FILTER(WHERE 1)", 3.0),
+])
+def test_explicit_filter_preserves_aggregate_defaults(expression, expected):
+    with sqlite3.connect(":memory:") as connection:
+        connection.create_function("nan", 0, lambda: float("nan"))
+        assert connection.execute(convert(f"SELECT {expression}", "sqlite")).fetchone() == (expected,)
+
+
+def test_filtered_nonnullable_average_keeps_nan_default():
+    assert "NAN()" in convert("SELECT avg(3) FILTER(WHERE 0)")
+
+
+@pytest.mark.parametrize("function", ["sum", "avg"])
+def test_windowed_filter_uses_case_and_keeps_frame(function):
+    sql = convert(f"SELECT {function}(amount) FILTER(WHERE stamp>0) OVER (ORDER BY stamp ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM staff")
+    assert "FILTER(" not in sql
+    assert "CASE WHEN stamp > 0" in sql
+    assert "ROWS BETWEEN 1 PRECEDING AND CURRENT ROW" in sql
+
+
+@pytest.mark.parametrize("filtered", [False, True])
+def test_windowed_argmax_preserves_null_eligibility_and_frame(filtered):
+    condition = " FILTER(WHERE stamp>1)" if filtered else ""
+    sql = convert(f"SELECT argMax(name,stamp){condition} OVER (ORDER BY stamp ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING) FROM staff")
+    assert "MAX_BY(CASE WHEN" in sql
+    assert sql.count("NOT name IS NULL AND NOT stamp IS NULL") == 2
+    assert "FILTER(" not in sql
+    assert "ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING" in sql
+
+
+@pytest.mark.parametrize("sql, expected", [
+    ("SELECT sum(x) FROM (SELECT 1 x UNION ALL SELECT NULL x)", 1),
+    ("SELECT sum(x) FROM (SELECT 1 x UNION ALL SELECT NULL x) WHERE 0=1", None),
+    ("SELECT sum(x) FROM (SELECT 1 x UNION ALL SELECT 2 x) WHERE 0=1", 0),
+    ("SELECT sum(x) FROM (SELECT sumIf(3,1) x)", 3),
+    ("SELECT sum(x) FROM (SELECT sum(3) FILTER(WHERE 1) x)", 3),
+])
+def test_known_derived_aggregate_types(sql, expected):
+    with sqlite3.connect(":memory:") as connection:
+        assert connection.execute(convert(sql, "sqlite")).fetchone() == (expected,)
+
+
+def test_outer_join_preserved_side_keeps_known_nullability():
+    sql = convert("SELECT sum(a.amount), sum(a.salary) FROM staff a LEFT JOIN staff b ON a.stamp=b.stamp")
+    assert "COALESCE(SUM(a.amount), 0)" in sql
+    assert "SUM(a.salary)" in sql
+    with pytest.raises(QueryValidationError, match="outer join"):
+        convert("SELECT sum(b.amount) FROM staff a LEFT JOIN staff b ON a.stamp=b.stamp")
+
+
+@pytest.mark.parametrize("expression,expected", [
+    ("toDate('2024-01-01 05:00:00')", "CAST('2024-01-01' AS DATE)"),
+    ("toDateTime64(1700000000,3)", "DATE_ADD('SECOND', 1700000000"),
+    ("toDateTime64(-1,6)", "DATE_ADD('SECOND', -1"),
+    ("toDateTime64(1700000000.1239,3)", "FROM_UNIXTIME_NANOS"),
+    ("toDateTime64(CAST('1700000000.1239' AS Decimal(18,4)),3)", "TRUNCATE("),
+    ("toDateTime64('2024-01-01 00:00:00.9999',3)", "'2024-01-01 00:00:00.999'"),
+])
+def test_temporal_conversions_do_not_emit_invalid_casts(expression, expected):
+    assert expected in convert(f"SELECT {expression}")
+
+
+@pytest.mark.parametrize("expression", [
+    "toDate('bad date')", "toDate('2024-01-01T00:00:00+03:00')", "toDate(123)",
+    "toDateTime64(1,-1)", "toDateTime64(1,10)", "toDateTime64(1,stamp)",
+    "toDateTime64('bad date',3)", "toDateTime64(name,3)", "toDateTime64(unknown,3)",
+])
+def test_unsupported_temporal_inputs_fail_before_trino(expression):
+    with pytest.raises(QueryValidationError):
+        convert(f"SELECT {expression} FROM staff")
+
+
+def test_float_epoch_preserves_integer_ticks_before_decimal_conversion():
+    sql = convert("SELECT toDateTime64(1700000000.1234567,9)")
+    assert "AS BIGINT) AS DECIMAL(38, 0))" in sql
+    assert "* 1000000000" in sql
+
+
+def test_nested_temporal_mapping_keeps_logical_type():
+    sql = convert("SELECT toDate(toDateTime64(1700000000,3))")
+    assert "DATE_ADD('SECOND', 1700000000" in sql
+    assert sql.endswith("AS DATE)")
+
+
+def test_nested_union_preserves_unknown_projection_positions():
+    # An unresolved first projection must not shift the known second projection.
+    sql = "SELECT sum(y) FROM (SELECT unknown x, 1 y FROM staff UNION ALL SELECT unknown x, 2 y FROM staff UNION ALL SELECT unknown x, 3 y FROM staff)"
+    assert "COALESCE(SUM(y), 0)" in convert(sql)
+    with pytest.raises(QueryValidationError):
+        convert(sql.replace("sum(y)", "sum(x)"))

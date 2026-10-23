@@ -278,12 +278,19 @@ rules:
 - id: employee_benefits
   predicate: register_type = 'EEBEN'
   applies_when: employee benefit contribution questions
-  description: Employee benefit contribution rows.
+  description: Employee contributions, not employer-paid benefit costs. Do not add these to gross earnings as employer cost.
 - id: net_pay_distribution
   predicate: register_type = 'NETPAYDIST'
   applies_when: take-home pay distribution questions
   description: How net pay was distributed, such as direct deposit or check.
 ambiguities:
+- term: payroll_cost
+  resolves_to:
+  - gross earnings
+  - net pay
+  - total employer cost
+  default: Clarify cost basis and period.
+  clarify_if: Cost basis or period is unspecified and prior conversation has not resolved it.
 - term: pay_timing
   resolves_to:
   - pay_date

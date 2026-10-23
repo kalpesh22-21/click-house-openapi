@@ -30,6 +30,7 @@ from app.principal import get_current_principal
 from app.semantic_catalog.loader import DEFAULT_DATABASE, get_semantic_catalog
 from app.shard_routing import resolve_mysql_shard, validate_identifier
 from app.trino_errors import rewrite_trino_error
+from app.trino_diagnostics import trace_execution, record_physical, record_query_id
 
 logger = logging.getLogger(__name__)
 
@@ -117,9 +118,8 @@ def normalize_logical_sql(sql: str) -> str:
 #
 # Map discipline: one entry per function, keyed by the case-folded parsed
 # name; builders receive the parsed call and return its replacement. An
-# ABSENT entry or an arity mismatch means "leave untouched" by construction —
-# the existing passthrough behavior (the coordinator rejects it loudly) is
-# deliberately kept for anything unmapped rather than guessing at semantics.
+# ABSENT entry must be handled by the semantics/construct passes; otherwise
+# reject before dispatch. Unsupported mapped arities also fail closed.
 #
 # Inventory (exact-safe mappings only):
 #   uniqexact           -> COUNT(DISTINCT x)                            [1 arg]
@@ -173,45 +173,79 @@ def _to_date32_as_cast_date(func: exp.Func) -> exp.Expression:
 
 
 def _to_date_as_cast_date(func: exp.Func) -> exp.Expression:
-    """toDate(x) -> CAST(x AS DATE).
+    """Accept ISO date/datetime strings as well as typed temporal values."""
+    from datetime import datetime
+    from app.trino_constructs import unsupported
+    from app.trino_semantics import require_type
 
-    ClickHouse toDate collapses Date / DateTime / string inputs to the
-    calendar day; Trino DATE covers the catalog's CH Date range ('1900-01-01'
-    sentinel through 2299-style values). On a DATE-typed column the cast is
-    the identity, on a timestamp it truncates to the date exactly as CH does
-    for DateTime inputs, and on a string literal 'YYYY-MM-DD' it equals CH
-    toDate(string). Documented divergence: a DATETIME-string input (CH
-    toDate('2024-01-01 05:00:00') accepts it) errors in Trino's CAST — the
-    catalog convention is date-literal strings, and such calls fail loudly
-    rather than mis-convert. Arity admission (map entry): exactly 1 arg, so
-    CH's optional timezone argument stays untouched.
-    """
-    return exp.Cast(
-        this=func.expressions[0], to=exp.DataType.build(exp.DataType.Type.DATE)
-    )
+    value = func.expressions[0]
+    info = require_type(value, "toDate")
+    if isinstance(value, exp.Literal) and value.is_string:
+        try:
+            parsed = datetime.fromisoformat(value.this)
+            if parsed.tzinfo is not None:
+                raise ValueError
+        except ValueError:
+            unsupported("toDate requires an ISO date/time string without a timezone override.")
+        value = exp.Literal.string(parsed.date().isoformat())
+    elif info.kind == "string":
+        value = exp.Cast(this=value, to=exp.DataType.build("TIMESTAMP(9)"))
+    elif info.kind not in {"datetime", "null"}:
+        unsupported("toDate numeric epochs require an explicit temporal conversion first.")
+    return exp.Cast(this=value, to=exp.DataType.build("DATE"))
 
 
 def _to_datetime64_as_cast_timestamp(func: exp.Func) -> exp.Expression:
-    """toDateTime64(x, p) -> CAST(x AS TIMESTAMP(p)).
+    """Preserve epoch seconds and precision; reject unverified input signatures."""
+    from app.trino_constructs import unsupported
+    from app.trino_semantics import require_type
 
-    Verified against the pinned sqlglot (30.12.0): the 2-arg CH shape
-    (value, scale) maps onto exp.Cast carrying a parameterized TIMESTAMP
-    type and renders / round-trips cleanly as CAST(x AS TIMESTAMP(p)).
-    Second-precision timestamps and date/datetime string literals convert
-    exactly at the catalog's naive-datetime conventions. Documented
-    divergences: CH's optional 3-arg TIMEZONE form is NOT admitted (the
-    arity guard leaves it untouched); an epoch-integer value has CH epoch
-    semantics no CAST expresses — Trino rejects it loudly; p must be a
-    literal for Trino, so a non-literal scale renders as-is and the
-    coordinator rejects it. Never a silent mis-conversion.
-    """
     value, precision = func.expressions
-    return exp.Cast(
-        this=value,
-        to=exp.DataType(
-            this=exp.DataType.Type.TIMESTAMP, expressions=[precision]
-        ),
-    )
+    if not (isinstance(precision, exp.Literal) and not precision.is_string
+            and precision.this.isdigit() and 0 <= int(precision.this) <= 9):
+        unsupported("toDateTime64 precision must be an integer literal from 0 through 9.")
+    info = require_type(value, "toDateTime64")
+    target = exp.DataType.build(f"TIMESTAMP({precision.this})")
+    if info.kind == "integer" and info.intdiv_safe:
+        value = exp.DateAdd(this=exp.Cast(this=exp.Literal.string("1970-01-01 00:00:00"), to=target.copy()),
+                            expression=value, unit=exp.Var(this="second"))
+    elif info.kind == "float":
+        # ClickHouse scales the Float64 epoch before truncating to integer ticks.
+        scaled = exp.Mul(this=exp.Cast(this=value, to=exp.DataType.build("DOUBLE")),
+                         expression=exp.Literal.number(10 ** int(precision.this)))
+        # DOUBLE -> DECIMAL formats a rounded decimal string in Trino. Go via
+        # integer ticks to retain the exact scaled binary-float value instead.
+        ticks = exp.Cast(this=exp.Cast(this=exp.Anonymous(this="TRUNCATE", expressions=[scaled]),
+                                      to=exp.DataType.build("BIGINT")),
+                         to=exp.DataType.build("DECIMAL(38,0)"))
+        nanos = exp.Mul(this=ticks, expression=exp.Literal.number(10 ** (9 - int(precision.this))))
+        value = exp.AtTimeZone(this=exp.Anonymous(this="FROM_UNIXTIME_NANOS", expressions=[nanos]),
+                              zone=exp.Literal.string("UTC"))
+    elif info.kind == "decimal" and info.intdiv_safe:
+        # Truncate before reducing TIMESTAMP precision: Trino CAST rounds.
+        seconds = exp.Anonymous(this="TRUNCATE", expressions=[value, precision.copy()])
+        nanos = exp.Mul(this=seconds, expression=exp.Literal.number(1000000000))
+        value = exp.AtTimeZone(this=exp.Anonymous(this="FROM_UNIXTIME_NANOS", expressions=[nanos]),
+                              zone=exp.Literal.string("UTC"))
+    elif info.kind in {"string", "datetime", "null"}:
+        # Literal strings are truncated before casting, preserving CH's scale.
+        if isinstance(value, exp.Literal) and value.is_string:
+            from datetime import datetime
+            import re
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?)?", value.this):
+                unsupported("toDateTime64 requires a timezone-free ISO date/time literal.")
+            try:
+                datetime.fromisoformat(value.this)
+            except ValueError:
+                unsupported("Invalid toDateTime64 ISO date/time literal.")
+            whole, _, fraction = value.this.partition(".")
+            fraction = fraction[:int(precision.this)]
+            value = exp.Literal.string(whole + ("." + fraction if fraction else ""))
+        elif info.kind in {"string", "datetime"}:
+            unsupported("toDateTime64 dynamic text/timestamp scale conversion is unverified; use an ISO literal or an integer/Decimal epoch.")
+    else:
+        unsupported("toDateTime64 numeric epochs require signed-64-compatible integers, Float64, or Decimal precision up to 18.")
+    return exp.Cast(this=value, to=target)
 
 
 def _to_float64_as_cast_double(func: exp.Func) -> exp.Expression:
@@ -311,6 +345,17 @@ def _add_months_as_date_add(func: exp.Func) -> exp.Expression:
     return exp.DateAdd(this=date_arg, expression=months, unit=exp.Var(this="month"))
 
 
+def _add_years_as_date_add(func: exp.Func) -> exp.Expression:
+    from app.trino_constructs import unsupported
+    from app.trino_semantics import value_type
+
+    date_arg, years = func.expressions
+    date_type, offset_type = value_type(date_arg), value_type(years)
+    if not date_type or date_type.kind != "datetime" or not offset_type or offset_type.kind != "integer":
+        unsupported("addYears requires a known date/timestamp and an integer year offset.")
+    return exp.DateAdd(this=date_arg, expression=years, unit=exp.Var(this="year"))
+
+
 def _concat_with_separator_as_concat_ws(func: exp.Func) -> exp.Expression:
     """Preserve ClickHouse NULL propagation with sqlglot's CASE guard.
 
@@ -323,6 +368,9 @@ def _concat_with_separator_as_concat_ws(func: exp.Func) -> exp.Expression:
 
 _CLICKHOUSE_FUNCTION_MAP: dict[str, _FunctionMapping] = {
     "uniqexact": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n == 1),
+    "countdistinct": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n == 1),
+    "now": _FunctionMapping(lambda _: exp.CurrentTimestamp(), lambda n: n == 0),
+    "addyears": _FunctionMapping(_add_years_as_date_add, lambda n: n == 2),
     "todate": _FunctionMapping(_to_date_as_cast_date, lambda n: n == 1),
     "todate32": _FunctionMapping(_to_date32_as_cast_date, lambda n: n == 1),
     "todatetime64": _FunctionMapping(
@@ -342,12 +390,29 @@ _CLICKHOUSE_FUNCTION_MAP: dict[str, _FunctionMapping] = {
 def _map_clickhouse_functions(tree: exp.Query) -> None:
     """Normalize supported constructs, reject known unsafe signatures, then map functions.
 
-    Remaining unknown functions are still rejected by the coordinator. This is
-    intentionally not a claim of universal ClickHouse compatibility.
+    Reject unknown anonymous functions before dispatch rather than relying on
+    a coordinator FUNCTION_NOT_FOUND error. Typed SQLGlot functions retain
+    their dialect conversions.
     """
-    from app.trino_constructs import normalize_constructs
+    from app.trino_constructs import normalize_constructs, unsupported
 
-    from app.trino_semantics import normalize_semantics
+    from app.trino_semantics import normalize_semantics, value_type
+
+    # These names are handled by the type/construct passes below. Validate
+    # caller nodes before those passes introduce Trino-native helper functions.
+    semantic_names = {
+        "toyear", "toint64", "intdiv", "todatetime", "tonullable",
+        "sumif", "avgif", "minif", "maxif", "today", "groupuniqarray",
+        "arraysort", "arraystringconcat", "formatreadablequantity",
+    }
+    for func in tree.find_all(exp.Anonymous, exp.AnonymousAggFunc):
+        name = func.name.lower()
+        mapping = _CLICKHOUSE_FUNCTION_MAP.get(name)
+        if mapping is not None and mapping.accepts(len(func.expressions)):
+            continue
+        if mapping is None and name in semantic_names:
+            continue
+        unsupported(f"Function {name} with {len(func.expressions)} argument(s) has no verified Trino conversion.")
 
     normalize_semantics(tree)
     normalize_constructs(tree)
@@ -356,7 +421,10 @@ def _map_clickhouse_functions(tree: exp.Query) -> None:
         mapping = _CLICKHOUSE_FUNCTION_MAP.get(func.name.lower())
         if mapping is None or not mapping.accepts(len(func.expressions)):
             continue
-        func.replace(mapping.builder(func))
+        replacement = mapping.builder(func)
+        if (logical_type := value_type(func)) is not None:
+            replacement.meta["ch_value_type"] = logical_type
+        func.replace(replacement)
 
 
 def rewrite_query(sql: str, settings: Settings) -> str:
@@ -555,9 +623,11 @@ def _execute_physical_query(physical_sql: str, settings: Settings, identity: tup
                 )
         return [col[0] for col in cursor.description], rows
     finally:
+        record_query_id(getattr(cursor, "query_id", None))
         _close(cursor, conn)
 
 
+@trace_execution
 def execute_query(
     sql: str, settings: Settings | None = None, parameters: dict[str, Any] | None = None
 ) -> tuple[list[str], list[list[Any]]]:
@@ -575,6 +645,7 @@ def execute_query(
         )
     identity = request_identity(settings)
     physical_sql = rewrite_query(sql, settings)
+    record_physical(physical_sql)
     mysql_catalog = (
         resolve_mysql_shard(identity[1], settings) if _uses_source(sql, "mysql") else None
     )

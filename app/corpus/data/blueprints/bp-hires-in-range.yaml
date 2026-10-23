@@ -11,6 +11,7 @@ uses:
 slots:
 - name: hire_window
   type: period_range
+  temporal_type: date
   required: true
 result_grain:
 - month

@@ -35,6 +35,7 @@ slots:
   - earning_code
 - name: period
   type: period_range
+  temporal_type: date
   required: true
 - name: source
   type: entity

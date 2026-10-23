@@ -179,16 +179,25 @@ def test_oversized_context_fails_without_truncation(monkeypatch, settings, princ
     conn.close.assert_called_once()
 
 
-def test_clickhouse_context_is_qualified_and_bound(monkeypatch, settings, principal, catalog):
+@pytest.mark.parametrize("source", ["mysql", "clickhouse"])
+def test_direct_clickhouse_skips_column_context(monkeypatch, settings, catalog, source):
     settings.trino_enabled = False
-    entry = {**catalog["dbpcm_warehouse.accrual_events"], "source": "clickhouse"}
-    execute = MagicMock(return_value=(["context_key", "code"], [["vacation", "VAC"]]))
-    monkeypatch.setattr("app.clickhouse_client.execute_query", execute)
-    context.execute_context_sql(SQL, entry, settings)
-    sql, _, params = execute.call_args.args
-    assert "dbpcm_warehouse" in sql and "earning_codes" in sql
-    assert params == {"context_0": "tenant-a"}
-    assert "%(context_0)s" in sql
+    entry = {**catalog["dbpcm_warehouse.accrual_events"], "source": source}
+    execute = MagicMock(side_effect=AssertionError("lookup must not execute"))
+    monkeypatch.setattr(context, "execute_context_sql", execute)
+    response = {"columns": [{"name": "earn_code", "type": "String"}]}
+    context.enrich_column_context(response, entry, settings)
+    execute.assert_not_called()
+    assert response == {"columns": [{"name": "earn_code", "type": "String"}]}
+
+
+def test_direct_context_execution_requires_trino(monkeypatch, settings, catalog):
+    settings.trino_enabled = False
+    compile_sql = MagicMock(side_effect=AssertionError("must not compile or route"))
+    monkeypatch.setattr(context, "_compile", compile_sql)
+    with pytest.raises(ValueError, match="Column context requires Trino"):
+        context.execute_context_sql(SQL, catalog["dbpcm_warehouse.accrual_events"], settings)
+    compile_sql.assert_not_called()
 
 
 def test_no_principal_cannot_enrich(settings, catalog):

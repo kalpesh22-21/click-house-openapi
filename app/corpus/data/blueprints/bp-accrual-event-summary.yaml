@@ -33,6 +33,7 @@ slots:
   - department_status
 - name: period
   type: period_range
+  temporal_type: date
   required: true
 - name: event_status
   type: enum

@@ -1,0 +1,11 @@
+id: kn-stale-blueprint-recovery
+title: Recovering from stale blueprints
+doc_id: blueprint-guidance
+status: validated
+text: >
+  A recalled blueprint may be stale. If it is unavailable or conflicts with the
+  current scoped catalog, search for a current scoped replacement. Do not repeat
+  an unchanged failed blueprint. Preserve any usable parts; if no replacement
+  fits, use runQuery with current catalog fields and the requested scope. A SQL
+  or cardinality error alone does not prove staleness: repair the reported cause.
+  Do not claim the corpus was refreshed or deleted entries removed.

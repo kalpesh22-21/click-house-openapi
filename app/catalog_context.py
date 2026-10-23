@@ -1,6 +1,6 @@
 """Execute server-authored column lookups on the caller's resolved source.
 
-SQL is backend-native (Trino when enabled, ClickHouse otherwise). Unqualified
+Lookups run only when Trino is enabled. Unqualified
 lookup tables live alongside the owning catalog table. Named :claim placeholders
 are bound from the verified JWT; SQL and physical names never reach the agent.
 """
@@ -40,7 +40,7 @@ def _compile(sql: str, entry: dict, settings: Settings):
     principal = get_current_principal()
     if principal is None:
         raise ValueError("Column context requires an authenticated request")
-    dialect = "trino" if settings.trino_enabled else "clickhouse"
+    dialect = "trino"
     tree = qualify_tables(parse_context_sql(sql, dialect), db=entry["database"], dialect=dialect)
     # Validate the complete relation set before routing or backend I/O.
     sources = []
@@ -64,35 +64,29 @@ def _compile(sql: str, entry: dict, settings: Settings):
             raise ValueError("Missing or invalid context parameter claim")
 
     mysql_catalog = None
-    if settings.trino_enabled:
-        from app.trino_client import request_identity
-        identity = request_identity(settings)
-        if entry.get("source", "clickhouse") == "mysql":
-            mysql_catalog = resolve_mysql_shard(identity[1], settings)
-        catalog, schema, _ = physical_target(entry, mysql_catalog or "", settings)
-        from app.trino_sources import clickhouse_source, mysql_source
-        from app.semantic_catalog import get_semantic_catalog
-        authored = get_semantic_catalog()
-        for source in sources:
-            if entry.get("source", "clickhouse") == "clickhouse":
-                replacement = clickhouse_source({**entry, "table": source.name}, settings)
-            else:
-                logical = authored.get(f"{entry['database']}.{source.name}")
-                if logical is None:
-                    # Server-authored raw lookup SQL owns its tenant predicates.
-                    source.set("catalog", exp.to_identifier(catalog, quoted=True))
-                    source.set("db", exp.to_identifier(schema, quoted=True))
-                    continue
-                if logical.get("source", "clickhouse") != "mysql":
-                    raise ValueError("Context lookup crosses source backends")
-                replacement = mysql_source(logical, mysql_catalog, identity, settings)
-            replacement.set("alias", source.args.get("alias"))
-            source.replace(replacement)
-    elif entry.get("source", "clickhouse") == "mysql":
-        raise ValueError("MySQL context requires Trino")
-    else:
-        for source in sources:
-            source.set("db", exp.to_identifier(entry["database"], quoted=True))
+    from app.trino_client import request_identity
+    identity = request_identity(settings)
+    if entry.get("source", "clickhouse") == "mysql":
+        mysql_catalog = resolve_mysql_shard(identity[1], settings)
+    catalog, schema, _ = physical_target(entry, mysql_catalog or "", settings)
+    from app.trino_sources import clickhouse_source, mysql_source
+    from app.semantic_catalog import get_semantic_catalog
+    authored = get_semantic_catalog()
+    for source in sources:
+        if entry.get("source", "clickhouse") == "clickhouse":
+            replacement = clickhouse_source({**entry, "table": source.name}, settings)
+        else:
+            logical = authored.get(f"{entry['database']}.{source.name}")
+            if logical is None:
+                # Server-authored raw lookup SQL owns its tenant predicates.
+                source.set("catalog", exp.to_identifier(catalog, quoted=True))
+                source.set("db", exp.to_identifier(schema, quoted=True))
+                continue
+            if logical.get("source", "clickhouse") != "mysql":
+                raise ValueError("Context lookup crosses source backends")
+            replacement = mysql_source(logical, mysql_catalog, identity, settings)
+        replacement.set("alias", source.args.get("alias"))
+        source.replace(replacement)
 
     class NamedGenerator(Dialect.get_or_raise(dialect).generator_class):
         def placeholder_sql(self, expression):
@@ -106,7 +100,7 @@ def _compile(sql: str, entry: dict, settings: Settings):
     for before, name in zip(tokens, tokens[1:]):
         if before.token_type == TokenType.COLON and name.token_type == TokenType.VAR:
             parameters.append(principal.claims[name.text])
-            marker = "?" if settings.trino_enabled else f"%(context_{len(parameters) - 1})s"
+            marker = "?"
             pieces.extend([rendered[offset:before.start], marker])
             offset = name.end + 1
     pieces.append(rendered[offset:])
@@ -122,21 +116,14 @@ def _check_size(rows: list, settings: Settings) -> None:
 
 def execute_context_sql(sql: str, entry: dict, settings: Settings):
     """Trusted read-only execution without recursive permission resolution."""
-    if settings.trino_enabled and not settings.trino_security_ready:
+    if not settings.trino_enabled:
+        raise ValueError("Column context requires Trino")
+    if not settings.trino_security_ready:
         raise ValueError("Trino security is not configured")
     rendered, parameters, mysql_catalog = _compile(sql, entry, settings)
     if entry.get("source", "clickhouse") == "clickhouse":
         from app.employee_access import ensure_employee_access_fresh
         ensure_employee_access_fresh(settings)
-    if not settings.trino_enabled:
-        from app.clickhouse_client import execute_query
-        columns, rows = execute_query(
-            rendered, settings,
-            {f"context_{i}": value for i, value in enumerate(parameters)} or None,
-        )
-        _check_size(rows, settings)
-        return columns, rows
-
     from app.trino_client import _close, _connect, request_identity
     conn = cursor = None
     try:
@@ -172,6 +159,8 @@ def _context_values(columns: list[str], rows: list) -> dict:
 
 def enrich_column_context(response: dict, entry: dict, settings: Settings) -> None:
     """Only emitted columns are enriched; the shared authored catalog is untouched."""
+    if not settings.trino_enabled:
+        return
     for column in response["columns"]:
         definition = entry.get("columns", {}).get(column["name"], {})
         if "context_sql" not in definition:

@@ -24,6 +24,7 @@ slots:
   binds_to: dbpcm_warehouse.payroll.employee_code
 - name: period
   type: period
+  temporal_type: date
   required: true
   binds_to: dbpcm_warehouse.payroll.pay_period_end_date
 result_grain:

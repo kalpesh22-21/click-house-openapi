@@ -30,6 +30,7 @@ slots:
   - most_recent_hire
 - name: reference_date
   type: string
+  temporal_type: date
   required: true
 - name: employee_status
   type: enum

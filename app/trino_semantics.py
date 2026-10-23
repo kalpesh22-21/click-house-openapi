@@ -69,8 +69,10 @@ def value_type(node):
         return ValueType("null", True)
     if isinstance(node, exp.Array):
         return ValueType("array", False)
-    if isinstance(node, exp.CurrentDate):
+    if isinstance(node, (exp.CurrentDate, exp.CurrentTimestamp)):
         return ValueType("datetime", False, year_safe=True)
+    if isinstance(node, (exp.TimestampTrunc, exp.DateTrunc)):
+        return value_type(node.this)
     if isinstance(node, exp.DateDiff):
         start, end = value_type(node.expression), value_type(node.this)
         if (start and end and start.kind == end.kind == "datetime"
@@ -87,7 +89,7 @@ def value_type(node):
         return target
     if isinstance(node, (exp.Count, exp.CountIf)):
         return ValueType("integer", False, True)
-    if isinstance(node, exp.Window):
+    if isinstance(node, (exp.Window, exp.Filter)):
         return value_type(node.this)
     if isinstance(node, exp.Coalesce):
         types = [value_type(n) for n in [node.this, *node.expressions]]
@@ -129,17 +131,35 @@ def value_type(node):
         if a and b and a.kind in numeric and b.kind in numeric:
             kind = "float" if isinstance(node, exp.Div) or "float" in {a.kind, b.kind} else "decimal" if "decimal" in {a.kind, b.kind} else "integer"
             return ValueType(kind, a.nullable or b.nullable, kind == "integer" and a.intdiv_safe and b.intdiv_safe)
-    if isinstance(node, (exp.Sum, exp.Avg)):
+    if isinstance(node, exp.ArgMax):
+        value, key = value_type(node.this), value_type(node.expression)
+        return replace(value, nullable=value.nullable or key.nullable) if value and key else None
+    if isinstance(node, (exp.Sum, exp.Avg, exp.Min, exp.Max)):
         t = value_type(node.this)
         return replace(t, kind="float") if t and isinstance(node, exp.Avg) else t
-    if isinstance(node, exp.Anonymous):
+    if isinstance(node, (exp.Anonymous, exp.AnonymousAggFunc)):
         name = node.name.lower()
         args = node.expressions
+        if name == "todatetime64" and len(args) == 2:
+            source = value_type(args[0])
+            return replace(source, kind="datetime", year_safe=True) if source else None
+        if name in {"addyears", "addmonths"} and len(args) == 2:
+            source, offset = value_type(args[0]), value_type(args[1])
+            if source and offset and source.kind == "datetime" and offset.kind == "integer":
+                return replace(source, nullable=source.nullable or offset.nullable)
+        if name in {"sumif", "avgif", "minif", "maxif"} and len(args) == 2:
+            value = value_type(args[0])
+            return replace(value, kind="float") if value and name == "avgif" else value
+        # The supported single-input mapping becomes COUNT(DISTINCT ...).
+        # Its result is non-null even when the source column is nullable.
+        # Record this before resolving derived projections and outer aggregates.
+        if name in {"uniqexact", "countdistinct"} and len(args) == 1:
+            return ValueType("integer", False, True)
         if name == "intdiv" and len(args) == 2:
             source = value_type(args[0])
             if source and source.intdiv_safe:
                 return ValueType("integer", source.nullable, True)
-        if name == "today" and not args:
+        if name in {"today", "now"} and not args:
             return ValueType("datetime", False, year_safe=True)
         if len(args) == 1:
             source = value_type(args[0])
@@ -213,16 +233,34 @@ def annotate_input_types(tree, catalog):
 def _annotate_scoped_types(tree, catalog):
     """Resolve catalog/derived columns by SQL scope before physical substitution.
 
-    Outer joins and UNIONs are deliberately left unknown rather than guessing
-    ClickHouse join_use_nulls or common-supertype rules.
+    Preserve known types through same-kind UNION branches and the preserved side
+    of outer joins. Unmatched-side nullability still depends on join_use_nulls.
     """
     outputs = {}
     for scope in traverse_scope(tree):
         if isinstance(scope.expression, exp.SetOperation):
-            outputs[id(scope)] = {}
+            branches = [list(outputs.get(id(branch), {}).items()) for branch in scope.union_scopes]
+            merged = {}
+            if len(branches) == 2 and len(branches[0]) == len(branches[1]):
+                for (name, left), (_, right) in zip(*branches):
+                    merged[name] = None  # Keep ordinal positions for enclosing UNIONs.
+                    concrete = [t for t in (left, right) if t and t.kind != "null"]
+                    if left and right and concrete and len({t.kind for t in concrete}) == 1:
+                        merged[name] = ValueType(concrete[0].kind, left.nullable or right.nullable,
+                                                all(t.intdiv_safe for t in concrete), all(t.year_safe for t in concrete))
+            outputs[id(scope)] = merged
             continue
         sources = scope.selected_sources
-        outer = any(j.args.get("side") in {"LEFT", "RIGHT", "FULL"} for j in scope.expression.args.get("joins", []))
+        unknown_outer = set()
+        source = scope.expression.args.get("from_")
+        seen = {source.this.alias_or_name} if source else set()
+        for join in scope.expression.args.get("joins", []):
+            alias, side = join.this.alias_or_name, join.args.get("side")
+            if side in {"RIGHT", "FULL"}:
+                unknown_outer.update(seen)
+            if side in {"LEFT", "FULL"}:
+                unknown_outer.add(alias)
+            seen.add(alias)
         for column in (n for n in scope.walk() if isinstance(n, exp.Column)):
             candidates = []
             for alias, (_, source) in sources.items():
@@ -237,6 +275,7 @@ def _annotate_scoped_types(tree, catalog):
                 if info:
                     candidates.append(info)
             unambiguous = bool(column.table) or len(sources) == 1
+            outer = column.table in unknown_outer if column.table else bool(unknown_outer)
             column.meta["ch_outer_join_unknown"] = outer
             column.meta["ch_value_type"] = candidates[0] if len(candidates) == 1 and not outer and unambiguous else None
         projected = {}
@@ -407,13 +446,25 @@ def map_intdiv(node):
     return division
 
 
-def map_argmax(node):
+def map_argmax(node, condition=None, window=None):
     info = require_type(node.this, "argMax")
     key_type = require_type(node.expression, "argMax")
     if info.kind not in {"integer", "float", "decimal", "string"} or key_type.kind not in {"integer", "float", "decimal", "string", "datetime"}:
         unsupported("argMax supports scalar values and keys only; tuple/default semantics are not established.")
     valid = exp.and_(exp.Not(this=exp.Is(this=node.this.copy(), expression=exp.Null())), exp.Not(this=exp.Is(this=node.expression.copy(), expression=exp.Null())))
-    result = exp.Filter(this=node.copy(), expression=exp.Where(this=valid))
+    if condition is not None:
+        from app.trino_client import _as_trino_condition
+        valid = exp.and_(valid, _as_trino_condition(condition.copy()))
+    if window is None:
+        result = exp.Filter(this=node.copy(), expression=exp.Where(this=valid))
+    else:
+        # Trino window aggregates do not accept FILTER. Null both arguments on
+        # ineligible rows so a NULL value cannot win through a non-NULL max key.
+        aggregate = node.copy()
+        aggregate.set("this", exp.Case(ifs=[exp.If(this=valid.copy(), true=node.this.copy())], default=exp.Null()))
+        aggregate.set("expression", exp.Case(ifs=[exp.If(this=valid, true=node.expression.copy())], default=exp.Null()))
+        result = window.copy()
+        result.set("this", aggregate)
     # Nullable either argument makes the aggregate nullable in ClickHouse.
     if info.nullable or key_type.nullable:
         return result
@@ -513,19 +564,38 @@ def normalize_semantics(tree):
     # during target rendering). Store on each original expression for builders.
     for node in tree.walk():
         node.meta["ch_value_type"] = value_type(node)
+    for comparison in tree.find_all(exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE):
+        for literal, other in ((comparison.this, comparison.expression),
+                               (comparison.expression, comparison.this)):
+            info = value_type(other)
+            if isinstance(literal, exp.Boolean) and info and info.kind == "string":
+                unsupported(
+                    "Cannot compare a string expression with a boolean literal. "
+                    "For an omitted blueprint slot, replace the entire predicate "
+                    "with its optional_pattern, not just the value placeholder."
+                )
     for node in reversed(list(tree.walk())):
         if isinstance(node, exp.ParameterizedAgg):
             node.replace(exact_median(node))
-        elif isinstance(node, exp.Window):
-            if isinstance(node.this, (exp.Sum, exp.Avg)):
-                node.replace(aggregate(node.this, window=node))
-            elif isinstance(node.this, (exp.Anonymous, exp.AnonymousAggFunc)) and node.this.name.lower() in _CONDITIONAL_AGGREGATES:
-                node.replace(conditional_aggregate(node.this, window=node))
+        elif isinstance(node, (exp.Window, exp.Filter)):
+            if isinstance(node, exp.Filter) and isinstance(node.parent, exp.Window):
+                continue
+            window = node if isinstance(node, exp.Window) else None
+            base = node.this
+            condition = None
+            if isinstance(base, exp.Filter):
+                condition, base = base.expression.this, base.this
+            elif isinstance(node, exp.Filter):
+                condition = node.expression.this
+            if isinstance(base, (exp.Sum, exp.Avg)):
+                node.replace(aggregate(base, condition, window))
+            elif isinstance(base, exp.ArgMax):
+                node.replace(map_argmax(base, condition, window))
+            elif window is not None and isinstance(base, (exp.Anonymous, exp.AnonymousAggFunc)) and base.name.lower() in _CONDITIONAL_AGGREGATES:
+                node.replace(conditional_aggregate(base, window=node))
         elif isinstance(node, (exp.Sum, exp.Avg)):
-            if isinstance(node.parent, exp.Window):
-                continue  # Rewrite the entire window, not just its function.
-            if isinstance(node.parent, exp.Filter):
-                unsupported("Explicitly filtered SUM and AVG need a separate semantics mapping.")
+            if isinstance(node.parent, (exp.Window, exp.Filter)):
+                continue
             node.replace(aggregate(node))
         elif isinstance(node, exp.DateDiff) and node.text("unit").upper() == "DAY":
             if value_type(node) is None:
@@ -536,7 +606,7 @@ def normalize_semantics(tree):
             node.set("expression", exp.Cast(this=node.expression.copy(), to=exp.DataType.build("DATE")))
         elif isinstance(node, exp.ArgMax):
             if isinstance(node.parent, (exp.Window, exp.Filter)):
-                unsupported("Windowed/explicitly filtered argMax is not yet supported.")
+                continue
             node.replace(map_argmax(node))
         elif isinstance(node, exp.Length) and node.args.get("binary"):
             node.replace(map_length(node))

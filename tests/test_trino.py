@@ -231,8 +231,7 @@ def test_explain_and_count_translation(trino_settings, principal):
 # on the coordinator with FUNCTION_NOT_FOUND — this broke
 # bp-active-headcount-by-department (TRINO_QUERY_ERROR, invisible server-side
 # until the logging tests below). The map must preserve EXACT semantics
-# (never approximate), and anything unmapped keeps the existing passthrough
-# (the coordinator rejects it loudly).
+# (never approximate); unmapped anonymous calls now fail before dispatch.
 
 
 def test_uniqexact_maps_to_exact_count_distinct(trino_settings, principal):
@@ -258,21 +257,38 @@ def test_uniqexact_nested_in_aggregate_query(trino_settings, principal):
     assert "UNIQEXACT" not in sql.upper()
 
 
-def test_unmapped_functions_pass_through_verbatim(trino_settings, principal):
-    # A non-mapped ClickHouse aggregate keeps existing behavior: verbatim
-    # passthrough, loud coordinator rejection if unsupported.
-    sql = trino_client.rewrite_query(
-        "SELECT uniqCombined64(employee_code) FROM employee", trino_settings
+@pytest.mark.parametrize("expression", [
+    "uniqCombined64(employee_code)",
+    "uniqExact(department_code, employee_code)",
+])
+def test_unmapped_functions_fail_before_dispatch(expression, trino_settings, principal):
+    with pytest.raises(QueryValidationError, match="no verified Trino conversion") as error:
+        trino_client.rewrite_query(f"SELECT {expression} FROM employee", trino_settings)
+    assert error.value.code == "TRINO_UNSUPPORTED_SQL"
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT uniqCombined64(employee_code) FROM employee",
+    "SELECT toDateTime64(1, 10) FROM employee",
+    "SELECT toDate('not a date') FROM employee",
+    "SELECT employee_code FROM employee WHERE employee_status = TRUE",
+    "SELECT sum(n) FROM (SELECT uniqExact(employee_code, department_code) n FROM employee)",
+])
+def test_invalid_conversion_never_opens_connection(sql, monkeypatch, trino_settings, principal):
+    connect, _, _ = mock_connection(monkeypatch, [])
+    with pytest.raises(QueryValidationError):
+        trino_client.execute_query(sql, trino_settings)
+    connect.assert_not_called()
+
+
+def test_reported_derived_count_query_routes_and_transpiles(trino_settings, principal):
+    physical = trino_client.rewrite_query(
+        "SELECT sum(n) AS total_active, count() AS depts_with_active FROM "
+        "(SELECT uniqExact(employee_code) AS n FROM dbpcm_warehouse.employee "
+        "WHERE employee_status='Active' GROUP BY department_code)", trino_settings,
     )
-    assert "UNIQCOMBINED64(employee_code)" in sql
-    # The multi-argument form of a mapped name is also left untouched:
-    # ClickHouse's uniqExact(a, b) tuple semantics have no one-statement
-    # Trino equivalent, so it must NOT be folded into COUNT(DISTINCT).
-    sql = trino_client.rewrite_query(
-        "SELECT uniqExact(department_code, employee_code) FROM employee",
-        trino_settings,
-    )
-    assert "UNIQEXACT(department_code, employee_code)" in sql
+    assert "COALESCE(SUM(n), 0)" in physical
+    assert "COUNT(DISTINCT employee_code)" in physical
 
 
 def test_uniqexact_mapping_covers_explain_path(trino_settings, principal):
@@ -396,8 +412,7 @@ def test_concatwithseparator_preserves_null_propagation(trino_settings, principa
 @pytest.mark.parametrize(
     "sql, verbatim",
     [
-        # Wrong-arity calls of MAPPED names stay verbatim: the map never
-        # guesses semantics — the coordinator rejects loudly.
+        # Wrong-arity calls fail before reaching the coordinator.
         ("SELECT toDate32(hire_date, hire_date) FROM employee",
          "TODATE32(hire_date, hire_date)"),
         ("SELECT toFloat64(annual_salary, 1) FROM employee",
@@ -417,8 +432,9 @@ def test_concatwithseparator_preserves_null_propagation(trino_settings, principa
         ("SELECT concatWithSeparator('-') FROM employee", "CONCATWITHSEPARATOR('-')"),
     ],
 )
-def test_arity_mismatch_leaves_mapped_names_untouched(sql, verbatim, trino_settings, principal):
-    assert verbatim in trino_client.rewrite_query(sql, trino_settings)
+def test_arity_mismatch_is_rejected(sql, verbatim, trino_settings, principal):
+    with pytest.raises(QueryValidationError, match="no verified Trino conversion"):
+        trino_client.rewrite_query(sql, trino_settings)
 
 
 def test_nonmedian_quantile_rejected_before_dispatch(trino_settings, principal):
@@ -708,9 +724,10 @@ def test_blueprint_active_headcount_transpiles_to_exact_count_distinct(
 
     blueprint = load_blueprints()["bp-active-headcount-by-department"]
     (slot,) = [s for s in blueprint["slots"] if s["name"] == "department"]
-    # The omitted-slot path substitutes the slot's optional_pattern verbatim.
+    # optional_pattern replaces the complete predicate, not its value token.
+    # The executable binder lives in data-agent; this is its omitted-slot SQL.
     bound_sql = blueprint["sql_template"].replace(
-        "{department}", slot["optional_pattern"]
+        "d.department_name = {department}", slot["optional_pattern"]
     )
     physical = trino_client.rewrite_query(bound_sql, trino_settings)
     assert "COUNT(DISTINCT employee_code)" in physical
@@ -722,6 +739,22 @@ def test_blueprint_active_headcount_transpiles_to_exact_count_distinct(
 
 
 # --- Trino failure logging ----------------------------------------------------
+
+def test_execution_records_both_sql_forms_and_query_id(monkeypatch, trino_settings, principal, tmp_path):
+    from app import trino_diagnostics
+
+    records = []
+    monkeypatch.setattr(trino_diagnostics, "_write", lambda directory, record: records.append(dict(record)))
+    _, _, cursor = mock_connection(monkeypatch, [[]])
+    cursor.query_id = "20261023_120000_00001_test"
+    settings = trino_settings.model_copy(update={"trino_enabled": True})
+    trino_client.execute_query("SELECT employee_code FROM employee WHERE employee_status='private-status'", settings)
+    assert len(records) == 1
+    assert records[0]["trino_query_id"] == cursor.query_id
+    assert "private-status" not in json.dumps(records)
+    assert "[redacted]" in records[0]["logical_sql"]
+    assert "dbonline" in records[0]["trino_sql"]
+
 # Transpile/validation rejections and coordinator failures were completely
 # silent server-side (diagnosis needed the coordinator ledger). They are now
 # logged at ERROR with the wire code + a sanitized failure class only: never
@@ -785,7 +818,7 @@ def test_coordinator_rejection_is_logged_sanitized(
         logging.ERROR, logger="app.trino_client"
     ), pytest.raises(ClickHouseQueryError) as exc:
         trino_client.execute_query(
-            "SELECT uniqCombined64(employee_code) FROM employee", trino_settings
+            "SELECT uniqExact(employee_code) FROM employee", trino_settings
         )
     assert exc.value.code == "TRINO_QUERY_ERROR"  # wire contract unchanged
     msg = _error_log_message(caplog)
@@ -1222,3 +1255,13 @@ def test_schema_authoring_types_preserve_nullability(monkeypatch, trino_settings
             "hire_date": "Nullable(Date)",
         }
     }
+
+
+@pytest.mark.parametrize("projection, expected", [
+    ("countDistinct(employee_code)", "COUNT(DISTINCT employee_code)"),
+    ("addYears(toStartOfYear(today()), 1)", "DATE_ADD('YEAR', 1, DATE_TRUNC('YEAR', CURRENT_DATE))"),
+    ("date_diff('day', hire_date, now())", "DATE_DIFF('DAY', CAST(hire_date AS DATE), CAST(CURRENT_TIMESTAMP AS DATE))"),
+])
+def test_remote_function_regressions_through_full_rewrite(projection, expected, trino_settings, principal):
+    rewritten = trino_client.rewrite_query(f"SELECT {projection} FROM employee", trino_settings)
+    assert expected in rewritten

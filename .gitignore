@@ -47,3 +47,4 @@ signing-key*
 .venv*
 attn.py
 /app/semantic_catalog/mysql_views/
+/.trino-diagnostics/

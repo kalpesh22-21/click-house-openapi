@@ -17,6 +17,16 @@ def _reset_cache():
 
 
 class TestBuildBlueprintsExport:
+    def test_calendar_slots_export_explicit_date_contract(self):
+        blueprints = export.build_blueprints_export()["blueprints"]
+        count = 0
+        for blueprint in blueprints.values():
+            for slot in blueprint.get("slots", []):
+                if slot["type"] in {"period_range", "period", "as_of_date"} or slot["name"] == "reference_date":
+                    assert slot["temporal_type"] == "date", (blueprint["id"], slot["name"])
+                    count += 1
+        assert count == 12
+
     def test_top_level_shape(self):
         result = export.build_blueprints_export()
         assert set(result.keys()) == {"blueprints_sha", "blueprints"}

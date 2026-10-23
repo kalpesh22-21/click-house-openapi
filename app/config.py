@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     # Experimental federation. Logical SQL/column permissions remain unchanged;
     # physical names are resolved only after the service guardrails run.
     trino_enabled: bool = False
+    trino_diagnostics_dir: str = ".trino-diagnostics"
     trino_host: str = ""
     trino_port: int = Field(443, ge=1, le=65535)
     trino_http_scheme: Literal["http", "https"] = "https"

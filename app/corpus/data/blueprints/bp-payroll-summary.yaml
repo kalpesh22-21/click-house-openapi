@@ -39,6 +39,7 @@ slots:
   binds_to: dbpcm_warehouse.payroll.register_type
 - name: period
   type: period_range
+  temporal_type: date
   required: true
 - name: type_code
   type: entity
