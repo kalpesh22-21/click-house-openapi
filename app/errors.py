@@ -126,3 +126,45 @@ class CartesianJoinError(ClickHouseAPIError):
 
     Maps to HTTP 400 in the REST layer.
     """
+
+
+class ExportTooLargeError(ClickHouseAPIError):
+    """Raised when an answer-snapshot export exceeds its total row/byte budget.
+
+    Enforced LOCALLY by app/export_service.py against EXPORT_TOTAL_MAX_ROWS /
+    EXPORT_TOTAL_MAX_BYTES while streaming — never inferred from ClickHouse
+    error text.  Any partially-staged/uploaded objects for the aborted snapshot
+    are deleted before this propagates.
+
+    Code: EXPORT_TOO_LARGE
+
+    Maps to HTTP 400 in the REST layer.
+    """
+
+
+class SnapshotNotFoundError(ClickHouseAPIError):
+    """Raised when a snapshot id is unknown OR belongs to a different tenant hash.
+
+    The two cases are deliberately indistinguishable on the wire — a caller must
+    never be able to probe which snapshot ids exist for other tenants.
+
+    Code: SNAPSHOT_NOT_FOUND
+
+    Maps to HTTP 404 in the REST layer.
+    """
+
+
+class SnapshotExpiredError(ClickHouseAPIError):
+    """Raised when a snapshot exists but its TTL (EXPORT_TTL_SECONDS) has elapsed.
+
+    Expiry is enforced app-side on every read; the bucket lifecycle rule is only
+    the storage backstop.
+
+    Code: SNAPSHOT_EXPIRED
+
+    Maps to HTTP 410 in the REST layer.
+    """
+
+
+class SnapshotScopeChangedError(ClickHouseAPIError):
+    """409: same owner/session, but the snapshot's grants no longer match."""

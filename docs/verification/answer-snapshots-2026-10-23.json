@@ -1,0 +1,254 @@
+{
+  "date": "2026-10-23",
+  "feature": "Remote answer-snapshot patch adapted for Trino and scoped sessions",
+  "environment": "Local synthetic HR data; live MySQL, ClickHouse, Trino, Couchbase 7.6.5 and RustFS S3-compatible storage. REST and MCP HTTP apps exercised through ASGI TestClient with real JWT/session-scope validation; S3 presigned URLs fetched over HTTP.",
+  "regression": {
+    "clean_release_copy": "2483 passed, 87 skipped, 1 xfailed",
+    "private_file_excluded": "app/semantic_catalog/data/accrual_events.yaml",
+    "working_tree_full_run": "2483 passed, 83 skipped, 1 xfailed, 7 catalog-parity failures attributable to private accrual_events.yaml; subsequent targeted tests passed"
+  },
+  "rest_cases": [
+    {
+      "store": "couchbase",
+      "case": "mysql",
+      "rows": 24,
+      "parts": 5,
+      "seconds": 0.86,
+      "cross_chunk_paging": true,
+      "foreign_user_denied": true,
+      "csv_download": true,
+      "snapshot_id": "c3ed9ea0-9899-44c7-b001-30012229f742"
+    },
+    {
+      "store": "couchbase",
+      "case": "native_clickhouse",
+      "rows": 24,
+      "parts": 5,
+      "seconds": 0.06,
+      "cross_chunk_paging": true,
+      "foreign_user_denied": true,
+      "csv_download": true,
+      "snapshot_id": "2fb5b14e-91dd-44e9-9871-ffb6c96d4f94"
+    },
+    {
+      "store": "couchbase",
+      "case": "mixed",
+      "rows": 24,
+      "parts": 5,
+      "seconds": 0.68,
+      "cross_chunk_paging": true,
+      "foreign_user_denied": true,
+      "csv_download": true,
+      "snapshot_id": "83095768-173a-4bf3-a5d6-ca8b2486cfd4"
+    },
+    {
+      "store": "couchbase",
+      "case": "scratch_join_and_frozen_rows",
+      "rows": 2,
+      "source_rows_after_mint": 0
+    },
+    {
+      "store": "couchbase",
+      "case": "expired_snapshot",
+      "status": 410,
+      "paths": 3
+    },
+    {
+      "store": "couchbase",
+      "case": "overflow",
+      "status": 400,
+      "code": "EXPORT_TOO_LARGE"
+    },
+    {
+      "store": "s3",
+      "case": "mysql",
+      "rows": 24,
+      "parts": 5,
+      "seconds": 0.72,
+      "cross_chunk_paging": true,
+      "foreign_user_denied": true,
+      "csv_download": true,
+      "snapshot_id": "1cb5d96d-158f-4642-af16-cd7769249c99"
+    },
+    {
+      "store": "s3",
+      "case": "native_clickhouse",
+      "rows": 24,
+      "parts": 5,
+      "seconds": 0.08,
+      "cross_chunk_paging": true,
+      "foreign_user_denied": true,
+      "csv_download": true,
+      "snapshot_id": "b7b7d812-27b2-4de1-8034-b9a392485a51"
+    },
+    {
+      "store": "s3",
+      "case": "mixed",
+      "rows": 24,
+      "parts": 5,
+      "seconds": 0.75,
+      "cross_chunk_paging": true,
+      "foreign_user_denied": true,
+      "csv_download": true,
+      "snapshot_id": "0e0335fe-460d-48f7-b879-7cbeec008d5b"
+    },
+    {
+      "store": "s3",
+      "case": "scratch_join_and_frozen_rows",
+      "rows": 2,
+      "source_rows_after_mint": 0
+    },
+    {
+      "store": "s3",
+      "case": "expired_snapshot",
+      "status": 410,
+      "paths": 3
+    },
+    {
+      "store": "s3",
+      "case": "overflow",
+      "status": 400,
+      "code": "EXPORT_TOO_LARGE"
+    }
+  ],
+  "mcp_http_cases": {
+    "couchbase": [
+      {
+        "store": "couchbase",
+        "case": "mysql",
+        "rows": 24,
+        "parts": 5,
+        "seconds": 1.02,
+        "cross_chunk_paging": true,
+        "foreign_user_denied": true,
+        "csv_download": true,
+        "snapshot_id": "c0b71062-18d9-41cc-b94d-08063e016d2b"
+      },
+      {
+        "store": "couchbase",
+        "case": "native_clickhouse",
+        "rows": 24,
+        "parts": 5,
+        "seconds": 0.05,
+        "cross_chunk_paging": true,
+        "foreign_user_denied": true,
+        "csv_download": true,
+        "snapshot_id": "773551e6-58cd-4203-922d-d5006255ac63"
+      },
+      {
+        "store": "couchbase",
+        "case": "mixed",
+        "rows": 24,
+        "parts": 5,
+        "seconds": 0.94,
+        "cross_chunk_paging": true,
+        "foreign_user_denied": true,
+        "csv_download": true,
+        "snapshot_id": "51bb3ace-0ea1-4cf9-9acc-a817399ec472"
+      },
+      {
+        "store": "couchbase",
+        "case": "scratch_join_and_frozen_rows",
+        "rows": 2,
+        "source_rows_after_mint": 0
+      },
+      {
+        "store": "couchbase",
+        "case": "expired_snapshot",
+        "status": 410,
+        "paths": 3
+      },
+      {
+        "store": "couchbase",
+        "case": "overflow",
+        "status": 400,
+        "code": "EXPORT_TOO_LARGE"
+      }
+    ],
+    "s3": [
+      {
+        "store": "s3",
+        "case": "mysql",
+        "rows": 24,
+        "parts": 5,
+        "seconds": 0.86,
+        "cross_chunk_paging": true,
+        "foreign_user_denied": true,
+        "csv_download": true,
+        "snapshot_id": "ff89492a-6435-4682-a831-a3cac7c3e6c7"
+      },
+      {
+        "store": "s3",
+        "case": "native_clickhouse",
+        "rows": 24,
+        "parts": 5,
+        "seconds": 0.09,
+        "cross_chunk_paging": true,
+        "foreign_user_denied": true,
+        "csv_download": true,
+        "snapshot_id": "480509e5-bf96-44fc-b6fc-28b13f3f9f75"
+      },
+      {
+        "store": "s3",
+        "case": "mixed",
+        "rows": 24,
+        "parts": 5,
+        "seconds": 0.99,
+        "cross_chunk_paging": true,
+        "foreign_user_denied": true,
+        "csv_download": true,
+        "snapshot_id": "a12e8247-02d6-45ed-9cd2-c459fe1be65d"
+      },
+      {
+        "store": "s3",
+        "case": "scratch_join_and_frozen_rows",
+        "rows": 2,
+        "source_rows_after_mint": 0
+      },
+      {
+        "store": "s3",
+        "case": "expired_snapshot",
+        "status": 410,
+        "paths": 3
+      },
+      {
+        "store": "s3",
+        "case": "overflow",
+        "status": 400,
+        "code": "EXPORT_TOO_LARGE"
+      }
+    ]
+  },
+  "storage_checks": {
+    "couchbase_orphan_prefixes": 0,
+    "s3_orphan_prefixes": 0,
+    "couchbase_doc_ttl_expired": true,
+    "couchbase_snapshot_prefixes": 33,
+    "s3_snapshot_prefixes": 15
+  },
+  "additional_checks": [
+    "Explicit LIMIT 3 retained; LIMIT 0 produces an empty snapshot.",
+    "Interactive default LIMIT 2 did not truncate 24-row exports.",
+    "Native and mixed payroll exports both sum to independently verified 349632.",
+    "Couchbase chunks=3 rows; pages crossed chunks; CSV parts=5 rows with headers on all five parts.",
+    "Uploaded scratch source was emptied after mint; frozen snapshot retained two original rows.",
+    "Expired metadata returned 410 for page, download URLs and CSV download.",
+    "Foreign caller returned 404; missing bearer returned 401."
+  ],
+  "adaptations": [
+    "Streaming Trino routing shares source rewriting, security, caller identity, error mapping and diagnostics.",
+    "Export budgets replace interactive time/result caps, including embedded ClickHouse source queries.",
+    "Native ClickHouse stream uses the public SDK method; remote private-method call failed live.",
+    "Couchbase binary CSV documents explicitly encoded and decoded with RawBinaryTranscoder.",
+    "Verified REST session ID bound for scratch authorization and reset after each request.",
+    "HTTP snapshot endpoints also mounted on MCP server with selected-store startup config gate.",
+    "Exact Decimal wire values preserved and non-finite values rejected.",
+    "S3 presign duration capped by remaining snapshot lifetime."
+  ],
+  "limitations": [
+    "Feature remains opt-in via EXPORT_ENABLED; configure selected store credentials/bucket.",
+    "Agent/UI does not automatically switch from query paging to snapshot endpoints.",
+    "No production-data or production Couchbase/S3 cluster load test.",
+    "Physical expiration of Couchbase metadata yields 404; application-expired metadata still present yields 410."
+  ]
+}

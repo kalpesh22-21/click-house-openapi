@@ -1066,3 +1066,82 @@ class TestQuotedIdentifierBypassFixes:
         """
         result = _accept("SELECT * FROM t WHERE name = 'café'")
         assert result
+
+
+# ===========================================================================
+# 17. inject_limit=False — the answer-snapshot export path
+#
+# validate_and_sanitize(sql, default_limit, *, inject_limit=False) skips ONLY
+# the auto-LIMIT injection (snapshot exports materialize the FULL result set);
+# every other guardrail must stay byte-identical: comment stripping (and its
+# rejections), the multi-statement rejection, the allowlist, the denylist, and
+# all other output transformations.
+# ===========================================================================
+
+class TestInjectLimitFalse:
+    """Export-path validation: no LIMIT injected, every other guardrail intact."""
+
+    def test_no_limit_injected_when_disabled(self):
+        result = validate_and_sanitize("SELECT id FROM t", DEFAULT_LIMIT, inject_limit=False)
+        assert result == "SELECT id FROM t"
+
+    def test_with_query_no_limit_injected_when_disabled(self):
+        result = validate_and_sanitize(
+            "WITH x AS (SELECT 1) SELECT * FROM x", DEFAULT_LIMIT, inject_limit=False
+        )
+        assert "LIMIT" not in result
+
+    def test_existing_limit_preserved_when_disabled(self):
+        result = validate_and_sanitize(
+            "SELECT id FROM t LIMIT 42", DEFAULT_LIMIT, inject_limit=False
+        )
+        assert result == "SELECT id FROM t LIMIT 42"
+
+    def test_default_and_explicit_true_still_inject(self):
+        # Positional-call parity: the existing call sites are untouched.
+        assert validate_and_sanitize("SELECT 1", DEFAULT_LIMIT) == "SELECT 1 LIMIT 1000"
+        assert validate_and_sanitize("SELECT 1", DEFAULT_LIMIT, inject_limit=True) == (
+            "SELECT 1 LIMIT 1000"
+        )
+
+    def test_allowlist_still_enforced_when_disabled(self):
+        with pytest.raises(HTTPException) as exc_info:
+            validate_and_sanitize("INSERT INTO t VALUES (1)", DEFAULT_LIMIT, inject_limit=False)
+        assert exc_info.value.detail["code"] == "DISALLOWED_STATEMENT_TYPE"
+
+    def test_denylist_still_enforced_when_disabled(self):
+        with pytest.raises(HTTPException) as exc_info:
+            validate_and_sanitize(
+                "SELECT * FROM s3('https://example.invalid/f','CSV','x String')",
+                DEFAULT_LIMIT,
+                inject_limit=False,
+            )
+        assert exc_info.value.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_user_settings_clause_still_enforced_when_disabled(self):
+        with pytest.raises(HTTPException) as exc_info:
+            validate_and_sanitize("SELECT 1 SETTINGS readonly=0", DEFAULT_LIMIT, inject_limit=False)
+        assert exc_info.value.detail["code"] == "DISALLOWED_KEYWORD"
+
+    def test_comment_handling_unchanged_when_disabled(self):
+        # Comments still stripped; unterminated comments still rejected.
+        result = validate_and_sanitize(
+            "SELECT id -- trailing note\nFROM t /* mid */ WHERE x = 1",
+            DEFAULT_LIMIT,
+            inject_limit=False,
+        )
+        assert "note" not in result
+        assert "mid" not in result
+        assert "LIMIT" not in result
+        with pytest.raises(HTTPException) as exc_info:
+            validate_and_sanitize("SELECT 1 /* unterminated", DEFAULT_LIMIT, inject_limit=False)
+        assert exc_info.value.detail["code"] == "INVALID_COMMENT"
+
+    def test_multi_statement_still_rejected_when_disabled(self):
+        with pytest.raises(HTTPException) as exc_info:
+            validate_and_sanitize("SELECT 1; SELECT 2", DEFAULT_LIMIT, inject_limit=False)
+        assert exc_info.value.detail["code"] == "MULTIPLE_STATEMENTS"
+
+    def test_trailing_semicolon_still_stripped_when_disabled(self):
+        result = validate_and_sanitize("SELECT 1;", DEFAULT_LIMIT, inject_limit=False)
+        assert result == "SELECT 1"

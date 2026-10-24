@@ -29,3 +29,11 @@ PyJWT[crypto]==2.13.0
 # REDIS_URL is configured; a down/absent Redis degrades to the ClickHouse
 # freshness read (correctness never depends on Redis).
 redis==5.2.1
+# Answer-snapshot export object storage (app/export_client.py): on-prem
+# S3-compatible targets (Dell ECS / NetApp StorageGRID), path-style addressing.
+# Imported lazily — an EXPORT_STORE=couchbase deploy never loads it.
+boto3==1.43.33
+# Answer-snapshot export KV storage (app/export_store_couchbase.py), the default
+# EXPORT_STORE=couchbase backend. Imported lazily — an EXPORT_STORE=s3 deploy
+# never loads it.
+couchbase==4.6.2

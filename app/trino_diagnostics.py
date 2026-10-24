@@ -1,5 +1,6 @@
 """Restricted, bounded SQL diagnostics; never ordinary logs or tool payloads."""
 
+from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from functools import wraps
@@ -77,36 +78,43 @@ def _write(directory, record):
         handler.emit(logging.LogRecord("trino.sql", logging.INFO, "", 0, message, (), None))
 
 
+@contextmanager
+def trace_query(sql, settings):
+    """Trace the complete lifetime of a buffered query or export stream."""
+    if not settings.trino_enabled:
+        yield
+        return
+    record = {
+        "correlation_id": uuid4().hex,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "logical_sql": redacted_sql(sql, "clickhouse"),
+        "status": "ok",
+    }
+    token = _current.set(record)
+    started = time.monotonic()
+    try:
+        yield
+    except Exception as exc:
+        record["status"] = "error"
+        code = getattr(exc, "code", "INTERNAL_ERROR")
+        record["error_code"] = code if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,79}", code) else "INTERNAL_ERROR"
+        raise
+    finally:
+        _current.reset(token)
+        record["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+        try:
+            _write(settings.trino_diagnostics_dir, record)
+        except Exception:
+            logger.warning("Trino diagnostic storage unavailable: correlation_id=%s", record["correlation_id"])
+        logger.info("trino execution correlation_id=%s status=%s duration_ms=%s query_id=%s",
+                    record["correlation_id"], record["status"], record["duration_ms"], record.get("trino_query_id", "-"))
+
+
 def trace_execution(function):
     @wraps(function)
     def wrapped(sql, settings=None, parameters=None):
         from app.config import get_settings
-
         settings = settings or get_settings()
-        if not settings.trino_enabled:
+        with trace_query(sql, settings):
             return function(sql, settings, parameters)
-        record = {
-            "correlation_id": uuid4().hex,
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "logical_sql": redacted_sql(sql, "clickhouse"),
-            "status": "ok",
-        }
-        token = _current.set(record)
-        started = time.monotonic()
-        try:
-            return function(sql, settings, parameters)
-        except Exception as exc:
-            record["status"] = "error"
-            code = getattr(exc, "code", "INTERNAL_ERROR")
-            record["error_code"] = code if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,79}", code) else "INTERNAL_ERROR"
-            raise
-        finally:
-            _current.reset(token)
-            record["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
-            try:
-                _write(settings.trino_diagnostics_dir, record)
-            except Exception:
-                logger.warning("Trino diagnostic storage unavailable: correlation_id=%s", record["correlation_id"])
-            logger.info("trino execution correlation_id=%s status=%s duration_ms=%s query_id=%s",
-                        record["correlation_id"], record["status"], record["duration_ms"], record.get("trino_query_id", "-"))
     return wrapped

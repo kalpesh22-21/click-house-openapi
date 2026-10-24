@@ -72,8 +72,13 @@ async def require_principal(
     except SessionScopeError as exc:
         raise HTTPException(status_code=exc.status, detail={"error": exc.message, "code": exc.code}) from exc
 
+    from app.principal import current_session_id
+    # Only a verified scope token authorizes the header as a scratch owner.
+    session = request.headers.get("X-Session-Id") if request.url.path.rstrip("/") != SESSION_PATH else None
+    session_token = current_session_id.set(session)
     token = current_principal.set(principal)
     try:
         yield principal
     finally:
         current_principal.reset(token)
+        current_session_id.reset(session_token)

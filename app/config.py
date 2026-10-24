@@ -517,6 +517,148 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Answer-snapshot export side-channel ---
+    # The answer-snapshot routes (POST /query/snapshots, GET .../page,
+    # GET .../download-urls, GET .../download; see app/export_service.py)
+    # materialize a query's FULL result set to a pluggable snapshot store
+    # (EXPORT_STORE: 'couchbase', the default, or 's3') so the UI can page and
+    # download one frozen snapshot instead of re-executing the query per scroll.
+    # OFF by default; when EXPORT_ENABLED=true the ACTIVE store's identity MUST
+    # be complete or the app refuses to boot (see export_store_missing_fields()
+    # and the main.py lifespan): S3 mode needs endpoint + bucket + access key +
+    # secret key; CB mode needs conn string + bucket + username + password.
+    # Secret fields belong in Vault (EXPORT_S3_CREDS_PATH / EXPORT_CB_CREDS_PATH).
+    # The ClickHouse-side caps for the export path derive EXCLUSIVELY from these
+    # EXPORT_* fields — they never merge with the interactive path's MAX_* /
+    # CLICKHOUSE_* caps.
+    export_enabled: bool = Field(
+        False,
+        description=(
+            "Enable the answer-snapshot export routes. When true, the ACTIVE "
+            "snapshot store (EXPORT_STORE) must be fully configured or startup fails."
+        ),
+    )
+    export_max_concurrent_creates: int = Field(
+        4, ge=1, le=32,
+        description="Maximum in-flight snapshot creations per worker; excess requests receive 429.",
+    )
+    export_store: str = Field(
+        "couchbase",
+        description=(
+            "Snapshot store backend: 'couchbase' (default; snapshot docs live in "
+            "the EXPORT_CB_* bucket, downloads are app-streamed) or 's3' (on-prem "
+            "S3-compatible object storage via EXPORT_S3_*, downloads are presigned "
+            "URLs)."
+        ),
+    )
+    export_s3_endpoint: str = Field(
+        "",
+        description=(
+            "S3-compatible endpoint URL (e.g. https://ecs.example.com:9021). "
+            "Path-style addressing is always used."
+        ),
+    )
+    export_s3_bucket: str = Field("", description="Bucket that holds snapshot objects.")
+    export_s3_region: str = Field(
+        "us-east-1", description="Signing region passed to boto3 (region_name)."
+    )
+    export_s3_prefix: str = Field(
+        "exports",
+        description=(
+            "Key prefix under the bucket for all snapshot objects: "
+            "{prefix}/{tenant_hash}/{snapshot_id}/..."
+        ),
+    )
+    export_s3_access_key: str = Field(
+        "", description="S3 access key (secret; from Vault when EXPORT_S3_CREDS_PATH is set)."
+    )
+    export_s3_secret_key: str = Field(
+        "", description="S3 secret key (secret; from Vault when EXPORT_S3_CREDS_PATH is set)."
+    )
+    export_s3_creds_path: str = Field(
+        "",
+        description=(
+            "Vault KV path holding the S3 credentials (keys: EXPORT_S3_ACCESS_KEY, "
+            "EXPORT_S3_SECRET_KEY). Empty → use env/defaults."
+        ),
+    )
+    # --- Snapshot store: Couchbase (EXPORT_STORE=couchbase, the default) ---
+    # Snapshot docs (meta / row chunks / CSV parts) live in a DEDICATED bucket
+    # provisioned ops-side with replicas=0 and a bucket maxTTL equal to
+    # EXPORT_TTL_SECONDS as the datastore-level TTL backstop.
+    export_cb_conn_str: str = Field(
+        "",
+        description="Couchbase connection string (e.g. couchbases://cb.example.com).",
+    )
+    export_cb_bucket: str = Field(
+        "", description="Dedicated Couchbase bucket holding snapshot docs."
+    )
+    export_cb_username: str = Field(
+        "",
+        description="Couchbase user (secret; from Vault when EXPORT_CB_CREDS_PATH is set).",
+    )
+    export_cb_password: str = Field(
+        "",
+        description="Couchbase password (secret; from Vault when EXPORT_CB_CREDS_PATH is set).",
+    )
+    export_cb_creds_path: str = Field(
+        "",
+        description=(
+            "Vault KV path holding the full Couchbase export identity (keys: "
+            "COUCHBASE_USERNAME, COUCHBASE_PASSWORD, COUCHBASE_CONNECTION_STRING, "
+            "COUCHBASE_BUCKET_EXPORT — always the EXPORT bucket, never "
+            "COUCHBASE_BUCKET). Empty → use env/defaults."
+        ),
+    )
+    export_cb_chunk_rows: int = Field(
+        10_000,
+        ge=1,
+        description=(
+            "Rows per row-chunk doc (snap::{tenant_hash}::{snapshot_id}::rows.NNNN) "
+            "when EXPORT_STORE=couchbase. Paging fetches chunks by ceil-math, so a "
+            "page costs O(1) doc reads."
+        ),
+    )
+    # Split/budget policy: CSV parts split at EXPORT_MAX_ROWS rows OR
+    # EXPORT_PART_MAX_BYTES per part (whichever trips first); the whole snapshot
+    # aborts with EXPORT_TOO_LARGE past EXPORT_TOTAL_MAX_ROWS /
+    # EXPORT_TOTAL_MAX_BYTES (enforced locally by export_service — never inferred
+    # from ClickHouse error text).
+    export_max_rows: int = Field(
+        100_000, ge=1, description="Max data rows in a single CSV download part."
+    )
+    export_part_max_bytes: int = Field(
+        10_485_760, ge=1, description="Max bytes in a single CSV download part (10 MB)."
+    )
+    export_total_max_rows: int = Field(
+        1_000_000, ge=1, description="Max total rows in one snapshot (1M)."
+    )
+    export_total_max_bytes: int = Field(
+        104_857_600, ge=1, description="Max total staged bytes in one snapshot (100 MB)."
+    )
+    export_max_execution_time: int = Field(
+        120,
+        ge=1,
+        description=(
+            "ClickHouse max_execution_time (seconds) for the export streaming query. "
+            "Longer than the interactive path's 30s so full snapshots can scan deep."
+        ),
+    )
+    export_ttl_seconds: int = Field(
+        14_400,
+        ge=1,
+        description=(
+            "Snapshot TTL (4h) enforced app-side on every read (410 past expiry). "
+            "A ~1-day bucket lifecycle rule (S3 mode) or a per-doc expiry plus "
+            "bucket maxTTL (Couchbase mode) is the storage backstop."
+        ),
+    )
+    export_presign_ttl_seconds: int = Field(
+        300,
+        ge=1,
+        description="Lifetime (seconds) of the presigned download URLs (5 min).",
+    )
+
     # --- Employee row-level-security (RLS) access provisioning ---
     # Populates security.user_employee_access, the table the dbpcm_warehouse.employee
     # row policy reads to scope each tenant (identified by its stable composite JTI)
@@ -712,6 +854,15 @@ class Settings(BaseSettings):
             "empty, the service-key path stays OFF / fail-closed)."
         ),
     )
+
+    @field_validator("export_store")
+    @classmethod
+    def _validate_export_store(cls, v: str) -> str:
+        """Pin EXPORT_STORE to a known backend (a typo must fail loud, now)."""
+        store = v.strip().lower()
+        if store not in ("couchbase", "s3"):
+            raise ValueError("export_store must be 'couchbase' or 's3'.")
+        return store
 
     @field_validator("log_level")
     @classmethod
@@ -980,6 +1131,51 @@ class Settings(BaseSettings):
             return None
         return [db.strip() for db in self.allowed_databases.split(",") if db.strip()]
 
+    def export_s3_missing_fields(self) -> List[str]:
+        """Canonical env names of the required S3 identity fields still unset.
+
+        Used by the REST lifespan to fail LOUD at startup when EXPORT_ENABLED is
+        true but the S3 target is only partially configured — a half-configured
+        export path must refuse to boot rather than 502 at first request. Region
+        and prefix have safe defaults, so they are never part of this gate.
+        """
+        return [
+            name.upper()
+            for name in (
+                "export_s3_endpoint",
+                "export_s3_bucket",
+                "export_s3_access_key",
+                "export_s3_secret_key",
+            )
+            if not str(getattr(self, name)).strip()
+        ]
+
+    def export_cb_missing_fields(self) -> List[str]:
+        """Canonical env names of the required Couchbase identity fields still unset.
+
+        CB-mode mirror of ``export_s3_missing_fields`` (start-loud gate).
+        """
+        return [
+            name.upper()
+            for name in (
+                "export_cb_conn_str",
+                "export_cb_bucket",
+                "export_cb_username",
+                "export_cb_password",
+            )
+            if not str(getattr(self, name)).strip()
+        ]
+
+    def export_store_missing_fields(self) -> List[str]:
+        """Missing identity fields for the ACTIVE snapshot store only.
+
+        EXPORT_ENABLED=true gates EXACTLY the store selected by EXPORT_STORE —
+        an s3 deploy needs no Couchbase identity and vice versa.
+        """
+        if self.export_store == "couchbase":
+            return self.export_cb_missing_fields()
+        return self.export_s3_missing_fields()
+
 
 def _read_vault_secret(vc, key: str, path: str, current):
     """Read one KV field from Vault, returning ``current`` (env/default) on failure.
@@ -1076,6 +1272,35 @@ def load_settings_from_vault() -> Settings:
         )
         settings.security_ch_password = _read_vault_secret(
             vc, "SECURITY_CH_PASSWORD", p, settings.security_ch_password
+        )
+
+    # --- Answer-snapshot export S3 credential ---
+    if settings.export_s3_creds_path:
+        p = settings.export_s3_creds_path
+        settings.export_s3_access_key = _read_vault_secret(
+            vc, "EXPORT_S3_ACCESS_KEY", p, settings.export_s3_access_key
+        )
+        settings.export_s3_secret_key = _read_vault_secret(
+            vc, "EXPORT_S3_SECRET_KEY", p, settings.export_s3_secret_key
+        )
+
+    # --- Answer-snapshot export Couchbase credential ---
+    # The Vault record at EXPORT_CB_CREDS_PATH uses the ops key names
+    # COUCHBASE_*; the bucket always comes from COUCHBASE_BUCKET_EXPORT (the
+    # export-dedicated bucket), never COUCHBASE_BUCKET.
+    if settings.export_cb_creds_path:
+        p = settings.export_cb_creds_path
+        settings.export_cb_username = _read_vault_secret(
+            vc, "COUCHBASE_USERNAME", p, settings.export_cb_username
+        )
+        settings.export_cb_password = _read_vault_secret(
+            vc, "COUCHBASE_PASSWORD", p, settings.export_cb_password
+        )
+        settings.export_cb_conn_str = _read_vault_secret(
+            vc, "COUCHBASE_CONNECTION_STRING", p, settings.export_cb_conn_str
+        )
+        settings.export_cb_bucket = _read_vault_secret(
+            vc, "COUCHBASE_BUCKET_EXPORT", p, settings.export_cb_bucket
         )
 
     # --- Employee-access Redis URL ---

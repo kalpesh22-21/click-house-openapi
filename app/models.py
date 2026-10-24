@@ -86,3 +86,80 @@ class HealthResponse(BaseModel):
     status: str = Field("ok", description="Always 'ok' when the service is healthy")
     clickhouse: str = Field(..., description="'ok' if ClickHouse is reachable, else 'error'")
     trino: str | None = Field(None, description="Trino reachability when enabled")
+
+
+# ---------------------------------------------------------------------------
+# Answer snapshots (app/routers/export.py — registered only when EXPORT_ENABLED)
+# ---------------------------------------------------------------------------
+
+
+class SnapshotCreateRequest(BaseModel):
+    """Request body for createAnswerSnapshot."""
+
+    sql: str = Field(
+        ...,
+        description=(
+            "Read-only SELECT/WITH statement to snapshot. The FULL result set is "
+            "materialized — no default LIMIT is injected on this path."
+        ),
+    )
+
+    refresh_of: str | None = Field(
+        None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        description="Previous owned snapshot ID to replace. Repeating the same refresh reuses its replacement; omit for normal creation.",
+    )
+
+
+class SnapshotCreateResponse(BaseModel):
+    """Response for createAnswerSnapshot (HTTP 201)."""
+
+    snapshot_id: str = Field(..., description="Server-minted snapshot UUID")
+    columns: list[str] = Field(..., description="Ordered column names (compact shape)")
+    row_count: int = Field(..., description="Exact total rows in the snapshot")
+    created_at: str = Field(..., description="Mint time, ISO 8601 UTC (Z)")
+    expires_at: str = Field(..., description="Expiry time, ISO 8601 UTC (Z)")
+
+
+class SnapshotPageResponse(BaseModel):
+    """Response for pageAnswerSnapshot."""
+
+    columns: list[str] = Field(..., description="Ordered column names")
+    rows: list[list[Any]] = Field(..., description="Row data as a list of lists")
+    limit: int = Field(..., description="Page size applied")
+    offset: int = Field(..., description="Row offset applied")
+    has_more: bool = Field(
+        ..., description="EXACT: offset + len(rows) < row_count"
+    )
+    row_count: int = Field(..., description="Exact total rows in the snapshot")
+    snapshot_id: str = Field(..., description="Snapshot this page came from")
+    expires_at: str = Field(..., description="Snapshot expiry, ISO 8601 UTC (Z)")
+
+
+class SnapshotDownloadFile(BaseModel):
+    """One CSV part of a snapshot download."""
+
+    part: int = Field(..., description="1-indexed part number (in order)")
+    url: str = Field(
+        ...,
+        description=(
+            "S3 mode: short-lived presigned GET URL. Couchbase mode: relative app "
+            "path query/snapshots/{id}/download?part=N (app-streamed bytes)."
+        ),
+    )
+    rows: int = Field(..., description="Data rows in this part")
+    filename: str = Field(..., description="Download filename the URL forces")
+
+
+class SnapshotDownloadUrlsResponse(BaseModel):
+    """Response for getAnswerSnapshotDownloadUrls."""
+
+    files: list[SnapshotDownloadFile] = Field(
+        ..., description="Ordered CSV parts; empty for a zero-row snapshot"
+    )
+    expires_in: Optional[int] = Field(
+        None,
+        description=(
+            "URL lifetime in seconds (S3 presign window). null in Couchbase mode — "
+            "per-request authz replaces the presign window."
+        ),
+    )

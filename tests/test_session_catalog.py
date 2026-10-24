@@ -126,3 +126,30 @@ def test_rest_bootstrap_and_scope_enforcement(setup):
             assert permissions.call_count == 1
     finally:
         app.dependency_overrides.pop(get_settings, None)
+
+
+def test_rest_binds_verified_scratch_session_and_resets_context(setup):
+    from fastapi import FastAPI, Depends
+    from app.auth import require_principal
+    from app.auth_jwt import validate_token
+    from app.config import get_settings
+    from app.principal import get_current_session_id
+
+    settings, _, _ = setup
+    api = FastAPI()
+    api.dependency_overrides[get_settings] = lambda: settings
+
+    @api.get('/probe', dependencies=[Depends(require_principal)])
+    def probe():
+        return {'session': get_current_session_id()}
+
+    bearer = make_jwt()
+    caller = validate_token(bearer, settings)
+    with TestClient(api) as client:
+        for session in ['first', 'second']:
+            signed = materialize(caller, session, settings)['scope_token']
+            headers = {'Authorization': 'Bearer '+bearer, 'X-Session-Id': session,
+                       'X-Catalog-Scope': signed}
+            assert client.get('/probe', headers=headers).json() == {'session': session}
+            assert client.get('/probe', headers={**headers, 'X-Session-Id': 'wrong'}).status_code == 403
+    assert get_current_session_id() is None

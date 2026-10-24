@@ -30,8 +30,11 @@ from app.errors import (
     ClickHouseUnavailableError,
     ColumnScopeError,
     DatabaseNotAllowedError,
+    ExportTooLargeError,
     ParseFailedError,
     QueryValidationError,
+    SnapshotExpiredError,
+    SnapshotNotFoundError,
     TableNotAllowedError,
     TableNotFoundError,
 )
@@ -84,6 +87,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "OIDC_AUDIENCE to enable JWT validation, then restart."
         )
         sys.exit(1)
+
+    # Fail LOUD when the answer-snapshot export is enabled without a complete
+    # identity for the ACTIVE snapshot store (EXPORT_STORE): a half-configured
+    # export path must refuse to boot rather than fail at first request.  Same
+    # fail-closed posture as the auth check above.  Only the selected store's
+    # fields are gated — an s3 deploy needs no Couchbase identity and a
+    # couchbase deploy needs no S3 identity.
+    if settings.export_enabled:
+        missing = settings.export_store_missing_fields()
+        if missing:
+            logger.critical(
+                "EXPORT_ENABLED=true but the snapshot store configuration "
+                "(EXPORT_STORE=%s) is incomplete. Missing: %s. Set them (env or "
+                "Vault via EXPORT_S3_CREDS_PATH / EXPORT_CB_CREDS_PATH), or "
+                "set EXPORT_ENABLED=false, then restart.",
+                settings.export_store,
+                ", ".join(missing),
+            )
+            sys.exit(1)
 
     # Fail closed (A-M1): validate the Semantic Catalog's RLS projection at
     # startup so a missing/malformed RLS table (which would leak client_code /
@@ -169,6 +191,12 @@ _DOMAIN_ERROR_STATUS: dict[type, int] = {
     # looks up the EXACT type — register it so a fail-closed access-provisioning
     # error returns 502 (matching the run_query route) instead of 500.
     EmployeeAccessError: 502,
+    # Answer-snapshot export errors — backstop only: app/routers/export.py maps
+    # these to the {"detail": {"error", "code"}} envelope explicitly on its
+    # routes; this map keeps any stray raise from degrading to a 500.
+    ExportTooLargeError: 400,
+    SnapshotNotFoundError: 404,
+    SnapshotExpiredError: 410,
 }
 
 
@@ -215,6 +243,26 @@ async def logged_validation_error(request: Request, exc: RequestValidationError)
 app.include_router(health.router)
 app.include_router(schema.router)
 app.include_router(query.router)
+
+
+def _export_routes_enabled() -> bool:
+    """True when EXPORT_ENABLED — guards conditional answer-snapshot route registration.
+
+    Importing main must never hard-crash on unbuildable settings (tooling, and
+    the lifespan's fail-closed checks run AFTER import), so a settings failure
+    here resolves to "not enabled" — the lifespan independently refuses to boot
+    a misconfigured service.
+    """
+    try:
+        return get_settings().export_enabled
+    except Exception:  # noqa: BLE001 — keep main importable for tooling
+        return False
+
+
+if _export_routes_enabled():
+    from app.routers import export as export_router
+
+    app.include_router(export_router.router, prefix="/query")
 
 
 # ---------------------------------------------------------------------------

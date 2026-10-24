@@ -1,0 +1,34 @@
+{
+  "date": "2026-10-24",
+  "scope": "Synchronous snapshot integration; async and hybrid storage deferred",
+  "backend": [
+    "Snapshot ownership includes verified subject, session and schema/column grants",
+    "refresh_of references previous owned snapshot; repeated refresh reuses replacement",
+    "Foreign session page/presign/download/refresh fails with 404"
+  ],
+  "agent": [
+    "Explicit CLICKHOUSE_API_REST_BASE_URL; empty returns 501",
+    "Existing credential verifier and SessionCatalog supply JWT/session/server scope",
+    "Four REST routes; preserves request body, query parameters, JSON/status and Retry-After",
+    "CSV streamed; closes upstream/client; broken stream aborts",
+    "Transport or malformed JSON failure gives canned 502"
+  ],
+  "tests": {
+    "backend_full_release_copy": "2511 passed, 87 skipped, 1 xfailed",
+    "agent_proxy_app_session_catalog": "58 passed",
+    "agent_proxy_lint": "passed",
+    "test_limits": "Automated tests use fake query streams/stores and mock HTTP transport, not deployed Ember or new live database runs. Release copy excludes private accrual YAML changes."
+  },
+  "ember_required": "Pass refresh_of=current snapshot ID on Refresh; retain reference on retries; replace session/UI snapshot only after 201. Removed snapshot 404: clear stale reference and create normally.",
+  "deployment": [
+    "Set explicit agent REST base and allow synchronous request deadlines",
+    "Old caller-only snapshots require recreation; no insecure compatibility fallback",
+    "Already issued presigned URLs remain usable until their signed expiry"
+  ],
+  "preserved": [
+    "No paging/indexing changes",
+    "No auth identity refactor",
+    "Private accrual YAML and existing staging untouched",
+    "No commit or push"
+  ]
+}

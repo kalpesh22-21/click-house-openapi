@@ -1405,11 +1405,19 @@ def _parse_args() -> argparse.Namespace:
 def create_http_app():
     """Validate the local catalog once at ASGI startup, without tenant probes."""
     app = mcp.streamable_http_app()
+    if settings.export_enabled:
+        from fastapi import FastAPI
+        from app.routers.export import router as snapshot_router
+        snapshots = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+        snapshots.include_router(snapshot_router)
+        app.mount("/query", snapshots)
     original_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
     async def catalog_lifespan(application):
         from app.semantic_catalog.loader import get_semantic_catalog
+        if settings.export_enabled and (missing := settings.export_store_missing_fields()):
+            raise RuntimeError("Missing answer-snapshot settings: " + ", ".join(missing))
         await anyio.to_thread.run_sync(get_semantic_catalog)
         async with original_lifespan(application) as state:
             yield state

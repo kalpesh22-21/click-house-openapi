@@ -42,6 +42,40 @@ Both the REST API and the MCP server use **exactly the same** guardrail and exec
 | POST | `/query` | `runQuery` | Execute a read-only SQL query |
 | POST | `/query/explain` | `explainQuery` | EXPLAIN a query (validate without executing) |
 | GET | `/health` | `healthCheck` | Liveness/readiness probe |
+| POST | `/query/snapshots` | `createAnswerSnapshot` | Materialize a full query result as an answer snapshot (only registered when `EXPORT_ENABLED=true`) |
+| GET | `/query/snapshots/{snapshot_id}/page?offset=&limit=` | `pageAnswerSnapshot` | Page a frozen snapshot (exact `has_more`; `offset ≥ row_count` → empty page, not an error) |
+| GET | `/query/snapshots/{snapshot_id}/download-urls` | `getAnswerSnapshotDownloadUrls` | Ordered download locations for the snapshot's CSV part(s) — presigned URLs (S3 mode) or relative `…/download?part=N` app paths (Couchbase mode) |
+| GET | `/query/snapshots/{snapshot_id}/download?part=` | `downloadAnswerSnapshotPart` | Stream one CSV part as `text/csv` attachment (the Couchbase-mode download transport) |
+
+The answer-snapshot routes mint a **frozen, full result set** of one validated
+query (no injected default `LIMIT` — everything else in the guardrail chain is
+identical to `runQuery`). Paging and download always serve that frozen snapshot
+— the query never re-executes. Snapshots are tenant-bound (a `sha256` of the
+per-request tenant identity settings) and expire app-side after
+`EXPORT_TTL_SECONDS` (410 past expiry); a wrong-tenant id is indistinguishable
+from an unknown id (404 either way). The store is pluggable (`EXPORT_STORE`):
+**Couchbase** (default — snapshot docs in a dedicated bucket; downloads stream
+through `GET …/download?part=N` with per-request authz) or **S3-compatible
+object storage** (presigned URLs, `EXPORT_PRESIGN_TTL_SECONDS`) to numbered
+`data.part-NNNN.csv` parts split at `EXPORT_MAX_ROWS` rows or
+`EXPORT_PART_MAX_BYTES`, whichever trips first — up to the whole-snapshot
+budget (`EXPORT_TOTAL_MAX_ROWS` / `EXPORT_TOTAL_MAX_BYTES`), beyond which
+creation fails loud with 400 `EXPORT_TOO_LARGE` and partial artifacts are
+deleted. See `docs/adr/0003-answer-snapshots.md`.
+
+Snapshot creation automatically reuses identical requests within `EXPORT_TTL_SECONDS`.
+The fingerprint includes verified query identity (including row-access `jti`),
+subject, session, schema/column grants, and exact SQL. No client key is required.
+Completed requests return the same snapshot; pending requests return 409
+`SNAPSHOT_IN_PROGRESS` with `Retry-After`. Different SQL or scope creates a
+separate snapshot. Failed/uncertain creation is not automatically retried before
+expiry; a new session is a separate request scope. Results are frozen, including
+queries using `now()`. To refresh, send `refresh_of` with the previous snapshot
+ID; retries reuse the same replacement. Reads and refreshes require the same
+verified caller and session. Changed grants block old data with
+`409 SNAPSHOT_SCOPE_CHANGED`; `/query/snapshots/{id}/rebuild` revalidates the
+private stored SQL under current permissions. The agent handles one recovery
+attempt and signals the UI to replace the table. No paging/indexing changes are introduced.
 
 ## MCP Mode
 
@@ -209,6 +243,41 @@ Variables marked **ConfigMap** are managed in the Kubernetes ConfigMap (via `con
 | `MCP_TRANSPORT` | No | `stdio` | ConfigMap | `stdio` or `http` |
 | `MCP_PORT` | No | `8000` | ConfigMap | MCP HTTP server port |
 | `MCP_PATH` | No | `/mcp` | ConfigMap | MCP streamable-HTTP mount path |
+
+### Answer-snapshot export (`EXPORT_*`)
+
+Registered only when `EXPORT_ENABLED=true`; with it on, the identity fields of
+the ACTIVE store (`EXPORT_STORE`) are mandatory and the app refuses to boot if
+any is missing (fail loud — only the selected store is gated). Secrets belong in
+Vault (`EXPORT_S3_CREDS_PATH` / `EXPORT_CB_CREDS_PATH`). The export path's
+ClickHouse caps derive exclusively from these fields — never from the
+interactive `MAX_*` overrides.
+
+| Variable | Required | Default | Source | Description |
+|----------|----------|---------|--------|-------------|
+| `EXPORT_ENABLED` | No | `false` | ConfigMap | Register the `/query/snapshots` routes |
+| `EXPORT_MAX_CONCURRENT_CREATES` | No | `4` | ConfigMap | Maximum in-flight creations per worker; excess requests return 429 `EXPORT_BUSY` with Retry-After |
+| `EXPORT_STORE` | No | `couchbase` | ConfigMap | Snapshot store backend: `couchbase` (default) or `s3` |
+| `EXPORT_CB_CONN_STR` | When store=`couchbase` + enabled | — | ConfigMap | Couchbase connection string (e.g. `couchbases://cb.example.com`) |
+| `EXPORT_CB_BUCKET` | When store=`couchbase` + enabled | — | ConfigMap | Dedicated bucket holding snapshot docs (provision with replicas=0, maxTTL=14400s) |
+| `EXPORT_CB_USERNAME` | When store=`couchbase` + enabled | — | Secret | Couchbase user |
+| `EXPORT_CB_PASSWORD` | When store=`couchbase` + enabled | — | Secret | Couchbase password |
+| `EXPORT_CB_CREDS_PATH` | No | — | ConfigMap | Vault KV path holding the Couchbase export identity (keys `COUCHBASE_USERNAME`/`COUCHBASE_PASSWORD`/`COUCHBASE_CONNECTION_STRING`/`COUCHBASE_BUCKET_EXPORT` — the EXPORT bucket, never `COUCHBASE_BUCKET`) |
+| `EXPORT_CB_CHUNK_ROWS` | No | `10000` | ConfigMap | Rows per row-chunk doc in Couchbase mode (paging fetches O(1) docs) |
+| `EXPORT_S3_ENDPOINT` | When store=`s3` + enabled | — | ConfigMap | S3-compatible endpoint URL (path-style addressing is always used) |
+| `EXPORT_S3_BUCKET` | When store=`s3` + enabled | — | ConfigMap | Bucket holding snapshot objects |
+| `EXPORT_S3_REGION` | No | `us-east-1` | ConfigMap | Signing region passed to boto3 |
+| `EXPORT_S3_PREFIX` | No | `exports` | ConfigMap | Key prefix: `{prefix}/{tenant_hash}/{snapshot_id}/…` |
+| `EXPORT_S3_ACCESS_KEY` | When store=`s3` + enabled | — | Secret | S3 access key (least-privilege PUT/GET on the prefix) |
+| `EXPORT_S3_SECRET_KEY` | When store=`s3` + enabled | — | Secret | S3 secret key |
+| `EXPORT_S3_CREDS_PATH` | No | — | ConfigMap | Vault KV path holding the S3 credential pair |
+| `EXPORT_MAX_ROWS` | No | `100000` | ConfigMap | Max data rows per CSV download part |
+| `EXPORT_PART_MAX_BYTES` | No | `10485760` | ConfigMap | Max bytes per CSV part (10 MB; split, whichever trips first) |
+| `EXPORT_TOTAL_MAX_ROWS` | No | `1000000` | ConfigMap | Whole-snapshot row budget → 400 `EXPORT_TOO_LARGE` |
+| `EXPORT_TOTAL_MAX_BYTES` | No | `104857600` | ConfigMap | Whole-snapshot staged-bytes budget (100 MB) → 400 `EXPORT_TOO_LARGE` |
+| `EXPORT_MAX_EXECUTION_TIME` | No | `120` | ConfigMap | ClickHouse `max_execution_time` for the export stream |
+| `EXPORT_TTL_SECONDS` | No | `14400` | ConfigMap | Snapshot TTL enforced app-side on every read (4h; 410 after); also the per-doc `expiry` written to every Couchbase snapshot doc |
+| `EXPORT_PRESIGN_TTL_SECONDS` | No | `300` | ConfigMap | Lifetime of presigned download URLs (300s; S3 mode only — Couchbase mode streams via the app) |
 
 ## Running Locally
 

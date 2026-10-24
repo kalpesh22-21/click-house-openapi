@@ -1,0 +1,74 @@
+{
+  "date": "2026-10-23",
+  "scope": "Snapshot POST idempotency only; paging and indexing unchanged",
+  "header": "Idempotency-Key",
+  "stores": [
+    {
+      "store": "couchbase",
+      "replicas": 2,
+      "concurrent_requests": 8,
+      "initial_statuses": [
+        409,
+        201,
+        409,
+        409,
+        409,
+        409,
+        409,
+        409
+      ],
+      "creation_executions_for_shared_key": 1,
+      "completed_replays": 6,
+      "same_snapshot_id": true,
+      "changed_sql_conflict": 409,
+      "caller_isolation": true,
+      "failed_creation_replay": 409,
+      "snapshot_id": "255802ec-c658-4582-ba64-3eca1c035243"
+    },
+    {
+      "store": "s3",
+      "replicas": 2,
+      "concurrent_requests": 8,
+      "initial_statuses": [
+        409,
+        409,
+        409,
+        409,
+        201,
+        409,
+        409,
+        409
+      ],
+      "creation_executions_for_shared_key": 1,
+      "completed_replays": 6,
+      "same_snapshot_id": true,
+      "changed_sql_conflict": 409,
+      "caller_isolation": true,
+      "failed_creation_replay": 409,
+      "snapshot_id": "6234bee1-3f0e-4651-b296-813fbcc5156e"
+    }
+  ],
+  "live_environment": {
+    "replicas": "Two independent API processes sharing each store",
+    "query_backend": "Trino over synthetic MySQL employee data",
+    "s3_implementation": "RustFS"
+  },
+  "tests": {
+    "focused": "188 passed",
+    "snapshot_session_trino_regression": "766 passed",
+    "full_release_copy": "2503 passed, 87 skipped, 1 xfailed",
+    "release_copy_note": "Private accrual_events.yaml replaced with HEAD only in temporary test copy; original working tree and staging unchanged"
+  },
+  "recovery_checks": [
+    "Metadata committed but acknowledgement lost: retry recovers stored snapshot without executing SQL again",
+    "Claim status update failure preserves committed result",
+    "Expired generation cannot be overwritten by old claim CAS"
+  ],
+  "limitations": [
+    "Client must send a stable key for retries",
+    "Pending claims are not stolen before retention expiry after worker failure",
+    "Same key after retention expiry can start a new execution",
+    "S3-compatible storage must support conditional writes"
+  ],
+  "git": "No commit or push; existing staging preserved"
+}

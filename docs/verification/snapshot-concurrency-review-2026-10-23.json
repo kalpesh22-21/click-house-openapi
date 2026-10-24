@@ -1,0 +1,81 @@
+{
+  "date": "2026-10-23",
+  "conclusion": "Snapshot GET paging avoids SQL re-execution, but UI integration, idempotent creation, S3 page indexing, and wide-row chunk sizing remain before a high-concurrency rollout.",
+  "fixed": [
+    {
+      "issue": "Unbounded snapshot creation can consume shared HTTP workers, database connections and staging disk.",
+      "change": "Async admission before thread dispatch; EXPORT_MAX_CONCURRENT_CREATES=4 per worker, 429 EXPORT_BUSY with Retry-After for excess requests. Per-worker only, not distributed."
+    },
+    {
+      "issue": "Concurrent cold lru_cache misses can construct multiple Couchbase/S3 clients.",
+      "change": "Serialize store resolution around cached initialization."
+    },
+    {
+      "issue": "Each S3 upload can spawn a nested transfer pool and metadata body reads did not explicitly close responses.",
+      "change": "Disable transfer threads per upload; close metadata response bodies explicitly."
+    }
+  ],
+  "open": [
+    {
+      "severity": "high",
+      "issue": "UI still executes SQL on every /query/page request.",
+      "location": "data-analysis-agent/src/data_agent/runtime/app.py:1267",
+      "required_change": "Create/retain one snapshot ID per answer table/version, use snapshot GET pages for scrolling. Avoid issuing both old query/page and snapshot calls."
+    },
+    {
+      "severity": "high",
+      "issue": "Duplicate POSTs/retries create separate UUIDs and execute SQL repeatedly. No idempotency key or distributed single-flight.",
+      "location": "app/export_service.py:470",
+      "required_change": "Store-backed atomic idempotency claim scoped to caller and request fingerprint; handle in-progress and completed retries. Admission control is not deduplication."
+    },
+    {
+      "severity": "high for S3 UI paging",
+      "issue": "Each S3 page rescans gzip JSONL from row zero. Deep pages do O(offset) decode/read work per request.",
+      "location": "app/export_service.py:727",
+      "required_change": "Chunk/index S3 row objects; keep CSV parts as separate download artifacts."
+    },
+    {
+      "severity": "medium",
+      "issue": "Couchbase chunks are bounded by row count only; wide chunks can exceed document-size limits and cause large decoding allocations on concurrent reads. CSV part byte cap also permits an oversized single row.",
+      "location": "app/export_service.py:236",
+      "required_change": "Enforce byte bounds and page through chunk offsets recorded in metadata; reject a single oversized record explicitly."
+    },
+    {
+      "severity": "medium",
+      "issue": "Abort cleanup calls finish(), which can flush pending Couchbase rows or retry a failed chunk write during exception unwinding.",
+      "location": "app/export_service.py:_Staging.cleanup",
+      "required_change": "Separate successful finalization from abort close/discard; preserve the original failure."
+    }
+  ],
+  "live_couchbase_concurrency": {
+    "concurrent_page_workers": 16,
+    "page_requests": 96,
+    "correct_same_user_pages": 64,
+    "foreign_user_404": 32,
+    "additional_query_connections_for_paging": 0,
+    "median_page_seconds": 0.0155,
+    "max_page_seconds": 0.038,
+    "concurrent_create_requests": 16,
+    "creation_limit": 2,
+    "peak_active_creates": 2,
+    "created": 2,
+    "busy_429": 14,
+    "note": "Zero additional query connections was asserted immediately after paging, before the separate creation burst."
+  },
+  "s3_algorithm_probe": {
+    "storage": "in-memory S3 adapter with actual gzip paging algorithm",
+    "snapshot_rows": 50000,
+    "page_offset": 49900,
+    "page_limit": 50,
+    "jsonl_rows_examined": 49951,
+    "query_reexecutions": 0
+  },
+  "regression": "203 passed (snapshot, auth, session and diagnostic tests after concurrency fixes)",
+  "limitations": [
+    "Concurrency test used local synthetic 24-row snapshots; not a production-capacity benchmark.",
+    "Couchbase pages tested with 16 workers and mixed caller identities; create burst exercised live Trino.",
+    "S3 deep-page probe used in-memory storage with the real gzip paging algorithm, not a network throughput benchmark.",
+    "No agent/UI implementation changes in this review.",
+    "Existing private accrual_events.yaml remains unchanged."
+  ]
+}

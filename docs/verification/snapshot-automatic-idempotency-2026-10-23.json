@@ -1,0 +1,35 @@
+{
+  "date": "2026-10-23",
+  "change": "Replaced caller-provided Idempotency-Key with automatic identity/session/scope/request fingerprint",
+  "fingerprint": [
+    "Effective verified query identity including row-access jti",
+    "Principal subject",
+    "Verified session ID",
+    "Schema and column grants, sorted",
+    "Exact SQL (entire current request body)"
+  ],
+  "excluded": [
+    "Raw bearer token",
+    "Token issuance/expiry claims unless explicitly configured as query identity"
+  ],
+  "tests": {
+    "full_release_copy": "2502 passed, 87 skipped, 1 xfailed",
+    "note": "Temporary copy uses HEAD accrual_events.yaml; private file and index unchanged"
+  },
+  "verified": [
+    "16 concurrent requests across shared-store adapters: one execution; pending competitors get 409; completed replays reuse snapshot",
+    "Changed SQL/schema/column grants/subject/session/jti isolate snapshots",
+    "Token refresh with unchanged query identity reuses snapshot",
+    "Lost metadata acknowledgement and failed claim-status update recover committed result",
+    "Expired claim permits new generation; stale CAS cannot overwrite it",
+    "API no longer advertises or forwards Idempotency-Key"
+  ],
+  "live_test_scope": "Prior two-process Couchbase/RustFS tests verified the unchanged storage claim mechanism. Automatic fingerprint revision verified by regression tests; live tests not repeated.",
+  "limitations": [
+    "Exact SQL text only, no semantic normalization",
+    "Frozen results until EXPORT_TTL_SECONDS; no force-refresh option",
+    "Failed/uncertain creation is not re-executed in the same scope before expiry",
+    "Paging/indexing unchanged"
+  ],
+  "git": "Uncommitted; existing staging preserved"
+}

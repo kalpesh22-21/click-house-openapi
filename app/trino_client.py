@@ -11,7 +11,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from contextlib import suppress
+from contextlib import suppress, contextmanager
 from typing import Any, NamedTuple
 
 import sqlglot
@@ -686,53 +686,7 @@ def execute_query(
     except QueryValidationError:
         raise
     except Exception as exc:
-        # Do not echo connector errors: they can contain SQL, identities and credentials.
-        # The server log deliberately carries only sanitized fields — our error
-        # code, the exception/coordinator failure CLASS, and the coordinator
-        # query_id for ledger correlation — never the connector message, SQL
-        # text, identity claims, or row data.
-        from trino.exceptions import (
-            TrinoAuthError,
-            TrinoDataError,
-            TrinoQueryError,
-            TrinoUserError,
-        )
-
-        if isinstance(exc, TrinoDataError):
-            logger.error("trino result decoding failed: code=TRINO_QUERY_ERROR failure_class=TrinoDataError")
-            raise ClickHouseQueryError(
-                "The Trino client cannot decode a result value. Use supported result types or ask the operator to check client compatibility.",
-                "TRINO_QUERY_ERROR",
-            ) from exc
-
-        if isinstance(exc, TrinoQueryError) and (
-            isinstance(exc, TrinoUserError) or exc.error_type == "INSUFFICIENT_RESOURCES"
-        ):
-            logger.error(
-                "trino query rejected by coordinator: code=%s failure_class=%s "
-                "trino_error=%s query_id=%s",
-                "TRINO_QUERY_ERROR",
-                type(exc).__name__,
-                exc.error_name,
-                exc.query_id,
-            )
-            # Return only an allowlisted error name and authored hint. Raw
-            # coordinator text may contain private identifiers or row values;
-            # query_id stays log-side only.
-            raise ClickHouseQueryError(
-                rewrite_trino_error(exc),
-                "TRINO_QUERY_ERROR",
-            ) from exc
-        logger.error(
-            "trino query execution failed: code=%s failure_class=%s",
-            "TRINO_UNAVAILABLE",
-            type(exc).__name__,
-        )
-        raise ClickHouseUnavailableError(
-            "Trino connector authentication failed; ask the operator to check credentials."
-            if isinstance(exc, TrinoAuthError) else "Trino query execution failed.",
-            "TRINO_UNAVAILABLE"
-        ) from exc
+        _raise_execution_error(exc)
 
 
 def ping() -> bool:
@@ -750,3 +704,108 @@ def ping() -> bool:
         return False
     finally:
         _close(cursor, conn)
+
+
+def _raise_execution_error(exc: Exception) -> None:
+    # Do not echo connector errors: they can contain SQL, identities and credentials.
+    # The server log deliberately carries only sanitized fields — our error
+    # code, the exception/coordinator failure CLASS, and the coordinator
+    # query_id for ledger correlation — never the connector message, SQL
+    # text, identity claims, or row data.
+    from trino.exceptions import (
+        TrinoAuthError,
+        TrinoDataError,
+        TrinoQueryError,
+        TrinoUserError,
+    )
+
+    if isinstance(exc, TrinoDataError):
+        logger.error("trino result decoding failed: code=TRINO_QUERY_ERROR failure_class=TrinoDataError")
+        raise ClickHouseQueryError(
+            "The Trino client cannot decode a result value. Use supported result types or ask the operator to check client compatibility.",
+            "TRINO_QUERY_ERROR",
+        ) from exc
+
+    if isinstance(exc, TrinoQueryError) and (
+        isinstance(exc, TrinoUserError) or exc.error_type == "INSUFFICIENT_RESOURCES"
+    ):
+        logger.error(
+            "trino query rejected by coordinator: code=%s failure_class=%s "
+            "trino_error=%s query_id=%s",
+            "TRINO_QUERY_ERROR",
+            type(exc).__name__,
+            exc.error_name,
+            exc.query_id,
+        )
+        # Return only an allowlisted error name and authored hint. Raw
+        # coordinator text may contain private identifiers or row values;
+        # query_id stays log-side only.
+        raise ClickHouseQueryError(
+            rewrite_trino_error(exc),
+            "TRINO_QUERY_ERROR",
+        ) from exc
+    logger.error(
+        "trino query execution failed: code=%s failure_class=%s",
+        "TRINO_UNAVAILABLE",
+        type(exc).__name__,
+    )
+    raise ClickHouseUnavailableError(
+        "Trino connector authentication failed; ask the operator to check credentials."
+        if isinstance(exc, TrinoAuthError) else "Trino query execution failed.",
+        "TRINO_UNAVAILABLE"
+    ) from exc
+
+
+class TrinoRowsStream:
+    """Bounded-batch export stream; closing also cancels unfinished queries."""
+
+    def __init__(self, sql: str, settings: Settings):
+        self.sql = sql
+        self.settings = settings.model_copy(update={
+            "max_execution_time": settings.export_max_execution_time,
+            "max_result_rows": settings.export_total_max_rows + 1,
+            "max_result_bytes": settings.export_total_max_bytes,
+        })
+        self.conn = self.cursor = None
+
+    def __enter__(self):
+        settings = self.settings
+        if not settings.trino_security_ready:
+            raise QueryValidationError("Trino source security is not configured.", "TRINO_SECURITY_NOT_CONFIGURED")
+        identity = request_identity(settings)
+        physical = rewrite_query(self.sql, settings)
+        record_physical(physical)
+        catalog = resolve_mysql_shard(identity[1], settings) if _uses_source(self.sql, "mysql") else None
+        if uses_clickhouse_sources(self.sql):
+            from app.employee_access import ensure_employee_access_fresh
+            ensure_employee_access_fresh(settings)
+        try:
+            self.conn = _connect(settings, "|".join(identity), mysql_catalog=catalog)
+            self.cursor = self.conn.cursor()
+            self.cursor.execute(physical)
+            self.column_names = [col[0] for col in self.cursor.description]
+            self.column_type_names = [str(col[1]) for col in self.cursor.description]
+            return self
+        except Exception as exc:
+            self.__exit__(None, None, None)
+            _raise_execution_error(exc)
+
+    def __iter__(self):
+        try:
+            while batch := self.cursor.fetchmany(1000):
+                for row in batch:
+                    yield list(row)
+        except Exception as exc:
+            _raise_execution_error(exc)
+
+    def __exit__(self, *exc_info):
+        record_query_id(getattr(self.cursor, "query_id", None))
+        _close(self.cursor, self.conn)
+
+
+@contextmanager
+def execute_query_rows_stream(sql: str, settings: Settings):
+    from app.trino_diagnostics import trace_query
+    with trace_query(sql, settings):
+        with TrinoRowsStream(sql, settings) as stream:
+            yield stream

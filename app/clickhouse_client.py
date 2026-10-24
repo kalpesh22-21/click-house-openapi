@@ -209,6 +209,31 @@ def readonly_settings(settings: Settings) -> dict[str, Any]:
     return ch_settings
 
 
+def export_settings(settings: Settings) -> dict[str, Any]:
+    """ClickHouse session settings for the answer-snapshot export streaming query.
+
+    Uses export time/result budgets and retains the existing scan, read-only,
+    FINAL and consistency settings. Result overflow always throws. The extra
+    row permits local budget detection when the backend streams that boundary;
+    backend block limits can still reject earlier. No silent truncation.
+    """
+    ch_settings: dict[str, Any] = {
+        "readonly": settings.clickhouse_readonly,
+        "max_execution_time": settings.export_max_execution_time,
+        "max_result_rows": settings.export_total_max_rows + 1,
+        "max_result_bytes": settings.export_total_max_bytes,
+        "result_overflow_mode": "throw",
+        "max_rows_to_read": settings.max_rows_to_read,
+        "prefer_column_name_to_alias": 0,
+    }
+    if settings.clickhouse_select_final:
+        ch_settings["final"] = 1
+    if settings.scratch_cluster:
+        ch_settings["select_sequential_consistency"] = 1
+    return ch_settings
+
+
+
 def tenant_settings(settings: Settings) -> dict[str, Any]:
     """Build per-tenant ClickHouse custom settings from the current principal.
 
@@ -451,6 +476,151 @@ def execute_query(
     column_names: list[str] = result.column_names  # type: ignore[assignment]
     rows: list[list[Any]] = [list(row) for row in result.result_rows]
     return column_names, rows
+
+
+def _query_error_http(exc: DatabaseError, settings: Settings) -> HTTPException:
+    """Translate a query-level ClickHouse error to HTTPException(400).
+
+    Mirrors execute_query's mapping exactly — an LLM/agent caller gets the same
+    rewritten, redacted, self-correctable message on the streamed export path as
+    on the buffered /query path. Shared by the stream's call-time and
+    mid-iteration failure points (a ClickHouse overflow/error inside a Native
+    stream surfaces as StreamFailureError — a DatabaseError — during iteration,
+    not at the initial call).
+    """
+    logger.warning(
+        "ClickHouse export query error failure_class=%s", type(exc).__name__,
+    )
+    raw_msg = str(exc)
+    safe_msg = _redact_connection_details(public_clickhouse_error(raw_msg), settings)
+    return HTTPException(
+        status_code=400,
+        detail={
+            "error": f"ClickHouse query error: {safe_msg}",
+            "code": "CLICKHOUSE_QUERY_ERROR",
+        },
+    )
+
+
+def _unavailable_http(exc: ClickHouseError, settings: Settings) -> HTTPException:
+    """Translate a connectivity/server-level ClickHouse error to HTTPException(502).
+
+    Mirrors execute_query's mapping exactly (see _query_error_http).
+    """
+    logger.error(
+        "ClickHouse export connectivity error failure_class=%s", type(exc).__name__,
+    )
+    return HTTPException(
+        status_code=502,
+        detail={
+            "error": "ClickHouse is temporarily unavailable. Please try again later.",
+            "code": "CLICKHOUSE_UNAVAILABLE",
+        },
+    )
+
+
+class QueryRowsStream:
+    """Context-managed row stream over a ClickHouse result, with column metadata.
+
+    Wraps the public row stream and its source metadata without buffering the
+    full result. The HTTP source closes on normal completion and on abort.
+
+    Iteration raises the SAME HTTPException(400)/HTTPException(502) shapes
+    execute_query raises: a ClickHouse failure embedded in the Native stream
+    (e.g. a ``result_overflow_mode='throw'`` overflow) surfaces mid-iteration as
+    a DatabaseError and is translated identically.
+    """
+
+    def __init__(self, stream: Any, settings: Settings) -> None:
+        self._source_stream = stream
+        query_result = stream.source
+        self._settings = settings
+        self.column_names: list[str] = list(query_result.column_names)
+        self.column_type_names: list[str] = [
+            t.name for t in query_result.column_types
+        ]
+        self._stream_cm: Any = None
+
+    def __enter__(self) -> "QueryRowsStream":
+        self._stream_cm = self._source_stream
+        self._stream_cm.__enter__()
+        return self
+
+    def __exit__(self, *exc_info: Any) -> Any:
+        stream_cm, self._stream_cm = self._stream_cm, None
+        return stream_cm.__exit__(*exc_info)
+
+    def __iter__(self):
+        if self._stream_cm is None:
+            raise RuntimeError(
+                "QueryRowsStream must be entered (with-block) before iteration."
+            )
+        try:
+            for row in self._stream_cm:
+                yield list(row)
+        except DatabaseError as exc:
+            raise _query_error_http(exc, self._settings) from exc
+        except ClickHouseError as exc:
+            raise _unavailable_http(exc, self._settings) from exc
+
+
+def execute_query_rows_stream(
+    sql: str,
+    settings: Settings | None = None,
+    parameters: dict[str, Any] | None = None,
+    *,
+    caps: dict[str, Any],
+) -> QueryRowsStream:
+    """Execute *sql* with *caps* as the ClickHouse settings, streaming rows back.
+
+    The streaming twin of :func:`execute_query` for the answer-snapshot export
+    path: instead of materializing the result set it returns a
+    :class:`QueryRowsStream` (column metadata + lazy row iteration).
+
+    *caps* — the full ClickHouse settings dict to run under (e.g.
+    ``export_settings(settings)``): same shape/contract as
+    ``readonly_settings()``.  The tenant/CHProxy transport logic is IDENTICAL to
+    execute_query:
+
+      - the per-tenant RLS identity rides the SQL body's SETTINGS clause as
+        ``rls_*`` binds under ``CLICKHOUSE_RLS_VIA_SQL_SETTINGS``;
+      - export caps remain on the settings channel, matching execute_query;
+      - on the legacy direct-ClickHouse path (RLS flag off) tenant and caps
+        merge onto ``settings=`` — customs first, caps last, so a misconfigured
+        tenant mapping can never loosen 'readonly' or the caps;
+      - literal '%' escaping for client-side printf binding applies exactly as
+        in execute_query.
+
+    Uses the public query_rows_stream API and its source result metadata.
+    """
+    if settings is None:
+        settings = get_settings()
+
+    client = get_client()
+    tenant = tenant_settings(settings)
+    if settings.clickhouse_rls_via_sql_settings:
+        sql, parameters = _append_tenant_settings_clause(sql, parameters, tenant)
+        ch_settings = caps
+    else:
+        ch_settings = {**tenant, **caps}
+
+    # Same printf-substitution hazard as execute_query: a non-empty parameters
+    # dict makes clickhouse-connect run `query % params`, so literal '%' must be
+    # doubled first (gated on truthiness — an unparameterized query goes out
+    # verbatim and must NOT be escaped).
+    if parameters:
+        sql = _escape_literal_percent(sql, parameters)
+
+    try:
+        stream = client.query_rows_stream(
+            query=sql, parameters=parameters, settings=ch_settings,
+        )
+    except DatabaseError as exc:
+        raise _query_error_http(exc, settings) from exc
+    except ClickHouseError as exc:
+        raise _unavailable_http(exc, settings) from exc
+
+    return QueryRowsStream(stream, settings)
 
 
 def ping(settings: Settings | None = None) -> bool:

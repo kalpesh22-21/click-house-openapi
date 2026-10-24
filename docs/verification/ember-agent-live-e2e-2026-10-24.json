@@ -1,0 +1,150 @@
+{
+  "completed_at": "2026-10-24T19:24:57.610458+00:00",
+  "model": "accounts/fireworks/models/deepseek-v4p1-flash",
+  "provider": "Fireworks",
+  "topology": "Real Data Agent /turn -> real MCP -> synthetic MySQL/Trino and ClickHouse; resulting answer SQL -> mock Ember HTTP BFF -> actual agent snapshot proxy -> actual clickhouse-api -> Couchbase. Snapshot contract suite repeated against both Couchbase and S3-compatible RustFS.",
+  "agent_questions": [
+    {
+      "case": "mysql_employees",
+      "question": "List employee codes and employee names for all accessible employees. Include all employee statuses. Sort by employee code. Show a table.",
+      "status": "done",
+      "seconds": 24.61,
+      "tool_calls": 7,
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "answer_sql": "SELECT employee_code AS `Employee Code`, employee_name AS `Employee Name` FROM dbpcm_datawarehouse.employee ORDER BY employee_code",
+      "assistant_text": "All accessible employees are listed below, across every employee status, sorted by employee code. This reflects the employee records you're authorized to access.",
+      "snapshot_row_count": 24,
+      "correct_against_fixture": true,
+      "download_urls_status": 200
+    },
+    {
+      "case": "payroll_total",
+      "question": "Using payroll only, what is the total earnings amount across all accessible payroll records? Use register_type EARN, include all employee statuses and all dates. Show the total in a table.",
+      "status": "done",
+      "seconds": 18.01,
+      "tool_calls": 7,
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "answer_sql": "SELECT sum(amount) AS `Total Earnings Amount` FROM dbpcm_datawarehouse.payroll WHERE register_type = 'EARN'",
+      "assistant_text": "Total earnings across all accessible payroll records (earnings-register rows, all employee statuses, all dates) is $1,036,800.00. This covers only the payroll register records you are authorized to access; it excludes in-progress earnings not yet finalized into payroll.",
+      "snapshot_row_count": 1,
+      "correct_against_fixture": true,
+      "download_urls_status": 200
+    },
+    {
+      "case": "mixed_employee_pay",
+      "question": "Join employee to payroll and show employee code, employee name and total earnings for every accessible employee with payroll earnings. Use register_type EARN, all dates and all employee statuses. Sort by employee code. Show a table.",
+      "status": "done",
+      "seconds": 56.08,
+      "tool_calls": 13,
+      "review": {
+        "status": "approved",
+        "attempts": 0,
+        "site": "exit_table"
+      },
+      "answer_sql": "SELECT e.employee_code AS `Employee Code`, e.employee_name AS `Employee Name`, sum(p.amount) AS `Total Earnings` FROM dbpcm_datawarehouse.employee e JOIN dbpcm_datawarehouse.payroll p ON e.employee_code = p.employee_code WHERE p.register_type = 'EARN' GROUP BY e.employee_code, e.employee_name ORDER BY e.employee_code LIMIT 24",
+      "assistant_text": "Total payroll earnings per employee (earnings-register rows, all dates and statuses), sorted by employee code. 24 employees have recorded earnings; the list covers the employee records you're authorized to access. The displayed table is paginated \u2014 the remaining rows (E021\u2013E024) are available on the next page.",
+      "snapshot_row_count": 24,
+      "correct_against_fixture": true,
+      "download_urls_status": 200
+    }
+  ],
+  "mean_tool_calls": 9.0,
+  "snapshot_suites": [
+    {
+      "store": "couchbase",
+      "passed": [
+        "lazy_create_and_all_pages_one_query_24_rows",
+        "refresh_of_creates_once_and_retry_reuses_replacement",
+        "five_csv_parts_24_rows_match_paged_data_without_query",
+        "bff_ownership_403_and_direct_agent_cross_session_user_404",
+        "scope_recovery_one_query_replacement_retry_no_duplicate_and_restart_offset_zero",
+        "scope_recovery_on_download_urls_and_csv_part_returns_json_then_fresh_download",
+        "scope_reduction_denies_original_query_before_dispatch_and_clears_old_rows",
+        "native_clickhouse_and_mixed_trino_24_employees_earnings_match",
+        "eight_concurrent_agent_requests_one_database_execution",
+        "expiry_410_on_page_presign_and_stream",
+        "expired_but_retained_snapshot_can_be_explicitly_refreshed"
+      ],
+      "compatibility_findings": [
+        "Existing SQL-only refresh reuses old snapshot; refresh_of is required",
+        "Existing Ember error-only handling does not adopt SNAPSHOT_REPLACED; must clear rows and save replacement"
+      ],
+      "burst_statuses": [
+        201,
+        409,
+        409,
+        429,
+        409,
+        429,
+        429,
+        429
+      ],
+      "execution_counts": {
+        "query_starts": 9,
+        "native_starts": 1,
+        "trino_starts": 8
+      },
+      "earnings_sum": 1036800.0,
+      "rows": 24
+    },
+    {
+      "store": "s3",
+      "passed": [
+        "lazy_create_and_all_pages_one_query_24_rows",
+        "refresh_of_creates_once_and_retry_reuses_replacement",
+        "five_csv_parts_24_rows_match_paged_data_without_query",
+        "s3_fallback_proxy_stream_matches_first_part",
+        "bff_ownership_403_and_direct_agent_cross_session_user_404",
+        "scope_recovery_one_query_replacement_retry_no_duplicate_and_restart_offset_zero",
+        "scope_recovery_on_download_urls_and_csv_part_returns_json_then_fresh_download",
+        "scope_reduction_denies_original_query_before_dispatch_and_clears_old_rows",
+        "native_clickhouse_and_mixed_trino_24_employees_earnings_match",
+        "eight_concurrent_agent_requests_one_database_execution",
+        "expiry_410_on_page_presign_and_stream",
+        "expired_but_retained_snapshot_can_be_explicitly_refreshed"
+      ],
+      "compatibility_findings": [
+        "Existing SQL-only refresh reuses old snapshot; refresh_of is required",
+        "Existing Ember error-only handling does not adopt SNAPSHOT_REPLACED; must clear rows and save replacement"
+      ],
+      "burst_statuses": [
+        201,
+        409,
+        409,
+        409,
+        429,
+        429,
+        429,
+        429
+      ],
+      "execution_counts": {
+        "query_starts": 9,
+        "native_starts": 1,
+        "trino_starts": 8
+      },
+      "earnings_sum": 1036800.0,
+      "rows": 24
+    }
+  ],
+  "snapshot_checks_passed": 23,
+  "regression": {
+    "backend": "2517 passed, 87 skipped, 1 xfailed",
+    "agent_proxy_app_catalog": "64 passed"
+  },
+  "limits": [
+    "Actual Ember PHP/React code not exercised",
+    "Agent and mock Ember conversation state use in-memory stores",
+    "Blueprint/knowledge retrieval disabled in this isolated fixture",
+    "Scope changes injected through fixture permission adapter; real JWT/catalog signing and verification remain enabled",
+    "Backend release tests used committed accrual catalog in temporary copy; private catalog excluded from push"
+  ],
+  "outcome": "All three live model questions and all 23 snapshot scenarios passed. Existing Ember still needs refresh_of and SNAPSHOT_REPLACED/reset_table handling."
+}

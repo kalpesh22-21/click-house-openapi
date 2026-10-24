@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-24",
+  "change": "Owned snapshot scope-change detection and one-shot agent recovery",
+  "behavior": [
+    "Foreign caller/session/query identity remains 404",
+    "Same owner with changed schema/column grants gets 409 SNAPSHOT_SCOPE_CHANGED before rows or presigned URLs",
+    "Backend retains original SQL in private metadata and revalidates it through normal query guards on owned POST /snapshots/{id}/rebuild",
+    "Agent forces catalog refresh once and attempts one rebuild",
+    "Successful recovery returns 409 SNAPSHOT_REPLACED, replacement metadata and reset_table=true; no automatic old-offset replay",
+    "Rebuild errors retain backend status/code and Retry-After with reset_table=true"
+  ],
+  "validation": {
+    "backend_release_copy": "2517 passed, 87 skipped, 1 xfailed",
+    "agent_proxy_app_catalog": "64 passed",
+    "agent_proxy_lint": "passed",
+    "scope": "Fake stores/query streams and mock HTTP transport; no new live infrastructure run. Private accrual YAML excluded only in release copy."
+  },
+  "consumer_work_remaining": "Ember must consume SNAPSHOT_REPLACED, clear old rows, persist new reference and reload at offset zero. Clear rows on reset_table even when recovery fails.",
+  "limitations": [
+    "No detection of upstream permission changes until session grants reflect them",
+    "Issued S3 links retain signed lifetime",
+    "Older ownership-layout snapshots need recreation",
+    "Query identity changes still return 404; only grants changes are automatically recovered"
+  ],
+  "git": "No commit or push; private accrual content and existing index preserved"
+}

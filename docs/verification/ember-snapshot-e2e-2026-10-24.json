@@ -1,0 +1,122 @@
+{
+  "date": "2026-10-24",
+  "completed_at": "2026-10-24T19:05:02.433263+00:00",
+  "topology": "Mock Ember BFF :18893 -> actual Data Agent app :18892 -> actual clickhouse-api :18891 -> MySQL/Trino or native ClickHouse -> Couchbase or RustFS S3",
+  "real_components": [
+    "Three separate OS processes over TCP HTTP",
+    "JWT signature verification with synthetic fixture key and JWKS server",
+    "Session catalog initialization, signing, verification and forced refresh",
+    "Trino over synthetic MySQL employee data",
+    "Native ClickHouse payroll and mixed-source Trino join",
+    "Couchbase snapshot storage",
+    "S3-compatible RustFS snapshot storage and direct presigned downloads"
+  ],
+  "mock_components": [
+    "Ember PHP BFF replaced by Python HTTP mock with table state",
+    "Ember conversation and agent session stores in memory",
+    "No LLM/MCP tool execution required for these REST UI routes",
+    "Permission change adapter controlled by test fixture; not an upstream production permission event"
+  ],
+  "results": [
+    {
+      "store": "couchbase",
+      "passed": [
+        "lazy_create_and_all_pages_one_query_24_rows",
+        "refresh_of_creates_once_and_retry_reuses_replacement",
+        "five_csv_parts_24_rows_match_paged_data_without_query",
+        "bff_ownership_403_and_direct_agent_cross_session_user_404",
+        "scope_recovery_one_query_replacement_retry_no_duplicate_and_restart_offset_zero",
+        "scope_recovery_on_download_urls_and_csv_part_returns_json_then_fresh_download",
+        "scope_reduction_denies_original_query_before_dispatch_and_clears_old_rows",
+        "native_clickhouse_and_mixed_trino_24_employees_earnings_match",
+        "eight_concurrent_agent_requests_one_database_execution",
+        "expiry_410_on_page_presign_and_stream",
+        "expired_but_retained_snapshot_can_be_explicitly_refreshed"
+      ],
+      "compatibility_findings": [
+        "Existing SQL-only refresh reuses old snapshot; refresh_of is required",
+        "Existing Ember error-only handling does not adopt SNAPSHOT_REPLACED; must clear rows and save replacement"
+      ],
+      "burst_statuses": [
+        201,
+        409,
+        409,
+        409,
+        429,
+        429,
+        429,
+        429
+      ],
+      "execution_counts": {
+        "query_starts": 9,
+        "native_starts": 1,
+        "trino_starts": 8
+      },
+      "earnings_sum": 1036800.0,
+      "rows": 24
+    },
+    {
+      "store": "s3",
+      "passed": [
+        "lazy_create_and_all_pages_one_query_24_rows",
+        "refresh_of_creates_once_and_retry_reuses_replacement",
+        "five_csv_parts_24_rows_match_paged_data_without_query",
+        "s3_fallback_proxy_stream_matches_first_part",
+        "bff_ownership_403_and_direct_agent_cross_session_user_404",
+        "scope_recovery_one_query_replacement_retry_no_duplicate_and_restart_offset_zero",
+        "scope_recovery_on_download_urls_and_csv_part_returns_json_then_fresh_download",
+        "scope_reduction_denies_original_query_before_dispatch_and_clears_old_rows",
+        "native_clickhouse_and_mixed_trino_24_employees_earnings_match",
+        "eight_concurrent_agent_requests_one_database_execution",
+        "expiry_410_on_page_presign_and_stream",
+        "expired_but_retained_snapshot_can_be_explicitly_refreshed"
+      ],
+      "compatibility_findings": [
+        "Existing SQL-only refresh reuses old snapshot; refresh_of is required",
+        "Existing Ember error-only handling does not adopt SNAPSHOT_REPLACED; must clear rows and save replacement"
+      ],
+      "burst_statuses": [
+        201,
+        409,
+        409,
+        429,
+        409,
+        429,
+        429,
+        429
+      ],
+      "execution_counts": {
+        "query_starts": 9,
+        "native_starts": 1,
+        "trino_starts": 8
+      },
+      "earnings_sum": 1036800.0,
+      "rows": 24
+    }
+  ],
+  "passing_scenarios": 23,
+  "independent_truth": {
+    "source": "Direct ClickHouse query filtered to synthetic CLIENT_A, proc_center pc, E001 through E024 and EARN",
+    "employees": 24,
+    "earnings": 1036800
+  },
+  "query_count_definition": "Result-stream entry calls, excluding catalog/schema metadata probes. Each complete suite dispatched 9 result queries: 8 through Trino, 1 native. The eight-request concurrency case dispatched exactly 1 result query.",
+  "compatibility_findings": [
+    "Current Ember SQL-only refresh reuses old snapshot; add refresh_of",
+    "Generic error handling does not apply SNAPSHOT_REPLACED; preserve replacement metadata/reset_table and reset saved/UI state"
+  ],
+  "limitations": [
+    "Actual Ember PHP/React MR not available or executed",
+    "AWS S3 not exercised; local RustFS conditional writes/presigns exercised",
+    "No real browser rendering or download popup handling",
+    "No conversation-store CAS or multi-tab race test",
+    "No deployment proxy timeout test",
+    "Scope changes must already reach verified session grants; existing S3 links remain valid until signed expiry"
+  ],
+  "fixture_setup_note": "Initial native access seed included 100 employee codes while MySQL fixture scope had 24; restricted the synthetic row-access seed to E001-E024 and reran both complete suites.",
+  "source_artifacts": {
+    "mock_ember.py": "ec996b69363e93b03df8f1390f153e063d5ae4b63cf2d2ec247c94799ea66eb2",
+    "scenarios.py": "d34feff7f5ea8025972bc16611e4db39eec6b57300051f4eeec938c9c4d857d9"
+  },
+  "production_changes_during_test": "None; documentation and test evidence only. Private accrual YAML and existing staging untouched."
+}
