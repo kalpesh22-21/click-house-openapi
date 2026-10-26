@@ -20,12 +20,12 @@ AND EXISTS (SELECT 1 FROM {{SHARD_CATALOG}}.dbonline.on_eeaccess a
  WHERE a.clientcode = e.clientcode AND a.eecode = e.employee_code
  AND a.username = SPLIT_PART(CURRENT_USER, '|', 3))
 """
-ENTRY = {"database": "dbpcm_warehouse", "table": "accrual_events", "source": "mysql"}
+ENTRY = {"database": "dbpcm_warehouse", "table": "timeoff_requests", "source": "mysql"}
 
 
 @pytest.fixture
 def source_settings(tmp_path):
-    (tmp_path / "accrual_events.txt").write_text(MYSQL_SQL)
+    (tmp_path / "timeoff_requests.txt").write_text(MYSQL_SQL)
     return Settings(_env_file=None, employee_access_enabled=False,
                     trino_mysql_sources_dir=str(tmp_path))
 
@@ -57,7 +57,7 @@ def test_rendering_never_reuses_another_user(source_settings):
     "SELECT * FROM {{UNKNOWN}}.dbonline.actual_events", "SELECT * FROM actual_events",
     "SELECT * FROM TABLE(other.system.query(query => 'SELECT 1'))"])
 def test_invalid_or_missing_sources_do_not_fall_back(source_settings, definition):
-    path = Path(source_settings.trino_mysql_sources_dir) / "accrual_events.txt"
+    path = Path(source_settings.trino_mysql_sources_dir) / "timeoff_requests.txt"
     if definition is None:
         path.unlink()
     else:
@@ -75,7 +75,7 @@ def test_labor_spelling_uses_supplied_labour_file(source_settings):
 
 
 def test_lowercase_identifier_placeholders(source_settings):
-    path = Path(source_settings.trino_mysql_sources_dir) / "accrual_events.txt"
+    path = Path(source_settings.trino_mysql_sources_dir) / "timeoff_requests.txt"
     path.write_text("SELECT * FROM {{shard}}.{{database}}.actual_events WHERE clientcode = {{CLIENT_CODE}}")
     sql = mysql_source(ENTRY, "shard_a", ("pc", "A", "alice"), source_settings).sql(dialect="trino")
     assert '"shard_a"."dbonline".actual_events' in sql and "'A'" in sql
@@ -112,9 +112,17 @@ def test_unsupported_mysql_catalog_entries_are_archived():
     from app.semantic_catalog.loader import load_semantic_catalog
     catalog = load_semantic_catalog()
     assert {entry["table"] for entry in catalog.values() if entry.get("source") == "mysql"} == {
-        "employee", "department", "accrual_events", "accrual_balances", "expense", "labor_allocation",
+        "employee", "department", "timeoff_requests", "timeoff_balances", "expense", "labor_allocation",
     }
     archive = Path(__file__).parents[1] / "app/semantic_catalog/archive"
     archived = load_semantic_catalog(archive)
     assert len(archived) == 6
     assert not (catalog.keys() & archived.keys())
+
+
+def test_public_timeoff_name_accepts_existing_private_template_filename(source_settings):
+    directory = Path(source_settings.trino_mysql_sources_dir)
+    (directory / 'timeoff_requests.txt').rename(directory / 'accrual_events.txt')
+    sql = mysql_source(ENTRY, 'shard_a', ('pc', 'A', 'alice'), source_settings).sql(dialect='trino')
+    assert 'actual_events' in sql
+    assert "'alice'" in sql

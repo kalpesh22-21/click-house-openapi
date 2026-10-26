@@ -2,6 +2,8 @@
 
 Unknown types are not grounds for guessing aggregate defaults or precision.
 """
+import re
+
 from sqlglot import exp
 from app.errors import QueryValidationError
 
@@ -86,8 +88,16 @@ def normalize_constructs(tree):
                 # offset=1 prevents dialect index rebasing: ROW uses 1-based fields.
                 node.replace(exp.Bracket(this=base.copy(), expressions=[position.copy()], offset=1))
         elif isinstance(node, (exp.Add, exp.Sub)) and isinstance(node.this, exp.CurrentDate):
-            amount = node.expression
-            if not isinstance(amount, exp.Literal) or amount.is_string or not amount.this.isdigit():
+            amount = node.expression.unnest()
+            if isinstance(amount, exp.Interval):
+                literal = amount.this
+                if (amount.text("unit").upper() != "DAY" or not isinstance(literal, exp.Literal)
+                        or not re.fullmatch(r"-?\d+", literal.this)):
+                    unsupported("Date offsets require an integer DAY interval in Trino conversion.")
+                amount = exp.convert(int(literal.this))
+            elif not (isinstance(amount, exp.Literal) and not amount.is_string and amount.this.isdigit()
+                      or isinstance(amount, exp.Neg) and isinstance(amount.this, exp.Literal)
+                      and not amount.this.is_string and amount.this.this.isdigit()):
                 unsupported("Date offsets must be integer day literals in Trino conversion.")
             if isinstance(node, exp.Sub):
                 amount = exp.Neg(this=amount.copy())

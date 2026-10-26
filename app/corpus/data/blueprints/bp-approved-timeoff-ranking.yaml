@@ -1,0 +1,50 @@
+id: bp-approved-timeoff-ranking
+intent: Rank employees by approved time-off request hours in a half-open requested-for-date period. Assume approved
+  requests were taken and disclose that assumption. Include all accessible request records, retain ties at the requested
+  rank, and offer a separate payroll-paid-hours check. Days are distinct requested calendar dates, not punch days.
+slots_summary: period, top_n
+status: validated
+drift_status: clean
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+uses:
+- dbpcm_warehouse.timeoff_requests.employee_code
+- dbpcm_warehouse.timeoff_requests.hours
+- dbpcm_warehouse.timeoff_requests.request_date
+- dbpcm_warehouse.timeoff_requests.status
+- dbpcm_warehouse.timeoff_requests.event_type
+slots:
+- name: period
+  type: period_range
+  temporal_type: date
+  required: true
+- name: top_n
+  type: positive_integer
+  required: true
+  min_value: 1
+  max_value: 100
+result_grain:
+- Employee Code
+sql_template: 'WITH totals AS (
+
+  SELECT employee_code, sum(hours) AS approved_hours, uniqExact(toDate(request_date)) AS requested_days
+
+  FROM dbpcm_warehouse.timeoff_requests
+
+  WHERE status = ''Approved'' AND event_type = ''Time Off Request''
+
+  AND request_date >= {period_start} AND request_date < {period_end}
+
+  GROUP BY employee_code
+
+  ), ranked AS (
+
+  SELECT employee_code, approved_hours, requested_days, dense_rank() OVER (ORDER BY approved_hours DESC) AS hours_rank
+  FROM totals
+
+  )
+
+  SELECT employee_code AS `Employee Code`, approved_hours AS `Approved Time-Off Hours`, requested_days AS `Requested
+  Days`, hours_rank AS `Rank`
+
+  FROM ranked WHERE hours_rank <= {top_n} ORDER BY hours_rank, employee_code'
+uses_rules: []

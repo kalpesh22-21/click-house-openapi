@@ -2,9 +2,9 @@ id: bp-payroll-summary
 intent: Payroll amount, source line count and distinct employee count by company, department or pay-date month.
   Required register_type enum and half-open pay-date period [start,end); select EARN for gross earnings. Optional
   type_code, employee status, department and employee. Earnings represent finalized total_earning after period close;
-  use total_earning for in-progress earnings and never add both for the same covered earnings. Preaggregate payroll per employee/month before LEFT JOIN;
-  unmatched employees retained unless employee filters supplied. Does not prove complete months or zero-fill missing
-  months; no implicit earnings filter.
+  use total_earning for in-progress earnings and never add both for the same covered earnings. Preaggregate payroll
+  per employee/month before LEFT JOIN; unmatched employees retained unless employee filters supplied. Does not prove
+  complete months or zero-fill missing months; no implicit earnings filter.
 slots_summary: group_by, register_type, period, type_code, employee_status, department, employee
 status: validated
 drift_status: clean
@@ -18,6 +18,7 @@ uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_status
 - dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.department.department_name
 slots:
 - name: group_by
   type: enum
@@ -64,8 +65,10 @@ slots:
 - name: department
   type: entity
   required: false
-  binds_to: dbpcm_warehouse.employee.department_name
+  binds_to: dbpcm_warehouse.department.department_name
   optional_pattern: 'TRUE'
+  description: Resolve department names/abbreviations against the directory; a known department may have no matching
+    employees.
 - name: employee
   type: entity
   required: false

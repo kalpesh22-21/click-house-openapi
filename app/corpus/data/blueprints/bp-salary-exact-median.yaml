@@ -1,8 +1,9 @@
 id: bp-salary-exact-median
-intent: Exact annual salary median (middle-pair mean), average, minimum, maximum and recorded-salary count by company,
-  department or current status. No approximation. Required salary_population chooses all recorded values including
-  zero, or positive salaries only. NULL salaries excluded; Does not compute arbitrary percentiles. Defaults to Active
-  + On Leave; employee_status selects another status or All to remove the filter.
+intent: Exact middle-pair median, mean, min, max and known-compensation count by company, department or status,
+  separately by pay type. salary_population selects recorded values (including zero) or positive values; NULLs excluded.
+  Salary uses annual_salary; Hourly uses hourly_salary and estimated annual compensation = hourly_salary * 2080
+  (40 hours/week, 52 weeks/year; excludes overtime). Keep pay types separate. Defaults to Active + On Leave; employee_status
+  overrides or All removes the filter.
 slots_summary: group_by, salary_population, employee_status, department, employee
 status: validated
 drift_status: clean
@@ -12,6 +13,9 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.employee_pay_type
+- dbpcm_warehouse.employee.hourly_salary
+- dbpcm_warehouse.department.department_name
 slots:
 - name: group_by
   type: enum
@@ -26,6 +30,7 @@ slots:
   enum_values:
   - recorded
   - positive
+  description: Use recorded (including zero) unless the user explicitly requests positive/nonzero compensation.
 - name: employee_status
   description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
   type: enum
@@ -46,8 +51,10 @@ slots:
 - name: department
   type: entity
   required: false
-  binds_to: dbpcm_warehouse.employee.department_name
+  binds_to: dbpcm_warehouse.department.department_name
   optional_pattern: 'TRUE'
+  description: Resolve department names/abbreviations against the directory; a known department may have no matching
+    employees.
 - name: employee
   type: entity
   required: false
@@ -55,11 +62,27 @@ slots:
   optional_pattern: 'TRUE'
 result_grain:
 - Group
-sql_template: "SELECT CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'status' THEN e.employee_status\
-  \ ELSE 'Company' END AS `Group`, count(e.annual_salary) AS `Recorded Salary Count`,\n (quantileExactLow(0.5)(e.annual_salary)\
-  \ + quantileExactHigh(0.5)(e.annual_salary)) / 2 AS `Exact Median Salary`,\n avg(e.annual_salary) AS `Average\
-  \ Salary`, min(e.annual_salary) AS `Minimum Salary`, max(e.annual_salary) AS `Maximum Salary`\nFROM dbpcm_warehouse.employee\
-  \ e WHERE (e.employee_status = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department}\
-  \ AND e.employee_code = {employee}\n AND e.annual_salary IS NOT NULL AND ({salary_population} = 'recorded' OR\
-  \ e.annual_salary > 0)\nGROUP BY CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'status' THEN e.employee_status\
-  \ ELSE 'Company' END ORDER BY `Group`"
+- Pay Type
+sql_template: "SELECT e.employee_pay_type AS `Pay Type`, CASE WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated\
+  \ annual compensation (2080 hours)' WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown\
+  \ compensation basis' END AS `Compensation Basis`, CASE WHEN {group_by} = 'department' THEN e.department_name\
+  \ WHEN {group_by} = 'status' THEN e.employee_status ELSE 'Company' END AS `Group`, count((CASE WHEN e.employee_pay_type\
+  \ = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END))\
+  \ AS `Known Compensation Count`,\n (quantileExactLow(0.5)((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary\
+  \ WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) + quantileExactHigh(0.5)((CASE\
+  \ WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary\
+  \ * 2080 ELSE NULL END))) / 2 AS `Exact Median Annual Compensation`,\n avg((CASE WHEN e.employee_pay_type = 'Salary'\
+  \ THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Average\
+  \ Annual Compensation`, min((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type\
+  \ = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Minimum Annual Compensation`, max((CASE WHEN e.employee_pay_type\
+  \ = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END))\
+  \ AS `Maximum Annual Compensation`, avg(CASE WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary ELSE NULL\
+  \ END) AS `Average Hourly Rate`\nFROM dbpcm_warehouse.employee e WHERE (e.employee_status = {employee_status}\
+  \ OR {employee_status} = 'All') AND e.department_name = {department} AND e.employee_code = {employee}\n AND (CASE\
+  \ WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary\
+  \ * 2080 ELSE NULL END) IS NOT NULL AND ({salary_population} = 'recorded' OR (CASE WHEN e.employee_pay_type =\
+  \ 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)\
+  \ > 0)\nGROUP BY e.employee_pay_type, CASE WHEN {group_by} = 'department' THEN e.department_name WHEN {group_by}\
+  \ = 'status' THEN e.employee_status ELSE 'Company' END ORDER BY `Group`"
+uses_rules:
+- compensation_by_pay_type

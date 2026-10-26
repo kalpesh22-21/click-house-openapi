@@ -1,0 +1,9 @@
+id: kn-employment-date-transitions
+title: Termination and rehire dates can reflect employment setup changes
+doc_id: hr-reporting-employee
+status: validated
+text: An employee may have both termination_date and most_recent_hire_date because they were offboarded and onboarded
+  for a different tax setup, country or position. These are possible explanations, not facts established by the
+  dates. Do not infer the reason, current termination status or a rehire exclusion from date ordering. Use employee_status
+  for current-status counts and termination_date for requested termination periods; add exclusions only when explicitly
+  requested.

@@ -1,5 +1,5 @@
 database: dbpcm_warehouse
-table: accrual_events
+table: timeoff_requests
 source: mysql
 description: >
   Employee accrual-event log containing all types of accrual events, not only PTO or
@@ -7,7 +7,7 @@ description: >
   accrual activity across workflow statuses and leave categories. Available types vary
   by client and period; discover event_type, status, and earn_code/earn_description
   for the requested scope. Event-level records, not an accrual-balance table.
-  Approved request hours do not establish actual leave taken or posted balance usage.
+  For time-off-taken questions, assume approved time-off requests were taken; disclose this assumption. These hours are not verified payroll-paid hours or posted balance usage.
 
 grain: []
 grain_verifiable: false   # no exposed unique key — the D43 COUNT(*)==COUNT(DISTINCT grain) conformance probe does not apply
@@ -52,14 +52,19 @@ columns:
   hours:
     type: Nullable(Decimal(18, 6))
     unit: hours
-    description: Hours attached to the accrual event. Filter status and event_type for approved request hours; approval alone does not establish actual leave taken or posted balance usage.
+    description: Hours attached to the accrual event. Filter status and event_type for approved request hours; treat approved time-off requests as assumed taken, disclose the assumption, and distinguish payroll-paid hours and posted balances.
 
   earn_code:
     type: Nullable(String)
     client_defined: true
     description_col: earn_description
-    description: Accrual earning code. CLIENT-DEFINED and drifts over time — resolve concepts to codes via resolveValues(earn_code, <concept>), do not hardcode. Interpret with earn_description and the requested period.
-
+    description: >
+      Accrual earning code. CLIENT-DEFINED and drifts over time — resolve concepts to codes
+      via resolveValues(earn_code, <concept>), do not hardcode. Interpret with earn_description
+      and the requested period. Context active_accrual_earnings lists distinct earning codes
+      and descriptions from active accrual assignments across the whole client, using the
+      latest non-deleted definition effective now. It is not limited to the caller's accessible
+      employees and does not establish historical event values or classify every code as vacation.
   earn_description:
     type: Nullable(String)
     client_defined: true
@@ -116,7 +121,7 @@ measures:
     defined_over: "rows after temporal, status, event_type, employee, and earn_code/earn_description filters"
 
 rules:
-  - id: accrual_events_employee_detail_population
+  - id: timeoff_requests_employee_detail_population
     predicate: employee.employee_status IN ('Active', 'On Leave')
     applies_when: >
       Employee-detail requests, even with a period filter.
@@ -128,7 +133,7 @@ rules:
   - id: approved_events
     predicate: "status = 'Approved'"
     applies_when: measuring approved request hours or approved event counts
-    description: Restrict to approved accrual events. Approval is a workflow state, not proof of actual leave taken.
+    description: Restrict to approved accrual events. For time-off-taken questions, treat approved time-off requests as assumed taken and disclose this assumption; payroll-paid hours are separate.
 
   - id: requested_events
     predicate: "status = 'Requested'"
@@ -167,9 +172,9 @@ rules:
 
 ambiguities:
   - term: time_off_taken
-    resolves_to: [ "accrual_balances.taken_amount for recorded plan usage", "approved_time_off_hours for explicitly requested approved request hours" ]
-    default: recorded_plan_usage
-    clarify_if: the user means actual leave taken during an event-date period and the balance period or actual-use evidence is not established; never silently substitute approved request hours
+    resolves_to: [approved_time_off_hours]
+    default: Treat approved time-off request hours as taken for the requested request_date period; disclose that assumption. Offer to check payroll-paid hours separately, without running payroll unless requested.
+    clarify_if: The requested leave category cannot be resolved; do not ask whether approved requests may represent taken leave.
 
   - term: request_date
     resolves_to: [ request_date ]

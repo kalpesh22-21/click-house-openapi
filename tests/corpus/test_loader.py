@@ -29,6 +29,8 @@ def _reset_cache():
 # runtime-shaped `bp::sha256:` id and slugified filename, since normalized to the seed
 # `bp-<slug>` convention and registered here.
 _BLUEPRINT_IDS = {
+    "bp-approved-timeoff-ranking",
+        "bp-latest-hired-employees", "bp-termination-family", "bp-compensation-ranking",
     "bp-employee-summary",
         "bp-punch-pair-summary",
         "bp-employee-day-clock-span",
@@ -57,12 +59,15 @@ _BLUEPRINT_IDS = {
     "bp-average-annual-salary-by-status",
 }
 _KNOWLEDGE_IDS = {
+    "kn-department-lookup",
     "kn-age-calculation",
     "kn-overtime-multiplier",
     "kn-pay-period-definition",
     "kn-register-type",
     "kn-clickhouse-median",
     "kn-stale-blueprint-recovery",
+    "kn-timeoff-interpretation", "kn-salaried-punches",
+    "kn-compensation-pay-basis", "kn-employment-date-transitions",
 }
 
 
@@ -89,7 +94,7 @@ class TestLoadBlueprints:
         bp = loader.load_blueprints()["bp-departments-above-company-average-salary"]
         assert isinstance(bp["composes"], list)
         assert bp["composes"][0]["order"] == 0
-        assert bp["composes"][1]["consumes"] == {"company_avg": "$0.company_avg"}
+        assert bp["composes"][1]["consumes"] == {"company_salary_avg": "$0.company_salary_avg", "company_hourly_avg": "$0.company_hourly_avg"}
 
     def test_custom_data_dir(self, tmp_path):
         (tmp_path / "bp-x.yaml").write_text(
@@ -219,3 +224,12 @@ class TestShaSidecars:
     def test_blueprints_and_knowledge_sha_differ(self):
         # Independently versioned corpora — different content, different fingerprint.
         assert loader.get_blueprints_sha() != loader.get_knowledge_sha()
+
+
+def test_hire_window_uses_documented_status_label():
+    from app.semantic_catalog.loader import load_semantic_catalog
+    sql = loader.load_blueprints()['bp-hires-in-range']['sql_template']
+    statuses = load_semantic_catalog()['dbpcm_warehouse.employee']['columns']['employee_status']['values']
+    assert 'Not Hired' in statuses
+    assert "employee_status != 'Not Hired'" in sql
+    assert "employee_status != 'N'" not in sql

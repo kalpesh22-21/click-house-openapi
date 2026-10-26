@@ -1,6 +1,8 @@
 id: bp-average-annual-salary-by-status
-intent: Calculate the average annual salary per employee filtered by employee status. Defaults to Active + On Leave;
-  employee_status selects another status or All to remove the filter.
+intent: Average annual compensation by pay type, filtered by employee status. Salary uses annual_salary; Hourly
+  uses hourly_salary and estimated annual compensation = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes
+  overtime). Keep pay types separate. Defaults to Active + On Leave; employee_status overrides or All removes the
+  filter.
 slots_summary: employee_status
 status: validated
 drift_status: clean
@@ -8,6 +10,8 @@ catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
 uses:
 - dbpcm_warehouse.employee.annual_salary
 - dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.employee_pay_type
+- dbpcm_warehouse.employee.hourly_salary
 slots:
 - name: employee_status
   description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
@@ -26,7 +30,13 @@ slots:
   - Unknown
   - All
   optional_pattern: employee_status IN ('Active', 'On Leave')
-sql_template: SELECT avg(annual_salary) AS average_annual_salary_per_employee FROM dbpcm_warehouse.employee WHERE
-  (employee_status = {employee_status} OR {employee_status} = 'All')
-resolves:
-  average annual salary per employee: dbpcm_warehouse.employee.annual_salary
+sql_template: SELECT employee_pay_type AS `Pay Type`, CASE WHEN employee_pay_type = 'Hourly' THEN 'Estimated annual
+  compensation (2080 hours)' WHEN employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown compensation
+  basis' END AS `Compensation Basis`, avg(CASE WHEN employee_pay_type = 'Salary' THEN annual_salary WHEN employee_pay_type
+  = 'Hourly' THEN hourly_salary * 2080 ELSE NULL END) AS `Average Annual Compensation`, avg(CASE WHEN employee_pay_type
+  = 'Hourly' THEN hourly_salary ELSE NULL END) AS `Average Hourly Rate` FROM dbpcm_warehouse.employee WHERE (employee_status
+  = {employee_status} OR {employee_status} = 'All') GROUP BY employee_pay_type
+result_grain:
+- Pay Type
+uses_rules:
+- compensation_by_pay_type

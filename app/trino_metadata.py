@@ -36,7 +36,9 @@ def physical_target(
         catalog, schema = settings.trino_clickhouse_catalog, entry["database"]
     validate_identifier(catalog.lower())
     validate_identifier(schema.lower())
-    return catalog, schema, validate_identifier(entry["table"])
+    from app.table_names import physical_table_name
+
+    return catalog, schema, validate_identifier(physical_table_name(entry["table"]))
 
 
 def catalog_schema(settings: Settings) -> dict[str, dict[str, str]]:

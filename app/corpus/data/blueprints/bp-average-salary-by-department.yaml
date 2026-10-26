@@ -1,7 +1,8 @@
 id: bp-average-salary-by-department
-intent: Average annual salary and employee headcount by department; optional employee status and department; omitted
-  department filter includes all departments. Average excludes NULL salaries; headcount includes them. Defaults
-  to Active + On Leave; employee_status selects another status or All to remove the filter.
+intent: Average annual compensation and headcount by department and pay type. Averages exclude unknown compensation;
+  headcount includes it. Salary uses annual_salary; Hourly uses hourly_salary and estimated annual compensation
+  = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes overtime). Keep pay types separate. Defaults to
+  Active + On Leave; employee_status overrides or All removes the filter.
 slots_summary: department, employee_status
 status: validated
 drift_status: clean
@@ -11,14 +12,17 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.annual_salary
 - dbpcm_warehouse.employee.employee_status
-resolves:
-  salary: annual_salary
+- dbpcm_warehouse.employee.employee_pay_type
+- dbpcm_warehouse.employee.hourly_salary
+- dbpcm_warehouse.department.department_name
 slots:
 - name: department
   type: string
   required: false
-  binds_to: dbpcm_warehouse.employee.department_name
+  binds_to: dbpcm_warehouse.department.department_name
   optional_pattern: 'TRUE'
+  description: Resolve department names/abbreviations against the directory; a known department may have no matching
+    employees.
 - name: employee_status
   description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
   type: enum
@@ -38,6 +42,14 @@ slots:
   optional_pattern: employee_status IN ('Active', 'On Leave')
 result_grain:
 - Department
-sql_template: "SELECT department_name AS department,\n       AVG(annual_salary) AS avg_salary,\n       COUNT(DISTINCT\
-  \ employee_code) AS headcount\nFROM dbpcm_warehouse.employee\nWHERE department_name = {department}\n  AND (employee_status\
-  \ = {employee_status} OR {employee_status} = 'All')\nGROUP BY department_name\n"
+- Pay Type
+sql_template: "SELECT employee_pay_type AS `Pay Type`, CASE WHEN employee_pay_type = 'Hourly' THEN 'Estimated annual\
+  \ compensation (2080 hours)' WHEN employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown compensation\
+  \ basis' END AS `Compensation Basis`, department_name AS department,\n       AVG((CASE WHEN employee_pay_type\
+  \ = 'Salary' THEN annual_salary WHEN employee_pay_type = 'Hourly' THEN hourly_salary * 2080 ELSE NULL END)) AS\
+  \ average_annual_compensation,\n       COUNT(DISTINCT employee_code) AS headcount, avg(CASE WHEN employee_pay_type\
+  \ = 'Hourly' THEN hourly_salary ELSE NULL END) AS `Average Hourly Rate`\nFROM dbpcm_warehouse.employee\nWHERE\
+  \ department_name = {department}\n  AND (employee_status = {employee_status} OR {employee_status} = 'All')\nGROUP\
+  \ BY employee_pay_type, department_name\n"
+uses_rules:
+- compensation_by_pay_type

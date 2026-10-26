@@ -1,0 +1,8 @@
+id: kn-department-lookup
+title: Department names, abbreviations and empty departments
+doc_id: hr-reporting-employee
+status: validated
+text: Resolve department abbreviations such as IT or HR using the scoped department directory. If the matching department
+  has no employees in the requested population, report that empty result. Do not silently substitute job-title matches
+  for department membership. A title-based search can be offered separately; ask only when multiple plausible departments
+  remain.

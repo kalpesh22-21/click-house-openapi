@@ -1,11 +1,13 @@
 id: bp-employee-day-clock-span
-intent: Employee-day first actual clock-in, last actual clock-out and matched-pair count, with paid hours. Clock
+intent: Employee-day first recorded In time, last recorded Out time and matched-pair count, with paid hours. Clock
   span may contain unpaid gaps; it is not hours worked, a single shift or a lateness finding. Days are assigned
   by recorded punch_date; midnight ownership is not inferred. Optional punch-type filters restrict which pairs contribute.
   Required half-open punch-date period and resolved table_source prevent accidental cross-source double counting.
   FINAL deduplicates storage versions, not overlapping real-world events. Department means recorded labor-allocation
   department code, not current home department. No scheduled shift, tardiness or overtime policy is inferred. Observed
-  first/last dates do not prove completeness; missing days/months are not zero-filled.
+  first/last dates do not prove completeness; missing days/months are not zero-filled. Salaried approved leave and
+  automatic pay-period-end entries can generate these records; this blueprint does not establish physical attendance
+  or current clock-in.
 slots_summary: period, source, employee, department, hours_type, pay_class, in_type, out_type
 status: validated
 drift_status: clean
@@ -75,7 +77,7 @@ result_grain:
 - Employee Code
 - Punch Date
 sql_template: 'SELECT employee_code AS `Employee Code`, punch_date AS `Punch Date`, min(in_punch_time) AS `First
-  Clock In`, max(out_punch_time) AS `Last Clock Out`, count(*) AS `Pair Count`, sum(earn_hours) AS `Paid Hours`
+  Recorded In`, max(out_punch_time) AS `Last Recorded Out`, count(*) AS `Pair Count`, sum(earn_hours) AS `Paid Hours`
 
   FROM dbpcm_warehouse.punch_pair FINAL
 

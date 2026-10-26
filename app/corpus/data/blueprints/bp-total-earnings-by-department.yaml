@@ -10,11 +10,14 @@ uses:
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.department.department_name
 slots:
 - name: department
   type: string
   required: true
-  binds_to: dbpcm_warehouse.employee.department_name
+  binds_to: dbpcm_warehouse.department.department_name
+  description: Resolve department names/abbreviations against the directory; a known department may have no matching
+    employees.
 uses_rules:
 - id: gross_earnings
   resolve_via: resolveValues(register_type, 'earnings')
@@ -22,10 +25,6 @@ uses_rules:
   binds: earn_codes
 result_grain:
 - Department
-sql_template: |
-  SELECT e.department_name AS department, SUM(p.amount) AS total_earnings
-  FROM dbpcm_warehouse.payroll AS p
-  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
-  WHERE p.register_type IN {earn_codes}
-    AND e.department_name = {department}
-  GROUP BY e.department_name
+sql_template: "SELECT e.department_name AS department, SUM(p.amount) AS total_earnings\nFROM dbpcm_warehouse.payroll\
+  \ AS p\nJOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code\nWHERE p.register_type IN {earn_codes}\n\
+  \  AND e.department_name = {department}\nGROUP BY e.department_name\n"

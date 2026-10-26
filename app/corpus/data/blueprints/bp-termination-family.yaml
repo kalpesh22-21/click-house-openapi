@@ -1,0 +1,64 @@
+id: bp-termination-family
+intent: Employees with a recorded termination date in a half-open period, with total matching record count before
+  the display limit. Includes same-day/later rehires and employees no longer currently Terminated. Apply current
+  status only when explicitly requested. For counts/grouped summaries use bp-employee-date-summary with date_basis=termination.
+slots_summary: period, row_limit, employee_status, department
+status: validated
+drift_status: clean
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.termination_date
+- dbpcm_warehouse.department.department_name
+slots:
+- name: period
+  type: period_range
+  temporal_type: date
+  required: true
+- name: row_limit
+  type: positive_integer
+  required: true
+  min_value: 1
+  max_value: 1000
+- name: employee_status
+  description: Omit for all recorded terminations in the period; set only when current status is explicitly requested.
+  type: enum
+  required: false
+  enum_values:
+  - Active
+  - Deceased
+  - Inactive
+  - Retired
+  - Terminated
+  - On Leave
+  - Not Hired
+  - Prehire
+  - Unknown
+  - All
+  binds_to: dbpcm_warehouse.employee.employee_status
+  optional_pattern: 'TRUE'
+- name: department
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.department.department_name
+  optional_pattern: 'TRUE'
+  description: Resolve department names/abbreviations against the directory; a known department may have no matching
+    employees.
+result_grain:
+- Employee Code
+sql_template: 'SELECT e.employee_code AS `Employee Code`, e.employee_name AS `Employee Name`, e.department_name
+  AS `Department`, e.employee_status AS `Current Status`, e.termination_date AS `Termination Date`, count(*) OVER
+  () AS `Total Matching Records`
+
+  FROM dbpcm_warehouse.employee e
+
+  WHERE e.termination_date >= {period_start} AND e.termination_date < {period_end}
+
+  AND (e.employee_status = {employee_status} OR {employee_status} = ''All'') AND e.department_name = {department}
+
+  ORDER BY e.termination_date DESC, e.employee_code LIMIT {row_limit}'
+uses_rules:
+- terminations_in_period

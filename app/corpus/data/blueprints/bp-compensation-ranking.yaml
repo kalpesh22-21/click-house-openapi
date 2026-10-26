@@ -1,0 +1,78 @@
+id: bp-compensation-ranking
+intent: Top N highest-paid employees separately within Salary and Hourly pay types. Salary uses recorded annual
+  salary; Hourly uses hourly_salary * 2080 estimated annual compensation (40 hours/week, 52 weeks/year, excludes
+  overtime). This is current compensation, not actual payroll earnings. Defaults to Active + On Leave; top_n applies
+  to each pay type.
+slots_summary: top_n, employee_status, department
+status: validated
+drift_status: clean
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.employee_pay_type
+- dbpcm_warehouse.employee.annual_salary
+- dbpcm_warehouse.employee.hourly_salary
+- dbpcm_warehouse.department.department_name
+slots:
+- name: top_n
+  type: positive_integer
+  required: true
+  min_value: 1
+  max_value: 1000
+- name: employee_status
+  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
+  type: enum
+  required: false
+  enum_values:
+  - Active
+  - Deceased
+  - Inactive
+  - Retired
+  - Terminated
+  - On Leave
+  - Not Hired
+  - Prehire
+  - Unknown
+  - All
+  binds_to: dbpcm_warehouse.employee.employee_status
+  optional_pattern: e.employee_status IN ('Active', 'On Leave')
+- name: department
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.department.department_name
+  optional_pattern: 'TRUE'
+  description: Resolve department names/abbreviations against the directory; a known department may have no matching
+    employees.
+result_grain:
+- Pay Type
+- Rank
+sql_template: 'WITH compensation AS (
+
+  SELECT e.employee_code, e.employee_name, e.department_name, e.employee_pay_type, e.hourly_salary,
+
+  CASE WHEN e.employee_pay_type = ''Salary'' THEN e.annual_salary WHEN e.employee_pay_type = ''Hourly'' THEN e.hourly_salary
+  * 2080 ELSE NULL END AS annual_compensation
+
+  FROM dbpcm_warehouse.employee e WHERE (e.employee_status = {employee_status} OR {employee_status} = ''All'') AND
+  e.department_name = {department}
+
+  ), ranked AS (
+
+  SELECT employee_code, employee_name, department_name, employee_pay_type, hourly_salary, annual_compensation, row_number()
+  OVER (PARTITION BY employee_pay_type ORDER BY annual_compensation DESC, employee_code) AS compensation_rank
+
+  FROM compensation WHERE annual_compensation IS NOT NULL
+
+  )
+
+  SELECT employee_pay_type AS `Pay Type`, compensation_rank AS `Rank`, employee_code AS `Employee Code`, employee_name
+  AS `Employee Name`, department_name AS `Department`, annual_compensation AS `Annual Compensation`, hourly_salary
+  AS `Hourly Rate`
+
+  FROM ranked WHERE compensation_rank <= {top_n} ORDER BY employee_pay_type, compensation_rank'
+uses_rules:
+- default_employee_population
+- compensation_by_pay_type

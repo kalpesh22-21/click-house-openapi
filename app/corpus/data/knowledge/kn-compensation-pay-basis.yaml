@@ -1,0 +1,11 @@
+id: kn-compensation-pay-basis
+title: Separate salaried and hourly compensation statistics
+doc_id: hr-reporting-employee
+status: validated
+text: Use employee_pay_type to classify employees, not whether salary is zero. Salary employees use annual_salary.
+  Hourly employees have zero annual_salary and use hourly_salary. Report statistical measures separately by pay
+  type, including means, medians, ranges, distributions and comparisons. For Hourly show hourly rate and estimated
+  annual compensation = hourly_salary * 2080 (40 hours/week, 52 weeks/year). Label the estimate and assumption;
+  it excludes overtime and does not establish actual payroll-paid compensation. Do not mix hourly rates with annual
+  amounts or include hourly zero annual_salary in salaried statistics. Preserve NULLs and separate unknown/other
+  pay types. Explicit user pay-basis requests override defaults. Use matching updated blueprints.

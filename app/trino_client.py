@@ -357,15 +357,15 @@ def _add_months_as_date_add(func: exp.Func) -> exp.Expression:
     return exp.DateAdd(this=date_arg, expression=months, unit=exp.Var(this="month"))
 
 
-def _add_years_as_date_add(func: exp.Func) -> exp.Expression:
+def _typed_date_add(func: exp.Func, unit: str) -> exp.Expression:
     from app.trino_constructs import unsupported
     from app.trino_semantics import value_type
 
-    date_arg, years = func.expressions
-    date_type, offset_type = value_type(date_arg), value_type(years)
+    date_arg, offset = func.expressions
+    date_type, offset_type = value_type(date_arg), value_type(offset)
     if not date_type or date_type.kind != "datetime" or not offset_type or offset_type.kind != "integer":
-        unsupported("addYears requires a known date/timestamp and an integer year offset.")
-    return exp.DateAdd(this=date_arg, expression=years, unit=exp.Var(this="year"))
+        unsupported(f"{func.name} requires a known date/timestamp and an integer {unit} offset.")
+    return exp.DateAdd(this=date_arg, expression=offset, unit=exp.Var(this=unit))
 
 
 def _concat_with_separator_as_concat_ws(func: exp.Func) -> exp.Expression:
@@ -391,7 +391,8 @@ _CLICKHOUSE_FUNCTION_MAP: dict[str, _FunctionMapping] = {
     "uniqexact": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n == 1),
     "countdistinct": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n == 1),
     "now": _FunctionMapping(lambda _: exp.CurrentTimestamp(), lambda n: n == 0),
-    "addyears": _FunctionMapping(_add_years_as_date_add, lambda n: n == 2),
+    "addyears": _FunctionMapping(lambda f: _typed_date_add(f, "year"), lambda n: n == 2),
+    "adddays": _FunctionMapping(lambda f: _typed_date_add(f, "day"), lambda n: n == 2),
     "todate": _FunctionMapping(_to_date_as_cast_date, lambda n: n == 1),
     "todate32": _FunctionMapping(_to_date32_as_cast_date, lambda n: n == 1),
     "todatetime64": _FunctionMapping(
@@ -437,6 +438,8 @@ def _map_clickhouse_functions(tree: exp.Query) -> None:
 
     normalize_semantics(tree)
     normalize_constructs(tree)
+    for conditional in tree.find_all(exp.If):
+        conditional.set("this", _as_trino_condition(conditional.this))
     # Map children before a parent can duplicate them in a NULL guard.
     for func in reversed(list(tree.find_all(exp.Anonymous, exp.AnonymousAggFunc))):
         mapping = _CLICKHOUSE_FUNCTION_MAP.get(func.name.lower())

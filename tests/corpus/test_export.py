@@ -25,7 +25,7 @@ class TestBuildBlueprintsExport:
                 if slot["type"] in {"period_range", "period", "as_of_date"} or slot["name"] == "reference_date":
                     assert slot["temporal_type"] == "date", (blueprint["id"], slot["name"])
                     count += 1
-        assert count == 12
+        assert count == 14
 
     def test_top_level_shape(self):
         result = export.build_blueprints_export()

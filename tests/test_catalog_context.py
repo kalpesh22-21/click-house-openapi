@@ -35,14 +35,14 @@ def principal():
 @pytest.fixture
 def catalog(monkeypatch):
     entry = {
-        "database": "dbpcm_warehouse", "table": "accrual_events", "source": "mysql",
+        "database": "dbpcm_warehouse", "table": "timeoff_requests", "source": "mysql",
         "description": "Accrual events", "columns": {
             "earn_code": {"type": "String", "context_sql": SQL},
             "hours": {"type": "Float64", "context_sql": "SELECT 'units' AS context_key, 'hours' AS unit"},
             "tenant": {"type": "String", "context_sql": "SELECT 'private' AS context_key, 'secret' AS value"},
         }, "mcp_projection": {"hidden_columns": ["tenant"]},
     }
-    catalog = {"dbpcm_warehouse.accrual_events": entry}
+    catalog = {"dbpcm_warehouse.timeoff_requests": entry}
     monkeypatch.setattr(service, "get_semantic_catalog", lambda: catalog)
     monkeypatch.setattr("app.trino_metadata.get_semantic_catalog", lambda: catalog)
     monkeypatch.setattr("app.shard_routing.resolve_mysql_shard", lambda code, _: "shard_a" if code == "tenant-a" else "shard_b")
@@ -53,24 +53,24 @@ def test_schema_enriches_only_requested_visible_columns(monkeypatch, settings, p
     original = copy.deepcopy(catalog)
     execute = MagicMock(return_value=(["context_key", "code"], [["vacation", "VAC"], ["vacation", "VAC2"], ["timeoff", "PTO"]]))
     monkeypatch.setattr(context, "execute_context_sql", execute)
-    response = service.get_table_schema("dbpcm_datawarehouse", "accrual_events", settings, columns=["earn_code"])
+    response = service.get_table_schema("dbpcm_datawarehouse", "timeoff_requests", settings, columns=["earn_code"])
     assert response["columns"][0]["context"] == {
         "vacation": [{"code": "VAC"}, {"code": "VAC2"}], "timeoff": [{"code": "PTO"}],
     }
-    execute.assert_called_once_with(SQL, catalog["dbpcm_warehouse.accrual_events"], settings)
+    execute.assert_called_once_with(SQL, catalog["dbpcm_warehouse.timeoff_requests"], settings)
     assert "context_sql" not in json.dumps(response)
-    assert response["context_provenance"] == {"version": 1, "columns": [["dbpcm_warehouse.accrual_events", "earn_code"]]}
+    assert response["context_provenance"] == {"version": 1, "columns": [["dbpcm_warehouse.timeoff_requests", "earn_code"]]}
     assert catalog == original
 
 
 def test_scope_trim_precedes_context(monkeypatch, settings, principal, catalog):
     from dataclasses import replace
-    token = current_principal.set(replace(principal, catalog_scope=CatalogScope(columns=frozenset({"dbpcm_warehouse.accrual_events.earn_code"}))))
+    token = current_principal.set(replace(principal, catalog_scope=CatalogScope(columns=frozenset({"dbpcm_warehouse.timeoff_requests.earn_code"}))))
     monkeypatch.setattr("app.catalog.get_settings", lambda: settings)
     execute = MagicMock(return_value=(["context_key", "code"], []))
     monkeypatch.setattr(context, "execute_context_sql", execute)
     try:
-        response = service.get_table_schema("dbpcm_datawarehouse", "accrual_events", settings)
+        response = service.get_table_schema("dbpcm_datawarehouse", "timeoff_requests", settings)
         assert [c["name"] for c in response["columns"]] == ["earn_code"]
         assert response["columns"][0]["context"] == {}
         execute.assert_called_once()
@@ -84,8 +84,8 @@ def test_listings_and_queries_do_not_enrich(monkeypatch, settings, principal, ca
     monkeypatch.setattr(service, "_execute", lambda *a, **kw: (["code"], [["VAC"]]))
     assert service.list_databases(settings)
     assert service.list_tables("dbpcm_datawarehouse", settings)
-    service.run_query("SELECT earn_code FROM accrual_events", settings=settings)
-    service.explain_query("SELECT earn_code FROM accrual_events", settings=settings)
+    service.run_query("SELECT earn_code FROM timeoff_requests", settings=settings)
+    service.explain_query("SELECT earn_code FROM timeoff_requests", settings=settings)
     execute.assert_not_called()
 
 
@@ -108,20 +108,20 @@ def test_export_omits_sql_without_running_it(monkeypatch, catalog):
 def test_invalid_context_results_fail(monkeypatch, settings, principal, catalog, result):
     monkeypatch.setattr(context, "execute_context_sql", lambda *a: result)
     with pytest.raises(ClickHouseUnavailableError) as exc:
-        service.get_table_schema("dbpcm_datawarehouse", "accrual_events", settings, columns=["earn_code"])
+        service.get_table_schema("dbpcm_datawarehouse", "timeoff_requests", settings, columns=["earn_code"])
     assert exc.value.code == "CATALOG_CONTEXT_UNAVAILABLE"
 
 
 def test_backend_failure_is_not_empty_or_private_sql(monkeypatch, settings, principal, catalog):
     monkeypatch.setattr(context, "execute_context_sql", MagicMock(side_effect=RuntimeError("secret SQL token")))
     with pytest.raises(ClickHouseUnavailableError) as exc:
-        service.get_table_schema("dbpcm_datawarehouse", "accrual_events", settings, columns=["earn_code"])
+        service.get_table_schema("dbpcm_datawarehouse", "timeoff_requests", settings, columns=["earn_code"])
     assert "secret" not in str(exc.value)
     assert exc.value.__suppress_context__
 
 
 def test_context_routing_and_parameters_are_request_local(settings, principal, catalog):
-    entry = catalog["dbpcm_warehouse.accrual_events"]
+    entry = catalog["dbpcm_warehouse.timeoff_requests"]
     sql, params, shard = context._compile(SQL, entry, settings)
     assert '"shard_a"."dbonline".earning_codes' in sql
     assert "tenant-a" not in sql and "?" in sql and params == ["tenant-a"]
@@ -142,7 +142,7 @@ def test_bad_context_sql_never_connects(monkeypatch, settings, principal, catalo
     connect = MagicMock(side_effect=AssertionError("connected"))
     monkeypatch.setattr("app.trino_client._connect", connect)
     with pytest.raises(Exception):
-        context.execute_context_sql(sql, catalog["dbpcm_warehouse.accrual_events"], settings)
+        context.execute_context_sql(sql, catalog["dbpcm_warehouse.timeoff_requests"], settings)
     connect.assert_not_called()
 
 
@@ -154,7 +154,7 @@ def test_driver_binds_in_rendered_order_and_closes(monkeypatch, settings, princi
     connect = MagicMock(return_value=conn)
     monkeypatch.setattr("app.trino_client._connect", connect)
     sql = "WITH codes AS (SELECT :user_name AS code) SELECT :clientcode AS context_key, code FROM codes"
-    columns, rows = context.execute_context_sql(sql, catalog["dbpcm_warehouse.accrual_events"], settings)
+    columns, rows = context.execute_context_sql(sql, catalog["dbpcm_warehouse.timeoff_requests"], settings)
     assert cursor.execute.call_args.args[1] == ["alice", "tenant-a"]
     assert "LIMIT" not in cursor.execute.call_args.args[0]
     assert rows == [["vacation", "VAC"]]
@@ -174,7 +174,7 @@ def test_oversized_context_fails_without_truncation(monkeypatch, settings, princ
     cursor.fetchmany.side_effect = [[["vacation", "VAC"], ["timeoff", "PTO"]]]
     monkeypatch.setattr("app.trino_client._connect", lambda *a, **kw: conn)
     with pytest.raises(ValueError, match="result limit"):
-        context.execute_context_sql(SQL, catalog["dbpcm_warehouse.accrual_events"], settings)
+        context.execute_context_sql(SQL, catalog["dbpcm_warehouse.timeoff_requests"], settings)
     cursor.close.assert_called_once()
     conn.close.assert_called_once()
 
@@ -182,7 +182,7 @@ def test_oversized_context_fails_without_truncation(monkeypatch, settings, princ
 @pytest.mark.parametrize("source", ["mysql", "clickhouse"])
 def test_direct_clickhouse_skips_column_context(monkeypatch, settings, catalog, source):
     settings.trino_enabled = False
-    entry = {**catalog["dbpcm_warehouse.accrual_events"], "source": source}
+    entry = {**catalog["dbpcm_warehouse.timeoff_requests"], "source": source}
     execute = MagicMock(side_effect=AssertionError("lookup must not execute"))
     monkeypatch.setattr(context, "execute_context_sql", execute)
     response = {"columns": [{"name": "earn_code", "type": "String"}]}
@@ -196,7 +196,7 @@ def test_direct_context_execution_requires_trino(monkeypatch, settings, catalog)
     compile_sql = MagicMock(side_effect=AssertionError("must not compile or route"))
     monkeypatch.setattr(context, "_compile", compile_sql)
     with pytest.raises(ValueError, match="Column context requires Trino"):
-        context.execute_context_sql(SQL, catalog["dbpcm_warehouse.accrual_events"], settings)
+        context.execute_context_sql(SQL, catalog["dbpcm_warehouse.timeoff_requests"], settings)
     compile_sql.assert_not_called()
 
 
@@ -204,7 +204,7 @@ def test_no_principal_cannot_enrich(settings, catalog):
     token = current_principal.set(None)
     try:
         with pytest.raises(ValueError, match="authenticated"):
-            context.execute_context_sql(SQL, catalog["dbpcm_warehouse.accrual_events"], settings)
+            context.execute_context_sql(SQL, catalog["dbpcm_warehouse.timeoff_requests"], settings)
     finally:
         current_principal.reset(token)
 
@@ -212,7 +212,7 @@ def test_no_principal_cannot_enrich(settings, catalog):
 def test_literal_colons_are_not_parameters(settings, principal, catalog):
     sql, params, _ = context._compile(
         "SELECT ':not_a_claim' AS context_key, :clientcode AS code",
-        catalog["dbpcm_warehouse.accrual_events"], settings,
+        catalog["dbpcm_warehouse.timeoff_requests"], settings,
     )
     assert "':not_a_claim'" in sql and params == ["tenant-a"]
 
@@ -222,19 +222,19 @@ def test_security_gate_precedes_routing(monkeypatch, settings, principal, catalo
     route = MagicMock(side_effect=AssertionError("routing before security gate"))
     monkeypatch.setattr("app.shard_routing.resolve_mysql_shard", route)
     with pytest.raises(ValueError, match="security"):
-        context.execute_context_sql(SQL, catalog["dbpcm_warehouse.accrual_events"], settings)
+        context.execute_context_sql(SQL, catalog["dbpcm_warehouse.timeoff_requests"], settings)
     route.assert_not_called()
 
 
 def test_rest_preserves_context_and_excludes_sql(monkeypatch, test_client, auth_headers):
     client, _, _ = test_client
     monkeypatch.setattr("app.routers.schema.svc_get_table_schema", lambda *a: {
-        "database": "dbpcm_warehouse", "table": "accrual_events", "columns": [{
+        "database": "dbpcm_warehouse", "table": "timeoff_requests", "columns": [{
             "name": "earn_code", "type": "String", "comment": "",
             "context": {"vacation": [{"code": "VAC"}]}, "context_sql": "PRIVATE SQL",
         }],
     })
-    response = client.get("/tables/schema?database=dbpcm_warehouse&table=accrual_events", headers=auth_headers)
+    response = client.get("/tables/schema?database=dbpcm_warehouse&table=timeoff_requests", headers=auth_headers)
     assert response.status_code == 200
     assert response.json()["columns"][0]["context"] == {"vacation": [{"code": "VAC"}]}
     assert "PRIVATE SQL" not in response.text and "context_sql" not in response.text
@@ -263,7 +263,7 @@ def test_loader_rejects_invalid_context_sql(tmp_path, value):
 def test_trino_clickhouse_context_uses_native_tenant_settings(settings, principal, catalog):
     import sqlglot
     from sqlglot import exp
-    entry = {**catalog["dbpcm_warehouse.accrual_events"], "source": "clickhouse"}
+    entry = {**catalog["dbpcm_warehouse.timeoff_requests"], "source": "clickhouse"}
     principal.claims["jti"] = "request-alice"
     rendered, parameters, shard = context._compile(SQL, entry, settings)
     tree = sqlglot.parse_one(rendered, read="trino")
@@ -280,9 +280,9 @@ def test_context_catalogued_mysql_relation_expands_template(tmp_path, monkeypatc
     settings.trino_mysql_sources_dir = str(tmp_path)
     monkeypatch.setattr("app.semantic_catalog.get_semantic_catalog", lambda: catalog)
     rendered, parameters, shard = context._compile(
-        "SELECT earn_code AS context_key, hours FROM accrual_events", catalog["dbpcm_warehouse.accrual_events"], settings
+        "SELECT earn_code AS context_key, hours FROM timeoff_requests", catalog["dbpcm_warehouse.timeoff_requests"], settings
     )
-    assert '"shard_a".dbonline.accrual_events' in rendered
+    assert '"shard_a".dbonline.timeoff_requests' in rendered
     assert "'tenant-a'" in rendered
     assert "CURRENT_USER" not in rendered
     assert parameters == [] and shard == "shard_a"

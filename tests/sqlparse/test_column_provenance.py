@@ -1366,7 +1366,7 @@ def test_prov_scratch_reference_still_session_gated() -> None:
 # CamelCase payroll/employee fixtures above — the defect is about a name existing
 # ANYWHERE in the catalog).
 PTO_CATALOG: dict[str, dict[str, str]] = {
-    "dbpcm_warehouse.accrual_events": {
+    "dbpcm_warehouse.timeoff_requests": {
         "employee_code": "String",
         "hours": "Nullable(Decimal(18, 6))",
         "status": "Nullable(String)",
@@ -1379,7 +1379,7 @@ PTO_CATALOG: dict[str, dict[str, str]] = {
     },
 }
 
-_AE = "dbpcm_warehouse.accrual_events"
+_AE = "dbpcm_warehouse.timeoff_requests"
 _EMP = "dbpcm_warehouse.employee"
 
 # A CTE that CONTAINS A JOIN, projecting one passthrough column (`employee_code`),
@@ -1392,7 +1392,7 @@ _JOIN_CTE = """
             any(e.employee_name) AS employee_name,
             sum(ae.hours) AS pto,
             countIf(ae.status = 'Requested') AS pending
-        FROM dbpcm_warehouse.accrual_events AS ae
+        FROM dbpcm_warehouse.timeoff_requests AS ae
         LEFT JOIN dbpcm_warehouse.employee AS e
             ON ae.employee_code = e.employee_code
         WHERE ae.event_type = 'Time Off Request' AND ae.earn_code = 'PTO'
@@ -1509,7 +1509,7 @@ def test_prov_subquery_order_by_shadowing_alias() -> None:
         SELECT employee_code, employee_name
         FROM (
             SELECT ae.employee_code, any(e.employee_name) AS employee_name
-            FROM dbpcm_warehouse.accrual_events AS ae
+            FROM dbpcm_warehouse.timeoff_requests AS ae
             LEFT JOIN dbpcm_warehouse.employee AS e
                 ON ae.employee_code = e.employee_code
             GROUP BY ae.employee_code
@@ -1535,7 +1535,7 @@ def test_prov_live_pto_pending_query() -> None:
             SELECT ae.employee_code, any(e.employee_name) AS employee_name,
                 sum(ae.hours) AS pto_hours_requested,
                 countIf(ae.status = 'Requested') AS pending_approval_requests
-            FROM dbpcm_warehouse.accrual_events AS ae
+            FROM dbpcm_warehouse.timeoff_requests AS ae
             LEFT JOIN dbpcm_warehouse.employee AS e ON ae.employee_code = e.employee_code
             WHERE ae.event_type = 'Time Off Request' AND ae.earn_code = 'PTO'
                 AND ae.hours IS NOT NULL
@@ -1589,7 +1589,7 @@ def test_prov_bare_unresolvable_projection_failclosed() -> None:
         extract_column_provenance(
             "SELECT not_a_column FROM dbpcm_warehouse.employee", PTO_CATALOG
         )
-    # `hours` exists in the catalog (on accrual_events) but not on `employee`.
+    # `hours` exists in the catalog (on timeoff_requests) but not on `employee`.
     with pytest.raises(ProvenanceExtractionError):
         extract_column_provenance(
             "SELECT employee_code, hours FROM dbpcm_warehouse.employee", PTO_CATALOG
@@ -1603,20 +1603,20 @@ def test_prov_alias_shadows_unread_column_of_same_table() -> None:
     This is the most permissive shape the case-(A) escape admits: a DIRECT catalog-table
     source (no CTE, no subquery), where the ORDER BY key is a SELECT-list alias that
     SHADOWS a different, genuinely-unread real column OF THAT SAME TABLE.  `status` is a
-    real `accrual_events` column that this query never reads; the extractor must report
+    real `timeoff_requests` column that this query never reads; the extractor must report
     `earn_code` ONLY, with `status` deliberately ABSENT from the USES set.
 
     GROUND TRUTH being relied on: ClickHouse binds the ALIAS here, not the source column
     (24.8 analyzer; verified live during security review).  That is ClickHouse's default
     resolution order and is pinned server-side by `prefer_column_name_to_alias=0` in
     `clickhouse_client.readonly_settings()` — under `=1` the query would instead READ
-    `accrual_events.status` and this USES set would be an UNDER-REPORT (a scope-check
+    `timeoff_requests.status` and this USES set would be an UNDER-REPORT (a scope-check
     bypass).  If a future sqlglot or ClickHouse version flips that resolution, this test
     must FAIL loudly rather than let the extractor go silently fail-open.
     """
     sql = (
         "SELECT lower(earn_code) AS status "
-        "FROM dbpcm_warehouse.accrual_events "
+        "FROM dbpcm_warehouse.timeoff_requests "
         "ORDER BY status"
     )
     assert extract_column_provenance(sql, PTO_CATALOG) == frozenset([(_AE, "earn_code")])
@@ -1624,7 +1624,7 @@ def test_prov_alias_shadows_unread_column_of_same_table() -> None:
     # DISTINCT ON takes the same escape path — the alias binds, `status` stays absent.
     distinct_on = (
         "SELECT DISTINCT ON (status) lower(earn_code) AS status, employee_code "
-        "FROM dbpcm_warehouse.accrual_events"
+        "FROM dbpcm_warehouse.timeoff_requests"
     )
     assert extract_column_provenance(distinct_on, PTO_CATALOG) == frozenset([
         (_AE, "earn_code"),
@@ -1637,7 +1637,7 @@ def test_prov_alias_shadows_unread_column_of_same_table() -> None:
     # false-reject, never fail open), so it is pinned as-is rather than "fixed".
     limit_by = (
         "SELECT lower(earn_code) AS status, employee_code "
-        "FROM dbpcm_warehouse.accrual_events "
+        "FROM dbpcm_warehouse.timeoff_requests "
         "ORDER BY employee_code LIMIT 1 BY status"
     )
     assert extract_column_provenance(limit_by, PTO_CATALOG) == frozenset([

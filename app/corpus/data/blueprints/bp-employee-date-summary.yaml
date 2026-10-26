@@ -14,6 +14,7 @@ uses:
 - dbpcm_warehouse.employee.hire_date
 - dbpcm_warehouse.employee.most_recent_hire_date
 - dbpcm_warehouse.employee.termination_date
+- dbpcm_warehouse.department.department_name
 slots:
 - name: date_basis
   type: enum
@@ -52,8 +53,10 @@ slots:
 - name: department
   type: entity
   required: false
-  binds_to: dbpcm_warehouse.employee.department_name
+  binds_to: dbpcm_warehouse.department.department_name
   optional_pattern: 'TRUE'
+  description: Resolve department names/abbreviations against the directory; a known department may have no matching
+    employees.
 - name: employee
   type: entity
   required: false

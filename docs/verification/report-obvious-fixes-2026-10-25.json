@@ -1,0 +1,181 @@
+{
+  "date": "2026-10-25",
+  "fixes": [
+    "Remove blanket rehire exclusion from employee catalog; separate recorded current status and termination-date window rules",
+    "Support typed addDays(date_or_timestamp,integer_offset)",
+    "Support signed integer DAY intervals on today() and signed literal arithmetic",
+    "Infer IF branch type/nullability through numeric expressions, derived tables and CTEs; normalize conditional predicates for Trino",
+    "Replace user-visible review-exhaust bookkeeping with plain verification limitation"
+  ],
+  "validation": {
+    "backend_release_copy": "2539 passed, 87 skipped, 1 xfailed",
+    "agent_review_delivery": "49 passed",
+    "live_engine_comparisons": [
+      {
+        "case": "adddays",
+        "clickhouse_rows": [
+          [
+            "2026-09-25"
+          ]
+        ],
+        "trino_rows": [
+          [
+            "2026-09-25"
+          ]
+        ],
+        "passed": true
+      },
+      {
+        "case": "interval",
+        "clickhouse_rows": [
+          [
+            "2026-09-25"
+          ]
+        ],
+        "trino_rows": [
+          [
+            "2026-09-25"
+          ]
+        ],
+        "passed": true
+      },
+      {
+        "case": "average",
+        "clickhouse_rows": [
+          [
+            39
+          ]
+        ],
+        "trino_rows": [
+          [
+            39.0
+          ]
+        ],
+        "passed": true
+      },
+      {
+        "case": "grouped",
+        "clickhouse_rows": [
+          [
+            "A",
+            45.5
+          ],
+          [
+            "B",
+            26
+          ]
+        ],
+        "trino_rows": [
+          [
+            "A",
+            45.5
+          ],
+          [
+            "B",
+            26.0
+          ]
+        ],
+        "passed": true
+      },
+      {
+        "case": "derived",
+        "clickhouse_rows": [
+          [
+            39,
+            "117"
+          ]
+        ],
+        "trino_rows": [
+          [
+            39.0,
+            117
+          ]
+        ],
+        "passed": true
+      },
+      {
+        "case": "cte",
+        "clickhouse_rows": [
+          [
+            39,
+            "117"
+          ]
+        ],
+        "trino_rows": [
+          [
+            39.0,
+            117
+          ]
+        ],
+        "passed": true
+      },
+      {
+        "case": "nullable_if",
+        "clickhouse_rows": [
+          [
+            1986.6666666666667
+          ]
+        ],
+        "trino_rows": [
+          [
+            1986.6666666666667
+          ]
+        ],
+        "passed": true
+      },
+      {
+        "case": "null_condition",
+        "clickhouse_rows": [
+          [
+            2
+          ]
+        ],
+        "trino_rows": [
+          [
+            2
+          ]
+        ],
+        "passed": true
+      },
+      {
+        "case": "numeric_condition",
+        "clickhouse_rows": [
+          [
+            3
+          ]
+        ],
+        "trino_rows": [
+          [
+            3
+          ]
+        ],
+        "passed": true
+      },
+      {
+        "case": "empty_nullable",
+        "clickhouse_rows": [
+          [
+            null
+          ]
+        ],
+        "trino_rows": [
+          [
+            null
+          ]
+        ],
+        "passed": true
+      }
+    ]
+  },
+  "catalog_update": "Only employee.yaml manifest entry and CATALOG_SHA refreshed. Private accrual contents excluded from release copy and manifest update.",
+  "not_changed": [
+    "Latest-hire measure default",
+    "Salary versus gross-pay interpretation",
+    "Zero-salary exclusion policy",
+    "IT-department versus job-title fallback",
+    "Approved time off versus leave actually taken",
+    "Broad pause/repair loop policy"
+  ],
+  "rollout": "Refresh catalog/session caches before remote replay. Local fixes are not evidence of exact production row counts; the remote corpus must be rerun.",
+  "git": "Uncommitted; no push performed for this task"
+}

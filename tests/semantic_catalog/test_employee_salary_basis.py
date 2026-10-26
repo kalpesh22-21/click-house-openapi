@@ -16,7 +16,8 @@ def test_salary_basis_names_catalogued_columns_and_annual_default():
     assert set(basis['resolves_to']) == {'annual_salary', 'hourly_salary', 'rate_1'}
     assert set(basis['resolves_to']) <= entry['columns'].keys()
     assert 'annual_salary' in basis['default']
-    assert 'zero or NULL' in basis['default']
+    assert '2080' in basis['default']
+    assert 'separately' in basis['default']
     for name in ('hourly_salary', 'rate_1', 'pay_frequency', 'scheduled_pay_period_hours'):
         assert name in basis['clarify_if']
         assert name in entry['columns']
@@ -28,20 +29,20 @@ def test_salary_values_remain_nullable_without_universal_zero_guarantees():
         assert column['type'].startswith('Nullable(Decimal(')
         assert 'never NULL' not in column['description']
     annual = _entry()['columns']['annual_salary']['description']
-    assert 'default' in annual
-    assert 'do not assume' in annual
+    assert 'zero for Hourly employees is not zero earnings' in annual
+    assert 'employee_pay_type' in annual
     assert 'quantileExactLow(0.5)' in annual
 
 
 def test_hourly_value_is_not_documented_as_a_calculated_annual_ratio():
     description = _entry()['columns']['hourly_salary']['description']
-    assert 'source record' in description
-    assert 'does not independently calculate' in description
+    assert 'hourly_salary * 2080' in description
+    assert 'not actual payroll pay' in description
 
 
 def test_pay_classification_does_not_claim_equivalence_to_positive_salary():
     description = _entry()['columns']['employee_pay_type']['description']
-    assert 'classification' in description
+    assert 'other or unknown types remain separate' in description
     assert 'annual_salary > 0' not in description
     # A source classification must not silently discard other compensation
     # populations for every unqualified salary question.

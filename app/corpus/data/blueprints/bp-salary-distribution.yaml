@@ -1,8 +1,9 @@
 id: bp-salary-distribution
-intent: Annual salary distribution with configurable positive whole-currency band width. Lower bound inclusive,
-  upper bound exclusive; no formatted-label rounding. Counts and percentage denominator include only selected recorded
-  salaries, not employees missing salaries. Required population selects recorded or positive only. Defaults to Active
-  + On Leave; employee_status selects another status or All to remove the filter.
+intent: Annual compensation histogram by pay type with positive whole-currency band_width. Lower inclusive, upper
+  exclusive; percentages use the selected known-compensation population within each pay type. salary_population
+  selects recorded (including zero) or positive values. Salary uses annual_salary; Hourly uses hourly_salary and
+  estimated annual compensation = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes overtime). Keep pay
+  types separate. Defaults to Active + On Leave; employee_status overrides or All removes the filter.
 slots_summary: band_width, salary_population, employee_status, department, employee
 status: validated
 drift_status: clean
@@ -12,6 +13,9 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.employee_pay_type
+- dbpcm_warehouse.employee.hourly_salary
+- dbpcm_warehouse.department.department_name
 slots:
 - name: band_width
   type: positive_integer
@@ -24,6 +28,7 @@ slots:
   enum_values:
   - recorded
   - positive
+  description: Use recorded (including zero) unless the user explicitly requests positive/nonzero compensation.
 - name: employee_status
   description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
   type: enum
@@ -44,8 +49,10 @@ slots:
 - name: department
   type: entity
   required: false
-  binds_to: dbpcm_warehouse.employee.department_name
+  binds_to: dbpcm_warehouse.department.department_name
   optional_pattern: 'TRUE'
+  description: Resolve department names/abbreviations against the directory; a known department may have no matching
+    employees.
 - name: employee
   type: entity
   required: false
@@ -53,9 +60,20 @@ slots:
   optional_pattern: 'TRUE'
 result_grain:
 - Lower Bound
-sql_template: "SELECT intDiv(e.annual_salary, {band_width}) * {band_width} AS `Lower Bound`,\n (intDiv(e.annual_salary,\
-  \ {band_width}) + 1) * {band_width} AS `Upper Bound Exclusive`,\n count(*) AS `Employee Count`, 100.0 * count(*)\
-  \ / sum(count(*)) OVER () AS `Percent of Selected Recorded Salaries`\nFROM dbpcm_warehouse.employee e WHERE (e.employee_status\
-  \ = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department} AND e.employee_code =\
-  \ {employee} AND e.annual_salary IS NOT NULL\n AND ({salary_population} = 'recorded' OR e.annual_salary > 0)\n\
-  GROUP BY intDiv(e.annual_salary, {band_width}) ORDER BY `Lower Bound`"
+- Pay Type
+sql_template: "SELECT e.employee_pay_type AS `Pay Type`, CASE WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated\
+  \ annual compensation (2080 hours)' WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown\
+  \ compensation basis' END AS `Compensation Basis`, floor((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary\
+  \ WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) / {band_width}) * {band_width}\
+  \ AS `Lower Bound`,\n (floor((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type\
+  \ = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) / {band_width}) + 1) * {band_width} AS `Upper Bound Exclusive`,\n\
+  \ count(*) AS `Employee Count`, 100.0 * count(*) / sum(count(*)) OVER (PARTITION BY e.employee_pay_type) AS `Percent\
+  \ Within Pay Type`\nFROM dbpcm_warehouse.employee e WHERE (e.employee_status = {employee_status} OR {employee_status}\
+  \ = 'All') AND e.department_name = {department} AND e.employee_code = {employee} AND (CASE WHEN e.employee_pay_type\
+  \ = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)\
+  \ IS NOT NULL\n AND ({salary_population} = 'recorded' OR (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary\
+  \ WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) > 0)\nGROUP BY e.employee_pay_type,\
+  \ floor((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN\
+  \ e.hourly_salary * 2080 ELSE NULL END) / {band_width}) ORDER BY `Lower Bound`"
+uses_rules:
+- compensation_by_pay_type

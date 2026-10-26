@@ -3,8 +3,9 @@ table: punch_pair
 source: clickhouse
 region: workforce_time_attendance
 description: >
-  Employee matched In/Out punch pair records. Each row captures one paired clock-in and clock-out
-  event (day, lunch, break, or transfer punch types). Not individual unpaired punches — use the
+  Employee matched In/Out and generated time records. Salaried approved time off can create a punch;
+  salaried timesheet punches can be populated automatically at pay-period end. Presence or absence
+  of these records does not establish whether a salaried employee clocked in. Each row captures a paired record (day, lunch, break, or transfer punch types). Not individual unpaired punches — use the
   Punches table for raw single-clock events.
 
 grain: []
@@ -68,14 +69,14 @@ columns:
   in_punch_time:
     type: DateTime64(6)
     description: >
-      Actual timestamp of the In punch. Does NOT reflect rounding, grace periods, or pay-class rules.
+      Recorded In timestamp; salaried generated records do not prove a physical clock-in. Does NOT reflect rounding, grace periods, or pay-class rules.
     synonyms:
       - InPunchTime (legacy CamelCase alias, not a physical column reference)
 
   out_punch_time:
     type: DateTime64(6)
     description: >
-      Actual timestamp of the Out punch. Does NOT reflect rounding, grace periods, or pay-class rules.
+      Recorded Out timestamp; salaried generated records do not prove a physical clock-out. Does NOT reflect rounding, grace periods, or pay-class rules.
     synonyms:
       - OutPunchTime (legacy CamelCase alias, not a physical column reference)
 
@@ -181,6 +182,9 @@ measures:
       punch_date, or punch-type rules
 
 rules:
+  - id: generated_salary_punches
+    applies_when: Clocked-in, attendance or physical presence questions.
+    description: Salaried approved time off and automatic pay-period-end timesheets can generate punches. Verify employee pay type and genuine clock-event evidence; neither generated punches nor their absence establish salaried presence. Do not equate approved leave with clocking in.
   - id: punch_pair_employee_detail_population
     predicate: employee.employee_status IN ('Active', 'On Leave')
     applies_when: >

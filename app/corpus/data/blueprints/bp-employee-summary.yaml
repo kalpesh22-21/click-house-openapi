@@ -1,8 +1,9 @@
 id: bp-employee-summary
-intent: Employee headcount, salary sum/average/minimum/maximum and known-salary count, grouped by company, department
-  or status. Optional status, department and employee filters. Salary statistics exclude NULLs. One employee row
-  per authorized employee is required. No date-period or salary-threshold filter. Defaults to Active + On Leave;
-  employee_status selects another status or All to remove the filter.
+intent: Headcount and annual compensation sum, average, minimum, maximum and known-compensation count by company,
+  department or status, separately by pay type. Unknown compensation is NULL; headcount retains other and unknown
+  pay types. Salary uses annual_salary; Hourly uses hourly_salary and estimated annual compensation = hourly_salary
+  * 2080 (40 hours/week, 52 weeks/year; excludes overtime). Keep pay types separate. Defaults to Active + On Leave;
+  employee_status overrides or All removes the filter.
 slots_summary: group_by, employee_status, department, employee
 status: validated
 drift_status: clean
@@ -12,6 +13,9 @@ uses:
 - dbpcm_warehouse.employee.employee_status
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.annual_salary
+- dbpcm_warehouse.employee.employee_pay_type
+- dbpcm_warehouse.employee.hourly_salary
+- dbpcm_warehouse.department.department_name
 slots:
 - name: group_by
   type: enum
@@ -40,8 +44,10 @@ slots:
 - name: department
   type: entity
   required: false
-  binds_to: dbpcm_warehouse.employee.department_name
+  binds_to: dbpcm_warehouse.department.department_name
   optional_pattern: 'TRUE'
+  description: Resolve department names/abbreviations against the directory; a known department may have no matching
+    employees.
 - name: employee
   type: entity
   required: false
@@ -49,10 +55,22 @@ slots:
   optional_pattern: 'TRUE'
 result_grain:
 - Group
-sql_template: "SELECT CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'status' THEN e.employee_status\
-  \ ELSE 'Company' END AS `Group`,\n uniqExact(e.employee_code) AS `Employee Count`,\n count(e.annual_salary) AS\
-  \ `Known Salary Count`,\n sum(e.annual_salary) AS `Salary Sum`, avg(e.annual_salary) AS `Average Salary`,\n min(e.annual_salary)\
-  \ AS `Minimum Salary`, max(e.annual_salary) AS `Maximum Salary`\nFROM dbpcm_warehouse.employee e\nWHERE (e.employee_status\
-  \ = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department} AND e.employee_code =\
-  \ {employee}\nGROUP BY CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'status' THEN e.employee_status\
-  \ ELSE 'Company' END\nORDER BY `Group`\n"
+- Pay Type
+sql_template: "SELECT e.employee_pay_type AS `Pay Type`, CASE WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated\
+  \ annual compensation (2080 hours)' WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown\
+  \ compensation basis' END AS `Compensation Basis`, CASE WHEN {group_by} = 'department' THEN e.department_name\
+  \ WHEN {group_by} = 'status' THEN e.employee_status ELSE 'Company' END AS `Group`,\n uniqExact(e.employee_code)\
+  \ AS `Employee Count`,\n count((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type\
+  \ = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Known Compensation Count`,\n sum((CASE WHEN e.employee_pay_type\
+  \ = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END))\
+  \ AS `Annual Compensation Sum`, avg((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type\
+  \ = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Average Annual Compensation`,\n min((CASE WHEN e.employee_pay_type\
+  \ = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END))\
+  \ AS `Minimum Annual Compensation`, max((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type\
+  \ = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Maximum Annual Compensation`, avg(CASE WHEN e.employee_pay_type\
+  \ = 'Hourly' THEN e.hourly_salary ELSE NULL END) AS `Average Hourly Rate`\nFROM dbpcm_warehouse.employee e\nWHERE\
+  \ (e.employee_status = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department} AND\
+  \ e.employee_code = {employee}\nGROUP BY e.employee_pay_type, CASE WHEN {group_by} = 'department' THEN e.department_name\
+  \ WHEN {group_by} = 'status' THEN e.employee_status ELSE 'Company' END\nORDER BY `Group`\n"
+uses_rules:
+- compensation_by_pay_type

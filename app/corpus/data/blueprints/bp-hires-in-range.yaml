@@ -22,5 +22,5 @@ sql_template: |
   FROM dbpcm_warehouse.employee
   WHERE hire_date >= {hire_window_start}
     AND hire_date < {hire_window_end}
-    AND (employee_status != 'N' OR employee_status IS NULL)
+    AND (employee_status != 'Not Hired' OR employee_status IS NULL)
   GROUP BY toStartOfMonth(hire_date)

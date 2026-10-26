@@ -1,0 +1,9 @@
+id: kn-salaried-punches
+title: Salaried punches do not establish clock-in or attendance
+doc_id: hr-reporting-attendance
+status: validated
+text: Salaried employees with approved time off can have punch_pair records without clocking in. Salaried timesheet/punch
+  records are also populated automatically at pay-period end. Do not infer current clock-in or physical attendance
+  from those records, or infer absence from missing salaried punches. Check employee.employee_pay_type and genuine
+  clock-event evidence before answering clocked-in questions. If the available data cannot distinguish generated
+  entries from actual clock events, state that limitation; do not invent a distinguishing flag.

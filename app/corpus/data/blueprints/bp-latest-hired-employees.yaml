@@ -1,0 +1,60 @@
+id: bp-latest-hired-employees
+intent: Latest hired employee list ordered by most recent hire date, including rehires. Defaults to Active + On
+  Leave. Excludes missing/sentinel and future hire dates. row_limit is the requested top N; original hire is not
+  the ranking date.
+slots_summary: row_limit, employee_status, department
+status: validated
+drift_status: clean
+catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.most_recent_hire_date
+- dbpcm_warehouse.department.department_name
+slots:
+- name: row_limit
+  type: positive_integer
+  required: true
+  min_value: 1
+  max_value: 1000
+- name: employee_status
+  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
+  type: enum
+  required: false
+  enum_values:
+  - Active
+  - Deceased
+  - Inactive
+  - Retired
+  - Terminated
+  - On Leave
+  - Not Hired
+  - Prehire
+  - Unknown
+  - All
+  binds_to: dbpcm_warehouse.employee.employee_status
+  optional_pattern: e.employee_status IN ('Active', 'On Leave')
+- name: department
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.department.department_name
+  optional_pattern: 'TRUE'
+  description: Resolve department names/abbreviations against the directory; a known department may have no matching
+    employees.
+result_grain:
+- Employee Code
+sql_template: 'SELECT e.employee_code AS `Employee Code`, e.employee_name AS `Employee Name`, e.department_name
+  AS `Department`, e.employee_status AS `Status`, e.most_recent_hire_date AS `Most Recent Hire Date`
+
+  FROM dbpcm_warehouse.employee e
+
+  WHERE (e.employee_status = {employee_status} OR {employee_status} = ''All'') AND e.department_name = {department}
+
+  AND e.most_recent_hire_date > toDate(''1900-01-01'') AND e.most_recent_hire_date <= now()
+
+  ORDER BY e.most_recent_hire_date DESC, e.employee_code LIMIT {row_limit}'
+uses_rules:
+- default_employee_population
+- missing_date_sentinel

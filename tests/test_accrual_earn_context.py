@@ -14,7 +14,7 @@ from app.semantic_catalog.export import build_catalog_export
 
 @pytest.fixture
 def authored_entry():
-    entry = get_semantic_catalog()["dbpcm_warehouse.accrual_events"]
+    entry = get_semantic_catalog()["dbpcm_warehouse.timeoff_requests"]
     if not entry["columns"]["earn_code"].get("context_sql"):
         pytest.skip("Optional local accrual context SQL is not configured")
     return entry
@@ -66,7 +66,7 @@ def test_current_active_client_earnings(database, client, expected, authored_ent
 
 
 def test_authored_context_sql_is_not_exported():
-    exported = build_catalog_export()["catalog"]["dbpcm_warehouse.accrual_events"]
+    exported = build_catalog_export()["catalog"]["dbpcm_warehouse.timeoff_requests"]
     assert "context_sql" not in exported["columns"]["earn_code"]
 
 

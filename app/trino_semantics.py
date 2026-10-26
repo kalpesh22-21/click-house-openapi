@@ -103,9 +103,12 @@ def value_type(node):
         kind = _common_kind(node, concrete)
         if kind:
             return ValueType(kind, all(t.nullable for t in types))
-    if isinstance(node, exp.Case):
-        branches = [clause.args["true"] for clause in node.args.get("ifs", [])]
-        branches.append(node.args.get("default") or exp.Null())
+    if isinstance(node, (exp.Case, exp.If)):
+        if isinstance(node, exp.If):
+            branches = [node.args["true"], node.args.get("false") or exp.Null()]
+        else:
+            branches = [clause.args["true"] for clause in node.args.get("ifs", [])]
+            branches.append(node.args.get("default") or exp.Null())
         types = [value_type(branch) for branch in branches]
         if any(t is None for t in types):
             return None
@@ -153,7 +156,7 @@ def value_type(node):
         if name == "todatetime64" and len(args) == 2:
             source = value_type(args[0])
             return replace(source, kind="datetime", year_safe=True) if source else None
-        if name in {"addyears", "addmonths"} and len(args) == 2:
+        if name in {"addyears", "addmonths", "adddays"} and len(args) == 2:
             source, offset = value_type(args[0]), value_type(args[1])
             if source and offset and source.kind == "datetime" and offset.kind == "integer":
                 return replace(source, nullable=source.nullable or offset.nullable)

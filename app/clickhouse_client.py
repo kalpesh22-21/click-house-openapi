@@ -177,8 +177,8 @@ def readonly_settings(settings: Settings) -> dict[str, Any]:
         # which is exactly what this setting governs.
         #
         # If a server default or user profile set it to 1 (source-column-first),
-        # `SELECT lower(earn_code) AS status FROM accrual_events ORDER BY status`
-        # would READ `accrual_events.status` while the extractor's USES set omits
+        # `SELECT lower(earn_code) AS status FROM timeoff_requests ORDER BY status`
+        # would READ `timeoff_requests.status` while the extractor's USES set omits
         # it — an under-reported access, i.e. a scope-check bypass. Per-query
         # SETTINGS clauses are already denied by the statement gate, so sending it
         # ourselves on every read-only query closes the remaining environmental
@@ -414,6 +414,9 @@ def execute_query(
     # Use the cached singleton client (no-arg). Passing settings here would
     # build a fresh client on every query and (historically) crash because
     # lru_cache cannot hash a Settings object.
+    from app.table_names import native_query
+
+    sql = native_query(sql)
     client = get_client()
     # Transport for the per-tenant RLS identity settings (paycom_*), gated by
     # CLICKHOUSE_RLS_VIA_SQL_SETTINGS:
@@ -596,6 +599,9 @@ def execute_query_rows_stream(
     if settings is None:
         settings = get_settings()
 
+    from app.table_names import native_query
+
+    sql = native_query(sql)
     client = get_client()
     tenant = tenant_settings(settings)
     if settings.clickhouse_rls_via_sql_settings:
