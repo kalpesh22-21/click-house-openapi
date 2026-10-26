@@ -368,6 +368,20 @@ def _typed_date_add(func: exp.Func, unit: str) -> exp.Expression:
     return exp.DateAdd(this=date_arg, expression=offset, unit=exp.Var(this=unit))
 
 
+def _date_trunc(func: exp.Func) -> exp.Expression:
+    # SQLGlot renders toStartOfMonth as dateTrunc in logical SQL round trips.
+    from app.trino_constructs import unsupported
+    from app.trino_semantics import value_type
+
+    unit, value = func.expressions
+    info = value_type(value)
+    if (not isinstance(unit, exp.Literal) or not unit.is_string
+            or unit.this.lower() not in {"year", "quarter", "month", "week", "day", "hour", "minute", "second"}
+            or not info or info.kind != "datetime"):
+        unsupported("dateTrunc requires a supported constant unit and a known date/timestamp.")
+    return exp.TimestampTrunc(this=value, unit=exp.Var(this=unit.this.upper()))
+
+
 def _concat_with_separator_as_concat_ws(func: exp.Func) -> exp.Expression:
     """Preserve ClickHouse NULL propagation with sqlglot's CASE guard.
 
@@ -387,6 +401,7 @@ def _lower_utf8(func: exp.Func) -> exp.Expression:
 
 
 _CLICKHOUSE_FUNCTION_MAP: dict[str, _FunctionMapping] = {
+    "datetrunc": _FunctionMapping(_date_trunc, lambda n: n == 2),
     "lowerutf8": _FunctionMapping(_lower_utf8, lambda n: n == 1),
     "uniqexact": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n == 1),
     "countdistinct": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n == 1),
@@ -439,6 +454,11 @@ def _map_clickhouse_functions(tree: exp.Query) -> None:
     normalize_semantics(tree)
     normalize_constructs(tree)
     for conditional in tree.find_all(exp.If):
+        # sqlglot represents both CASE variants' WHEN arms as If nodes.
+        # Simple CASE compares values; only searched CASE/IF take predicates.
+        parent = conditional.parent
+        if isinstance(parent, exp.Case) and parent.this is not None:
+            continue
         conditional.set("this", _as_trino_condition(conditional.this))
     # Map children before a parent can duplicate them in a NULL guard.
     for func in reversed(list(tree.find_all(exp.Anonymous, exp.AnonymousAggFunc))):
@@ -564,6 +584,9 @@ def _rewrite_query(sql: str, settings: Settings) -> str:
         # Map caller expressions before inserting backend-native source SQL.
         _map_clickhouse_functions(tree)
         for source, entry, resolved_shard in replacements:
+            final = source.parent if isinstance(source.parent, exp.Final) else None
+            if final is not None and entry.get("source", "clickhouse") != "clickhouse":
+                raise QueryValidationError("FINAL requires a ClickHouse catalog table.", "TRINO_UNSUPPORTED_SQL")
             if entry.get("source") == "scratch":
                 replacement = exp.Table(
                     this=exp.to_identifier(entry["table"], quoted=True),
@@ -572,7 +595,9 @@ def _rewrite_query(sql: str, settings: Settings) -> str:
             else:
                 replacement = source_relation(entry, resolved_shard, identity, settings)
             replacement.set("alias", source.args.get("alias"))
-            source.replace(replacement)
+            # The native ClickHouse source already enforces SETTINGS final=1.
+            # FINAL must not survive around the Trino pass-through relation.
+            (final or source).replace(replacement)
         rendered = tree.sql(dialect="trino", unsupported_level=ErrorLevel.RAISE)
         return f"EXPLAIN {rendered}" if explain else rendered
     except SqlglotError as exc:

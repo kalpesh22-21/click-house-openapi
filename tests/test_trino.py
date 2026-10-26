@@ -187,6 +187,23 @@ def test_mixed_sources_and_qualified_columns(trino_settings, principal):
     assert "dbpcm_warehouse.employee.employee_code" not in sql
 
 
+@pytest.mark.parametrize("relation", ["payroll FINAL", "payroll AS p FINAL"])
+def test_explicit_final_is_enforced_inside_native_source(trino_settings, principal, relation):
+    sql = trino_client.rewrite_query("SELECT * FROM " + relation, trino_settings)
+    tree = sqlglot.parse_one(sql, read="trino")
+    assert not list(tree.find_all(exp.Final))
+    native = [n.this for n in tree.find_all(exp.Literal) if n.is_string and n.this.startswith("SELECT * FROM `")]
+    assert len(native) == 1 and "`final` = 1" in native[0]
+    assert "alice-jti" in native[0]
+    if "AS p" in relation:
+        assert "AS p" in sql
+
+
+def test_mysql_final_is_not_silently_discarded(trino_settings, principal):
+    with pytest.raises(QueryValidationError, match="FINAL requires"):
+        trino_client.rewrite_query("SELECT * FROM employee FINAL", trino_settings)
+
+
 def test_cte_shadowing_nested_union_and_strings(trino_settings, principal):
     sql = trino_client.rewrite_query(
         "WITH employee AS (SELECT employee_code FROM dbpcm_warehouse.employee) "

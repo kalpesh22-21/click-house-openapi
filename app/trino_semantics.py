@@ -147,6 +147,9 @@ def value_type(node):
     if isinstance(node, (exp.Anonymous, exp.AnonymousAggFunc)):
         name = node.name.lower()
         args = node.expressions
+        if name == "datetrunc" and len(args) == 2:
+            source = value_type(args[1])
+            return source if source and source.kind == "datetime" else None
         if name == "multiif" and len(args) >= 3 and len(args) % 2 == 1:
             branches = [value_type(value) for value in [*args[1:-1:2], args[-1]]]
             if all(branch is not None for branch in branches):

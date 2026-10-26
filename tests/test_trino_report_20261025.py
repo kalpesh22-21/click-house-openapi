@@ -24,6 +24,19 @@ def age(column='date_of_birth'):
     return f"toYear(today())-toYear({column})-if(addYears({column},toYear(today())-toYear({column}))>today(),1,0)"
 
 
+@pytest.mark.parametrize('expression', ["toStartOfMonth(hire_date)", "toStartOfMonth(max(hire_date))"])
+def test_month_truncation_survives_logical_sql_roundtrip(expression):
+    original = 'SELECT '+expression+' FROM employee'
+    rendered = sqlglot.parse_one(original, read='clickhouse').sql(dialect='clickhouse')
+    assert convert(rendered) == convert(original)
+
+
+@pytest.mark.parametrize('expression', ["dateTrunc('bogus',today())", "dateTrunc('month','2024-01-01')", "dateTrunc('month',today(),'UTC')", "dateTrunc(employee_code,today())"])
+def test_date_trunc_invalid_signatures_fail_before_dispatch(expression):
+    with pytest.raises(QueryValidationError):
+        convert('SELECT '+expression+' FROM employee')
+
+
 @pytest.mark.parametrize('offset', ["today()-INTERVAL 30 DAY", "today()+INTERVAL -30 DAY", "today()-30", "today()+(-30)", "addDays(today(),-30)", "ADDDAYS(today(),-30)"])
 def test_integer_day_offsets(offset):
     sql = convert('SELECT '+offset)
