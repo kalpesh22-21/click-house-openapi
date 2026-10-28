@@ -1,0 +1,18 @@
+# Apply after values.yaml and (for MCP) values-mcp.yaml.
+# The Trino secret / Vault endpoint must name Gateway, not a coordinator.
+config:
+  TRINO_ENABLED: 'true'
+  TRINO_SECURITY_READY: 'true'
+  TRINO_HTTP_SCHEME: https
+  TRINO_PORT: '443'
+  TRINO_ROUTING_GROUP: interactive
+extraEnv:
+  - name: TRINO_HOST
+    valueFrom:
+      secretKeyRef: {name: trino-service, key: TRINO_HOST}
+  - name: TRINO_USER
+    valueFrom:
+      secretKeyRef: {name: trino-service, key: TRINO_USER}
+  - name: TRINO_PASSWORD
+    valueFrom:
+      secretKeyRef: {name: trino-service, key: TRINO_PASSWORD}

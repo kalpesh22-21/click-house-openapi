@@ -1282,3 +1282,28 @@ def test_schema_authoring_types_preserve_nullability(monkeypatch, trino_settings
 def test_remote_function_regressions_through_full_rewrite(projection, expected, trino_settings, principal):
     rewritten = trino_client.rewrite_query(f"SELECT {projection} FROM employee", trino_settings)
     assert expected in rewritten
+
+
+@pytest.mark.parametrize('group', ['', 'interactive', 'hr-export'])
+def test_gateway_group_preserves_auth_identity_and_no_retry(monkeypatch, trino_settings, group):
+    connect = MagicMock()
+    monkeypatch.setattr('trino.dbapi.connect', connect)
+    trino_settings.trino_host = 'gateway.example.test'
+    trino_settings.trino_http_scheme = 'https'
+    trino_settings.trino_user = 'service-user'
+    trino_settings.trino_password = 'test-only'
+    trino_settings.trino_routing_group = group
+    trino_client._connect(trino_settings, 'pc1|10R37|alice', mysql_catalog='shard_a')
+    kwargs = connect.call_args.kwargs
+    assert kwargs['host'] == 'gateway.example.test'
+    assert kwargs['user'] == 'pc1|10R37|alice'
+    assert kwargs['auth'] is not None
+    assert kwargs['max_attempts'] == 1
+    assert kwargs['http_headers'] == ({'X-Trino-Routing-Group': group} if group else None)
+    assert kwargs['session_properties']['shard_a.aggregation_pushdown_enabled'] == 'false'
+
+
+@pytest.mark.parametrize('group', ['x\r\ny', 'a b', 'a,b', 'x'*129])
+def test_gateway_group_rejects_invalid_headers(group):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, trino_routing_group=group)

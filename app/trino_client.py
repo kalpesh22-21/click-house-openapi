@@ -651,6 +651,8 @@ def _connect(settings: Settings, user: str, *, mysql_catalog: str | None = None)
         user=user,
         auth=auth,
         source="clickhouse-api-mcp",
+        http_headers=({"X-Trino-Routing-Group": settings.trino_routing_group}
+                      if settings.trino_routing_group else None),
         request_timeout=settings.trino_request_timeout,
         max_attempts=1,
         session_properties=session_properties,

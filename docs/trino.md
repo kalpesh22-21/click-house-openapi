@@ -71,6 +71,26 @@ Trino directly to callers: without service authentication a supplied user name i
 only a claim, not proof of identity. See the official Python client's
 [user impersonation contract](https://github.com/trinodb/trino-python-client#user-impersonation).
 
+## Trino Gateway endpoint
+
+For a Gateway deployment, point the existing `TRINO_HOST`/`TRINO_PORT` settings
+(or the Vault Trino endpoint) at Gateway over HTTPS. Keep the service credentials
+and verified `proc_center|clientcode|user_name` query identity unchanged.
+`TRINO_ROUTING_GROUP=interactive` adds the server-configured
+`X-Trino-Routing-Group` header to execution, catalog checks and scratch metadata
+connections. Empty retains direct-coordinator compatibility. Caller/JWT values
+cannot override this routing group.
+
+`helm/clickhouse-api/values-trino-gateway.yaml` is an API/MCP overlay. Merge it with
+the deployment's other environment entries and private source mounts; Helm lists
+such as `extraEnv` replace rather than append. If Vault supplies the Trino endpoint,
+update that secret too. The Gateway and cluster deployments live in the separate
+`trino` repository (`deploy/gateway`, `deploy/clusters`, `docs/cluster.md`).
+
+All backends in a group must have matching catalogs, permissions, source mappings
+and the same scratch database. The API does not retry a failed query through a
+direct coordinator. Existing native ClickHouse-only routing is unchanged.
+
 ## Catalog lifecycle
 
 The authored YAML catalog supplies logical types and columns for query validation

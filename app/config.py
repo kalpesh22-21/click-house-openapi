@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     trino_user: str = ""
     trino_password: str = Field("", repr=False)
     trino_request_timeout: float = Field(30, gt=0)
+    # Optional Gateway routing group; never supplied by a caller or JWT claim.
+    trino_routing_group: str = Field("", max_length=128, pattern=r"^[A-Za-z0-9_.-]*$")
     # MySQL logical schema the MySQL connector catalogs expose. Doubles as the
     # shard registry's `mysqldb` filter dimension at resolution time (default
     # dbonline); any registry row whose database differs is ineligible.
