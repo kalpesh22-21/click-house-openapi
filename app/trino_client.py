@@ -30,7 +30,7 @@ from app.principal import get_current_principal
 from app.semantic_catalog.loader import DEFAULT_DATABASE, get_semantic_catalog
 from app.shard_routing import resolve_mysql_shard, validate_identifier
 from app.trino_errors import rewrite_trino_error
-from app.trino_diagnostics import trace_execution, record_physical, record_query_id
+from app.trino_diagnostics import trace_execution, record_physical, record_query_id, trace_conversion
 
 logger = logging.getLogger(__name__)
 
@@ -471,6 +471,7 @@ def _map_clickhouse_functions(tree: exp.Query) -> None:
         func.replace(replacement)
 
 
+@trace_conversion
 def rewrite_query(sql: str, settings: Settings) -> str:
     """Route base relations, preserving CTE names, aliases and logical columns.
 

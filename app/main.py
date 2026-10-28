@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request, Depends, HTTPException
+from app.trino_tracing import TraceContextMiddleware
 from fastapi.exception_handlers import (
     http_exception_handler,
     request_validation_exception_handler,
@@ -164,6 +165,8 @@ app = FastAPI(
 # Exception handlers
 # ---------------------------------------------------------------------------
 
+
+app.add_middleware(TraceContextMiddleware)
 
 # Map each transport-agnostic domain error to its HTTP status.  Registering one
 # handler on the base class catches every subclass (Starlette walks the MRO), so

@@ -1405,6 +1405,8 @@ def _parse_args() -> argparse.Namespace:
 def create_http_app():
     """Validate the local catalog once at ASGI startup, without tenant probes."""
     app = mcp.streamable_http_app()
+    from app.trino_tracing import TraceContextMiddleware
+    app.add_middleware(TraceContextMiddleware)
     if settings.export_enabled:
         from fastapi import FastAPI
         from app.routers.export import router as snapshot_router

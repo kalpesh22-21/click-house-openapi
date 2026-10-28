@@ -37,3 +37,7 @@ boto3==1.43.33
 # EXPORT_STORE=couchbase backend. Imported lazily — an EXPORT_STORE=s3 deploy
 # never loads it.
 couchbase==4.6.2
+
+# Phoenix OTLP/HTTP tracing (disabled unless OTLP_ENDPOINT is configured).
+opentelemetry-sdk>=1.39,<2
+opentelemetry-exporter-otlp-proto-http>=1.39,<2

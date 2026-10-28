@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     trino_user: str = ""
     trino_password: str = Field("", repr=False)
     trino_request_timeout: float = Field(30, gt=0)
+    # Optional Phoenix tracing; endpoint is the complete OTLP/HTTP traces URL.
+    otlp_endpoint: str = ""  # Full OTLP/HTTP traces URL; empty disables export.
+    otlp_service_name: str = "clickhouse-api"
+    otlp_project_name: str = "data-agent-runtime"
+    otlp_disable_redaction: bool = False
     # Optional Gateway routing group; never supplied by a caller or JWT claim.
     trino_routing_group: str = Field("", max_length=128, pattern=r"^[A-Za-z0-9_.-]*$")
     # MySQL logical schema the MySQL connector catalogs expose. Doubles as the

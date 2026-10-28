@@ -500,3 +500,30 @@ ClickHouse connector must reach the same scratch tables; the connector user need
 `SELECT ON dbpcm_scratch.*`. Keep existing scratch writer privileges and TTL
 configuration. Blueprint templates retain `scratch.<output>` placeholders; the
 agent substitutes the fully qualified name returned by materialization.
+
+## Connected Phoenix tracing
+
+The data agent propagates the active tool span in W3C `traceparent`/`tracestate`
+headers on MCP and REST side-channel calls. The API extracts only trace context,
+not baggage, and restores it after each request. Trace headers never grant access.
+
+Set `OTLP_ENDPOINT=http://phoenix:6006/v1/traces` on clickhouse-api (the full
+OTLP/HTTP URL, not the agent's gRPC endpoint). Set `OTLP_PROJECT_NAME` to the same
+project as the agent; the default is `data-agent-runtime`. Keep distinct service
+names (`OTLP_SERVICE_NAME=clickhouse-api`). Export uses a bounded background batch
+queue; an unavailable collector does not delay query execution waiting for export.
+Standard `OTEL_EXPORTER_OTLP_TRACES_HEADERS` can supply collector authentication.
+
+The trace tree is `agent tool → trino.execute → trino.convert`. Conversion records
+logical SQL as input and rewritten Trino SQL as output, including rejected
+conversions with a bounded error code. Execution records the diagnostic correlation
+ID and coordinator query ID. Execution duration includes conversion and result
+fetching (or streaming); conversion has its own duration. No result rows, raw JWTs,
+exception messages or stacks are exported. Authenticated session IDs link spans.
+
+`OTLP_DISABLE_REDACTION=false` masks SQL literals and removes comments. Setting it
+true records SQL verbatim, including injected tenant settings; SQL attributes are
+bounded to 32 KiB. Local restricted diagnostic files retain their existing redaction
+regardless of this Phoenix flag. With no incoming trace context, API work starts
+its own trace. Calls made without an active agent span cannot be attached to an
+older turn merely by session ID.

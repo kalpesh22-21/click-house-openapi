@@ -1,0 +1,68 @@
+{
+  "trace_id": "a8f5d759c5244763cabd0d26859d1397",
+  "phoenix_project": "trino-connected-verification",
+  "method": "Agent RealMCPClient -> local FastMCP fixture with synthetic identity -> production API executor -> live Trino; real Phoenix OTLP ingestion",
+  "scope": "No LLM or production authentication replay. This verifies transport propagation and conversion/execution spans.",
+  "checks": {
+    "single_trace": true,
+    "parent_links": true,
+    "success_and_rejected_conversion": true,
+    "query_id": true,
+    "redacted_sql": true,
+    "multiline_sql_readability": true
+  },
+  "spans": [
+    {
+      "name": "trino.execute",
+      "span_id": "857d0b64f53f5822",
+      "parent_id": "e09a92e89eac8b6d",
+      "status": "ERROR"
+    },
+    {
+      "name": "trino.convert",
+      "span_id": "2beb399447cf5ec8",
+      "parent_id": "857d0b64f53f5822",
+      "status": "ERROR"
+    },
+    {
+      "name": "trino.execute",
+      "span_id": "28bc4c66f29f3178",
+      "parent_id": "cb804ab4d0fdd955",
+      "status": "OK"
+    },
+    {
+      "name": "trino.convert",
+      "span_id": "e5f55d925b45572c",
+      "parent_id": "28bc4c66f29f3178",
+      "status": "OK"
+    },
+    {
+      "name": "agent.turn",
+      "span_id": "457fe7e65039b063",
+      "parent_id": null,
+      "status": "UNSET"
+    },
+    {
+      "name": "tool.runQuery",
+      "span_id": "e09a92e89eac8b6d",
+      "parent_id": "457fe7e65039b063",
+      "status": "UNSET"
+    },
+    {
+      "name": "tool.runQuery",
+      "span_id": "cb804ab4d0fdd955",
+      "parent_id": "457fe7e65039b063",
+      "status": "UNSET"
+    }
+  ],
+  "readability": {
+    "method": "Inspected Phoenix REST span payloads; graphical inspection blocked by Computer Use permissions.",
+    "input": "SELECT\n  toDate('[redacted]') AS period_start,\n  addDays(toDate('[redacted]'), 0) AS period_end,\n  toYear(toDate('[redacted]')) AS reporting_year",
+    "output": "SELECT\n  CAST('[redacted]' AS DATE) AS period_start,\n  DATE_ADD('DAY', 0, CAST('[redacted]' AS DATE)) AS period_end,\n  YEAR(CAST('[redacted]' AS DATE)) AS reporting_year"
+  },
+  "tests": {
+    "api_passed": 713,
+    "agent_passed": 53,
+    "agent_skipped": 1
+  }
+}

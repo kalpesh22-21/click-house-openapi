@@ -24,7 +24,7 @@ _lock = threading.Lock()
 logger = logging.getLogger(__name__)
 
 
-def redacted_sql(sql, dialect):
+def redacted_sql(sql, dialect, *, pretty=False):
     try:
         statements = sqlglot.parse(sql, read=dialect, error_level=ErrorLevel.RAISE)
         if len(statements) != 1 or statements[0] is None:
@@ -36,7 +36,7 @@ def redacted_sql(sql, dialect):
             # preserve that embedded string: it contains injected tenant settings.
             if isinstance(node, exp.Literal):
                 node.set("this", "[redacted]" if node.is_string else "0")
-        return tree.sql(dialect=dialect)
+        return tree.sql(dialect=dialect, pretty=pretty)
     except Exception:
         return "[unavailable: unparseable SQL]"
 
@@ -79,7 +79,7 @@ def _write(directory, record):
 
 
 @contextmanager
-def trace_query(sql, settings):
+def _trace_query(sql, settings):
     """Trace the complete lifetime of a buffered query or export stream."""
     if not settings.trino_enabled:
         yield
@@ -117,4 +117,37 @@ def trace_execution(function):
         settings = settings or get_settings()
         with trace_query(sql, settings):
             return function(sql, settings, parameters)
+    return wrapped
+
+
+@contextmanager
+def trace_query(sql, settings):
+    from app.trino_tracing import trino_span
+    if not settings.trino_enabled:
+        yield
+        return
+    with trino_span("trino.execute", settings) as span:
+        with _trace_query(sql, settings):
+            record = _current.get()
+            span.set_attribute("correlation_id", record["correlation_id"])
+            try:
+                yield
+            finally:
+                if "trino_query_id" in record:
+                    span.set_attribute("trino.query_id", record["trino_query_id"])
+
+
+def trace_conversion(function):
+    @wraps(function)
+    def wrapped(sql, settings):
+        from app.trino_tracing import trino_span, sql_attribute
+        with trino_span("trino.convert", settings) as span:
+            if span.is_recording():
+                span.set_attribute("input.value", sql_attribute(sql, "clickhouse", settings))
+                span.set_attribute("input.mime_type", "text/plain")
+            result = function(sql, settings)
+            if span.is_recording():
+                span.set_attribute("output.value", sql_attribute(result, "trino", settings))
+                span.set_attribute("output.mime_type", "text/plain")
+            return result
     return wrapped
