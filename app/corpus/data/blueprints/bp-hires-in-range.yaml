@@ -1,5 +1,6 @@
 id: bp-hires-in-range
-intent: New hires per month within an explicit start/end date range — counts by original hire date; rehires are not re-counted
+intent: New hires per month within an explicit start/end date range — counts by original hire date; rehires are
+  not re-counted
 slots_summary: hire_window
 status: validated
 drift_status: clean
@@ -22,5 +23,6 @@ sql_template: |
   FROM dbpcm_warehouse.employee
   WHERE hire_date >= {hire_window_start}
     AND hire_date < {hire_window_end}
-    AND (employee_status != 'Not Hired' OR employee_status IS NULL)
+    AND (employee_status != 'Not Hired'
+         OR employee_status IS NULL)
   GROUP BY toStartOfMonth(hire_date)

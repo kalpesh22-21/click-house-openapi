@@ -1,0 +1,36 @@
+id: bp-department-directory
+intent: Complete department dictionary with codes, names, active headcount and total headcount including zero-employee
+  departments
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT d.department_code AS "Department Code",
+         d.department_name AS "Department",
+         countIf(e.employee_status = 'Active') AS "Active Headcount",
+         count(DISTINCT e.employee_code) AS "Total Headcount"
+  FROM dbpcm_warehouse.department AS d
+  LEFT JOIN dbpcm_warehouse.employee AS e ON e.department_code = d.department_code
+  GROUP BY d.department_code,
+           d.department_name
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Active Headcount"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Active Headcount"
+                     END ASC, d.department_name
+slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: order_direction
+uses:
+- dbpcm_warehouse.department.department_code
+- dbpcm_warehouse.department.department_name
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.department_code

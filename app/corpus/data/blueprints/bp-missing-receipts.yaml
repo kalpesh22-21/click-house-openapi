@@ -1,0 +1,42 @@
+id: bp-missing-receipts
+intent: Missing receipt count and share by expense rule for a payment date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT expense_rule AS "Expense Rule",
+         any(expense_rule_description) AS "Rule Description",
+         countIf(receipt_attached = 'No') AS "Missing Receipts",
+         round(toFloat64(countIf(receipt_attached = 'No')) / nullIf(count(), 0), 4) AS "Missing Share"
+  FROM dbpcm_warehouse.expense
+  WHERE expense_paid_date >= {expense_window_start}
+    AND expense_paid_date <= {expense_window_end}
+  GROUP BY expense_rule
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Missing Receipts"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Missing Receipts"
+                     END ASC, "Expense Rule"
+  LIMIT {top_n}
+slots:
+- name: expense_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: top_n
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: expense_window, top_n, order_direction
+uses:
+- dbpcm_warehouse.expense.receipt_attached
+- dbpcm_warehouse.expense.expense_rule
+- dbpcm_warehouse.expense.expense_rule_description
+- dbpcm_warehouse.expense.expense_paid_date

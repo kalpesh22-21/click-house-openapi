@@ -1,0 +1,52 @@
+id: bp-headcount-monthly-trend
+intent: End-of-month active headcount and monthly termination trend reconstructed from hire and termination dates
+  over the last N months
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT formatDateTime(toStartOfMonth(month_end), '%Y-%m') AS "Month",
+         countIf(hire_date <= month_end
+                 AND (termination_date IS NULL
+                      OR toDate32(termination_date) <= toDate32('1900-01-01')
+                      OR termination_date > month_end)) AS "Active Headcount",
+         countIf(termination_date >= toStartOfMonth(month_end)
+                 AND termination_date <= month_end
+                 AND termination_date IS NOT NULL
+                 AND toDate32(termination_date) > toDate32('1900-01-01')
+                 AND (most_recent_hire_date IS NULL
+                      OR most_recent_hire_date < termination_date)) AS "Terms In Month"
+  FROM
+    (SELECT toLastDayOfMonth(addMonths(anchor.latest_hire, -toInt32(number))) AS month_end
+     FROM
+       (SELECT max(hire_date) AS latest_hire
+        FROM dbpcm_warehouse.employee
+        WHERE toDate32(hire_date) > toDate32('1900-01-01')) AS anchor
+     CROSS JOIN
+       (SELECT arrayJoin(range(0, toInt32({win}))) AS number) AS seq) AS months
+  CROSS JOIN dbpcm_warehouse.employee AS e
+  WHERE hire_date IS NOT NULL
+    AND toDate32(hire_date) > toDate32('1900-01-01')
+  GROUP BY "Month"
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Month"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Month"
+                     END ASC
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: win, order_direction
+uses:
+- dbpcm_warehouse.employee.hire_date
+- dbpcm_warehouse.employee.termination_date
+- dbpcm_warehouse.employee.most_recent_hire_date

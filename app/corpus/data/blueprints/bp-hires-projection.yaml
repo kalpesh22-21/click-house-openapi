@@ -1,5 +1,6 @@
 id: bp-hires-projection
-intent: Projected number of hires over the next N months at the current hiring pace (run-rate over a trailing window) — counts by original hire date; rehires are not re-counted
+intent: Projected number of hires over the next N months at the current hiring pace (run-rate over a trailing window)
+  — counts by original hire date; rehires are not re-counted
 slots_summary: window_months, horizon_months
 status: validated
 drift_status: clean
@@ -22,14 +23,14 @@ slots:
 result_grain: []
 window_anchor: data
 sql_template: |
-  SELECT
-    COUNT(DISTINCT employee_code) AS hires_in_window,
-    round(COUNT(DISTINCT employee_code) / {window_months}, 1) AS avg_monthly_hires,
-    round(COUNT(DISTINCT employee_code) / {window_months} * {horizon_months}) AS projected_next_n_hires
+  SELECT COUNT(DISTINCT employee_code) AS hires_in_window,
+         round(COUNT(DISTINCT employee_code) / {window_months}, 1) AS avg_monthly_hires,
+         round(COUNT(DISTINCT employee_code) / {window_months} * {horizon_months}) AS projected_next_n_hires
   FROM dbpcm_warehouse.employee
-  WHERE hire_date >= addMonths((
-          SELECT toStartOfMonth(max(hire_date))
-          FROM dbpcm_warehouse.employee
-          WHERE employee_status != 'N' OR employee_status IS NULL
-        ), 1) - INTERVAL {window_months} MONTH
-    AND (employee_status != 'N' OR employee_status IS NULL)
+  WHERE hire_date >= addMonths(
+                                 (SELECT toStartOfMonth(max(hire_date))
+                                  FROM dbpcm_warehouse.employee
+                                  WHERE employee_status != 'N'
+                                    OR employee_status IS NULL), 1) - INTERVAL {window_months} MONTH
+    AND (employee_status != 'N'
+         OR employee_status IS NULL)

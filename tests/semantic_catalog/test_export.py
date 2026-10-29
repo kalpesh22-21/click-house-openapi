@@ -101,7 +101,7 @@ class TestBuildCatalogExportFrom:
         assert fake["dbpcm_warehouse.t"]["table"] == "t"
 
 
-@pytest.mark.parametrize("table", ["timeoff_balances", "timeoff_requests", "expense", "payroll", "total_earning", "punch_pair", "employee_change"])
+@pytest.mark.parametrize("table", ["time_off_balance", "time_off_request", "expense", "payroll", "total_earning", "punch_pair", "employee_change"])
 def test_module_detail_population_rule_survives_export(table):
     entry = export.build_catalog_export()["catalog"][f"dbpcm_warehouse.{table}"]
     rule = next(r for r in entry["rules"] if r["id"] == f"{table}_employee_detail_population")

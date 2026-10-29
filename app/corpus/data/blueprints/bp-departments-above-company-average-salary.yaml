@@ -21,9 +21,18 @@ composes:
   output:
     company_salary_avg: scalar
     company_hourly_avg: scalar
-  sql_template: SELECT avg(CASE WHEN employee_pay_type = 'Salary' THEN annual_salary ELSE NULL END) AS company_salary_avg,
-    avg(CASE WHEN employee_pay_type = 'Hourly' THEN hourly_salary * 2080 ELSE NULL END) AS company_hourly_avg FROM
-    dbpcm_warehouse.employee WHERE (employee_status = {employee_status} OR {employee_status} = 'All')
+  sql_template: |
+    SELECT avg(CASE
+                   WHEN employee_pay_type = 'Salary' THEN annual_salary
+                   ELSE NULL
+               END) AS company_salary_avg,
+           avg(CASE
+                   WHEN employee_pay_type = 'Hourly' THEN hourly_salary * 2080
+                   ELSE NULL
+               END) AS company_hourly_avg
+    FROM dbpcm_warehouse.employee
+    WHERE (employee_status = {employee_status}
+           OR {employee_status} = 'All')
 - order: 1
   feeds_from:
   - 0
@@ -31,15 +40,36 @@ composes:
     company_salary_avg: $0.company_salary_avg
     company_hourly_avg: $0.company_hourly_avg
   output: {}
-  sql_template: SELECT department_name AS `Department`, employee_pay_type AS `Pay Type`, CASE WHEN employee_pay_type
-    = 'Hourly' THEN 'Estimated annual compensation (2080 hours)' ELSE 'Recorded annual salary' END AS `Compensation
-    Basis`, avg(CASE WHEN employee_pay_type = 'Salary' THEN annual_salary WHEN employee_pay_type = 'Hourly' THEN
-    hourly_salary * 2080 ELSE NULL END) AS `Department Average Annual Compensation`, avg(CASE WHEN employee_pay_type
-    = 'Hourly' THEN hourly_salary ELSE NULL END) AS `Average Hourly Rate` FROM dbpcm_warehouse.employee WHERE (employee_status
-    = {employee_status} OR {employee_status} = 'All') GROUP BY department_name, employee_pay_type HAVING avg(CASE
-    WHEN employee_pay_type = 'Salary' THEN annual_salary WHEN employee_pay_type = 'Hourly' THEN hourly_salary *
-    2080 ELSE NULL END) > CASE WHEN employee_pay_type = 'Salary' THEN {company_salary_avg} WHEN employee_pay_type
-    = 'Hourly' THEN {company_hourly_avg} ELSE NULL END
+  sql_template: |
+    SELECT department_name AS `Department`,
+           employee_pay_type AS `Pay Type`,
+           CASE
+               WHEN employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+               ELSE 'Recorded annual salary'
+           END AS `Compensation Basis`,
+           avg(CASE
+                   WHEN employee_pay_type = 'Salary' THEN annual_salary
+                   WHEN employee_pay_type = 'Hourly' THEN hourly_salary * 2080
+                   ELSE NULL
+               END) AS `Department Average Annual Compensation`,
+           avg(CASE
+                   WHEN employee_pay_type = 'Hourly' THEN hourly_salary
+                   ELSE NULL
+               END) AS `Average Hourly Rate`
+    FROM dbpcm_warehouse.employee
+    WHERE (employee_status = {employee_status}
+           OR {employee_status} = 'All')
+    GROUP BY department_name,
+             employee_pay_type
+    HAVING avg(CASE
+                   WHEN employee_pay_type = 'Salary' THEN annual_salary
+                   WHEN employee_pay_type = 'Hourly' THEN hourly_salary * 2080
+                   ELSE NULL
+               END) > CASE
+                          WHEN employee_pay_type = 'Salary' THEN {company_salary_avg}
+                          WHEN employee_pay_type = 'Hourly' THEN {company_hourly_avg}
+                          ELSE NULL
+                      END
 slots:
 - name: employee_status
   description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.

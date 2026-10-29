@@ -1,0 +1,50 @@
+id: bp-expense-concept-spend
+intent: Expense spend matched to a user-supplied concept via rule or account descriptions for a payment date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT coalesce(expense_rule_description, expense_account_description) AS "Matched Description",
+         round(toFloat64(SUM(amount_approved)), 2) AS "Approved Spend",
+         count() AS "Line Count"
+  FROM dbpcm_warehouse.expense
+  WHERE expense_status IN ('Approved',
+                           'Paid',
+                           'Marked as Paid')
+    AND expense_paid_date >= {expense_window_start}
+    AND expense_paid_date <= {expense_window_end}
+    AND (expense_rule_description ILIKE concat('%', {concept}, '%')
+         OR expense_account_description ILIKE concat('%', {concept}, '%'))
+  GROUP BY coalesce(expense_rule_description, expense_account_description)
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Approved Spend"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Approved Spend"
+                     END ASC, "Matched Description"
+  LIMIT {max_rows}
+slots:
+- name: concept
+  type: string
+  required: true
+- name: expense_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: concept, expense_window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.expense.expense_account_description
+- dbpcm_warehouse.expense.expense_rule_description
+- dbpcm_warehouse.expense.amount_approved
+- dbpcm_warehouse.expense.expense_status
+- dbpcm_warehouse.expense.expense_paid_date

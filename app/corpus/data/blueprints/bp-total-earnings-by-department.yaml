@@ -25,6 +25,11 @@ uses_rules:
   binds: earn_codes
 result_grain:
 - Department
-sql_template: "SELECT e.department_name AS department, SUM(p.amount) AS total_earnings\nFROM dbpcm_warehouse.payroll\
-  \ AS p\nJOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code\nWHERE p.register_type IN {earn_codes}\n\
-  \  AND e.department_name = {department}\nGROUP BY e.department_name\n"
+sql_template: |
+  SELECT e.department_name AS department,
+         SUM(p.amount) AS total_earnings
+  FROM dbpcm_warehouse.payroll AS p
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
+  WHERE p.register_type IN {earn_codes}
+    AND e.department_name = {department}
+  GROUP BY e.department_name

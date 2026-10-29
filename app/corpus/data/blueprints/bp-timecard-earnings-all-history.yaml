@@ -1,0 +1,44 @@
+id: bp-timecard-earnings-all-history
+intent: All-history timecard earnings and hours per earn code from total_earning, spanning all available punch dates,
+  with optional employee or date-window filter
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT earn_code AS "Earn Code",
+         round(SUM(earn_amount), 2) AS "Total Earnings",
+         round(SUM(earn_hours), 2) AS "Total Hours"
+  FROM dbpcm_warehouse.total_earning
+  WHERE employee_code = {ee}
+    AND punch_date BETWEEN {window_start} AND {window_end}
+  GROUP BY earn_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Total Earnings"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Total Earnings"
+                     END ASC
+slots:
+- name: ee
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.total_earning.employee_code
+  optional_pattern: 'TRUE'
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: ee, window, order_direction
+uses:
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.total_earning.earn_amount
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.employee_code

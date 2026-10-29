@@ -2,10 +2,10 @@ id: bp-latest-hired-employees
 intent: Latest hired employee list ordered by most recent hire date, including rehires. Defaults to Active + On
   Leave. Excludes missing/sentinel and future hire dates. row_limit is the requested top N; original hire is not
   the ranking date.
-slots_summary: row_limit, employee_status, department
+slots_summary: row_limit, employee_status, department, order_direction
 status: validated
 drift_status: clean
-catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+catalog_sha: ''
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name
@@ -43,18 +43,34 @@ slots:
   optional_pattern: 'TRUE'
   description: Resolve department names/abbreviations against the directory; a known department may have no matching
     employees.
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
 result_grain:
 - Employee Code
-sql_template: 'SELECT e.employee_code AS `Employee Code`, e.employee_name AS `Employee Name`, e.department_name
-  AS `Department`, e.employee_status AS `Status`, e.most_recent_hire_date AS `Most Recent Hire Date`
-
+sql_template: |
+  SELECT e.employee_code AS `Employee Code`,
+         e.employee_name AS `Employee Name`,
+         e.department_name AS `Department`,
+         e.employee_status AS `Status`,
+         e.most_recent_hire_date AS `Most Recent Hire Date`
   FROM dbpcm_warehouse.employee e
-
-  WHERE (e.employee_status = {employee_status} OR {employee_status} = ''All'') AND e.department_name = {department}
-
-  AND e.most_recent_hire_date > toDate(''1900-01-01'') AND e.most_recent_hire_date <= now()
-
-  ORDER BY e.most_recent_hire_date DESC, e.employee_code LIMIT {row_limit}'
+  WHERE (e.employee_status = {employee_status}
+         OR {employee_status} = 'All')
+    AND e.department_name = {department}
+    AND e.most_recent_hire_date > toDate('1900-01-01')
+    AND e.most_recent_hire_date <= now()
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN e.most_recent_hire_date
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN e.most_recent_hire_date
+                     END ASC, e.employee_code
+  LIMIT {row_limit}
 uses_rules:
 - default_employee_population
 - missing_date_sentinel

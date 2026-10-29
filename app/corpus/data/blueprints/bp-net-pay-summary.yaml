@@ -1,0 +1,23 @@
+id: bp-net-pay-summary
+intent: Total net pay distributed for a single pay period or date window, from payroll register net-pay-distribution
+  lines by pay-period bounds
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT round(SUM(amount), 2) AS "Total Net Pay"
+  FROM dbpcm_warehouse.payroll
+  WHERE register_type = 'NETPAYDIST'
+    AND pay_period_end_date = {period}
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+slots_summary: period
+uses:
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_end_date

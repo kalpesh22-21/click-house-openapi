@@ -6,10 +6,10 @@ intent: Matched punch-pair counts, distinct employees, observed days, paid hours
   not overlapping real-world events. Department means recorded labor-allocation department code, not current home
   department. No scheduled shift, tardiness or overtime policy is inferred. Observed first/last dates do not prove
   completeness; missing days/months are not zero-filled.
-slots_summary: group_by, period, source, employee, department, hours_type, pay_class, in_type, out_type
+slots_summary: group_by, period, source, employee, department, hours_type, pay_class, in_type, out_type, order_direction
 status: validated
 drift_status: clean
-catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+catalog_sha: ''
 uses:
 - dbpcm_warehouse.punch_pair.department_code
 - dbpcm_warehouse.punch_pair.earn_amount
@@ -80,16 +80,52 @@ slots:
   - OL
   - OB
   - OX
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
 result_grain:
 - Group
-sql_template: "SELECT CASE {group_by} WHEN 'employee' THEN employee_code WHEN 'department' THEN department_code\
-  \ WHEN 'day' THEN toString(punch_date) WHEN 'month' THEN substring(toString(punch_date),1,7) WHEN 'hours_type'\
-  \ THEN hours_type ELSE 'Company' END AS `Group`,\ncount(*) AS `Pair Count`, count(DISTINCT employee_code) AS `Employee\
-  \ Count`, count(DISTINCT punch_date) AS `Observed Days`,\n sum(earn_hours) AS `Paid Hours`, sum(earn_amount) AS\
-  \ `Pair Earning Amount`, min(punch_date) AS `First Observed Date`, max(punch_date) AS `Last Observed Date`\nFROM\
-  \ dbpcm_warehouse.punch_pair FINAL\nWHERE punch_date >= toDate({period_start}) AND punch_date < toDate({period_end})\
-  \ AND table_source = {source} AND employee_code = {employee} AND department_code = {department} AND hours_type\
-  \ = {hours_type} AND pay_class_code = {pay_class} AND in_punch_type = {in_type} AND out_punch_type = {out_type}\n\
-  GROUP BY CASE {group_by} WHEN 'employee' THEN employee_code WHEN 'department' THEN department_code WHEN 'day'\
-  \ THEN toString(punch_date) WHEN 'month' THEN substring(toString(punch_date),1,7) WHEN 'hours_type' THEN hours_type\
-  \ ELSE 'Company' END ORDER BY `Group`"
+sql_template: |
+  SELECT CASE {group_by}
+             WHEN 'employee' THEN employee_code
+             WHEN 'department' THEN department_code
+             WHEN 'day' THEN toString(punch_date)
+             WHEN 'month' THEN substring(toString(punch_date), 1, 7)
+             WHEN 'hours_type' THEN hours_type
+             ELSE 'Company'
+         END AS `Group`,
+         count(*) AS `Pair Count`,
+         count(DISTINCT employee_code) AS `Employee Count`,
+         count(DISTINCT punch_date) AS `Observed Days`,
+         sum(earn_hours) AS `Paid Hours`,
+         sum(earn_amount) AS `Pair Earning Amount`,
+         min(punch_date) AS `First Observed Date`,
+         max(punch_date) AS `Last Observed Date`
+  FROM dbpcm_warehouse.punch_pair
+  WHERE punch_date >= toDate({period_start})
+    AND punch_date < toDate({period_end})
+    AND table_source = {source}
+    AND employee_code = {employee}
+    AND department_code = {department}
+    AND hours_type = {hours_type}
+    AND pay_class_code = {pay_class}
+    AND in_punch_type = {in_type}
+    AND out_punch_type = {out_type}
+  GROUP BY CASE {group_by}
+               WHEN 'employee' THEN employee_code
+               WHEN 'department' THEN department_code
+               WHEN 'day' THEN toString(punch_date)
+               WHEN 'month' THEN substring(toString(punch_date), 1, 7)
+               WHEN 'hours_type' THEN hours_type
+               ELSE 'Company'
+           END
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN `Group`
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN `Group`
+                     END ASC

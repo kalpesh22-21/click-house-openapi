@@ -113,3 +113,33 @@ def test_ping_explicit_settings_does_not_retry():
     with patch("app.clickhouse_client.get_client", return_value=client):
         assert ping(_settings()) is False
     assert client.ping.call_count == 1
+
+
+def test_empty_native_result_recovers_projection_without_reexecuting_data_query():
+    from types import SimpleNamespace
+    from app.clickhouse_client import execute_query
+    from app.config import Settings
+    client = MagicMock()
+    client.query.side_effect = [
+        SimpleNamespace(column_names=(), result_rows=[]),
+        SimpleNamespace(result_rows=[('Employee Code', 'String'), ('Hours', 'Float64')]),
+    ]
+    sql = "SELECT employee_code AS `Employee Code`, sum(hours) AS Hours FROM example WHERE employee_code = %(code)s GROUP BY employee_code"
+    with patch('app.clickhouse_client.get_client', return_value=client), patch('app.clickhouse_client.tenant_settings', return_value={}):
+        names, rows = execute_query(sql, Settings(_env_file=None), parameters={'code': 'missing'})
+    assert names == ['Employee Code', 'Hours'] and rows == []
+    calls = client.query.call_args_list
+    assert len(calls) == 2
+    assert calls[1].args[0] == 'DESCRIBE TABLE (' + calls[0].args[0] + ')'
+    assert calls[1].kwargs == calls[0].kwargs
+
+
+def test_empty_result_with_header_needs_no_metadata_query():
+    from types import SimpleNamespace
+    from app.clickhouse_client import execute_query
+    from app.config import Settings
+    client = MagicMock()
+    client.query.return_value = SimpleNamespace(column_names=('code',), result_rows=[])
+    with patch('app.clickhouse_client.get_client', return_value=client), patch('app.clickhouse_client.tenant_settings', return_value={}):
+        assert execute_query('SELECT code FROM example WHERE 0=1', Settings(_env_file=None)) == (['code'], [])
+    client.query.assert_called_once()

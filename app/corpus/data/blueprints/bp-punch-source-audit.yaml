@@ -1,0 +1,38 @@
+id: bp-punch-source-audit
+intent: Monthly count of punch pairs by ingestion source ARCHIVED versus FREEZE, showing pair counts per source
+  per month
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT formatDateTime(toStartOfMonth(punch_date), '%Y-%m') AS "Month",
+         table_source AS "Table Source",
+         count() AS "Pair Count"
+  FROM
+    (SELECT punch_date,
+            table_source
+     FROM dbpcm_warehouse.punch_pair)
+  WHERE punch_date >= today() - toIntervalMonth({win})
+  GROUP BY "Month",
+           table_source
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Month"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Month"
+                     END ASC, "Table Source"
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: win, order_direction
+uses:
+- dbpcm_warehouse.punch_pair.table_source
+- dbpcm_warehouse.punch_pair.punch_date

@@ -1,0 +1,39 @@
+id: bp-new-hire-90d-attrition
+intent: New hires in a window who terminated within 90 days of hire, with the 90-day attrition rate as a ratio
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT count(DISTINCT employee_code) AS "Hires In Window",
+         COUNT(DISTINCT CASE
+                            WHEN NOT (termination_date IS NULL)
+                                 AND toDate32(termination_date) > toDate32('1900-01-01')
+                                 AND DATE_DIFF(DAY, hire_date, termination_date) <= 90
+                                 AND (most_recent_hire_date IS NULL
+                                      OR most_recent_hire_date < termination_date) THEN employee_code
+                            ELSE NULL
+                        END) AS "Terms Within 90 Days",
+         round(100 * COUNT(DISTINCT CASE
+                                        WHEN NOT (termination_date IS NULL)
+                                             AND toDate32(termination_date) > toDate32('1900-01-01')
+                                             AND DATE_DIFF(DAY, hire_date, termination_date) <= 90
+                                             AND (most_recent_hire_date IS NULL
+                                                  OR most_recent_hire_date < termination_date) THEN employee_code
+                                        ELSE NULL
+                                    END) / nullIf(count(DISTINCT employee_code), 0), 2) AS "90-Day Attrition Pct"
+  FROM dbpcm_warehouse.employee
+  WHERE NOT (hire_date IS NULL)
+    AND toDate32(hire_date) > toDate32('1900-01-01')
+    AND hire_date >= {window_start}
+    AND hire_date < {window_end}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+slots_summary: window
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.hire_date
+- dbpcm_warehouse.employee.termination_date
+- dbpcm_warehouse.employee.most_recent_hire_date

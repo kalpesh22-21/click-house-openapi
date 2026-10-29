@@ -1,0 +1,76 @@
+id: bp-department-ot-share
+intent: Department overtime dollars as a percentage of department gross payroll earnings, ranked by share, combining
+  timecard overtime with register gross
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  WITH ot_agg AS
+    (SELECT e.department_name AS dept,
+            SUM(te.earn_amount) AS ot_dollars
+     FROM
+       (SELECT employee_code,
+               punch_date,
+               earn_code,
+               earn_amount
+        FROM dbpcm_warehouse.total_earning) AS te
+     JOIN
+       (SELECT earn_code,
+               category_name
+        FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
+     JOIN dbpcm_warehouse.employee AS e ON e.employee_code = te.employee_code
+     WHERE ec.category_name = 'Overtime'
+       AND te.punch_date BETWEEN addMonths(toDate({period}), -1) AND toDate({period})
+     GROUP BY e.department_name),
+       gross_agg AS
+    (SELECT e2.department_name AS dept,
+            SUM(p2.amount) AS gross_dollars
+     FROM dbpcm_warehouse.payroll AS p2
+     JOIN dbpcm_warehouse.employee AS e2 ON e2.employee_code = p2.employee_code
+     WHERE p2.register_type = 'EARN'
+       AND p2.pay_period_end_date = {period}
+     GROUP BY e2.department_name)
+  SELECT oa.dept AS "Department",
+         round(oa.ot_dollars, 2) AS "Overtime Dollars",
+         round(ga.gross_dollars, 2) AS "Gross Earnings",
+         round(oa.ot_dollars / nullIf(ga.gross_dollars, 0) * 100, 2) AS "OT Share %"
+  FROM ot_agg AS oa
+  LEFT JOIN gross_agg AS ga ON ga.dept = oa.dept
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "OT Share %"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "OT Share %"
+                     END ASC
+  LIMIT {top_n}
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: top_n
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, top_n, order_direction
+uses:
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.pay_period_end_date
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.total_earning.earn_amount
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.employee_code
+- dbpcm_warehouse.earning_category.earn_code
+- dbpcm_warehouse.earning_category.category_name
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name

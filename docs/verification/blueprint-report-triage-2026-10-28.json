@@ -1,0 +1,11 @@
+{
+  "blueprints_validated": 29,
+  "reference_expansion": "passed",
+  "dynamic_rule_executor_tests": "43 passed, including earnings-code rule binding",
+  "missing_local_blueprints": [
+    "bp-ot-two-basis-tieout",
+    "bp-shift-differential-spend",
+    "bp-timeoff-vs-paid-leave-tieout"
+  ],
+  "pending": "Remote SQL and exact errors for five period comparisons; remote definitions for missing blueprints"
+}

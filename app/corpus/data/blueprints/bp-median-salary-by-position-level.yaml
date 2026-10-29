@@ -1,0 +1,33 @@
+id: bp-median-salary-by-position-level
+intent: True median annual salary per position level for active employees
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT position_level AS "Position Level",
+         round((quantileExactLow(0.5)(toFloat64(annual_salary)) + quantileExactHigh(0.5)(toFloat64(annual_salary))) / 2, 2) AS "Median Annual Salary",
+         count(DISTINCT employee_code) AS "Headcount"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND annual_salary IS NOT NULL
+  GROUP BY position_level
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN position_level
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN position_level
+                     END ASC
+slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.position_level
+- dbpcm_warehouse.employee.annual_salary
+- dbpcm_warehouse.employee.employee_status

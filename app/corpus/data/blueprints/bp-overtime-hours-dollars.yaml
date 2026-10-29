@@ -1,0 +1,54 @@
+id: bp-overtime-hours-dollars
+intent: Overtime dollars and hours by department from timecard earnings, resolved via the Overtime earning category,
+  for a date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT e.department_name AS "Department",
+         round(SUM(te.earn_amount), 2) AS "Overtime Dollars",
+         round(SUM(te.earn_hours), 2) AS "Overtime Hours"
+  FROM
+    (SELECT punch_date,
+            earn_amount,
+            earn_hours,
+            earn_code,
+            employee_code
+     FROM dbpcm_warehouse.total_earning) AS te
+  JOIN
+    (SELECT earn_code,
+            category_name
+     FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = te.employee_code
+  WHERE ec.category_name = 'Overtime'
+    AND te.punch_date BETWEEN {period_start} AND {period_end}
+  GROUP BY e.department_name
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Overtime Dollars"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Overtime Dollars"
+                     END ASC
+slots:
+- name: period
+  type: period_range
+  required: true
+  temporal_type: date
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, order_direction
+uses:
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.total_earning.earn_amount
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.employee_code
+- dbpcm_warehouse.earning_category.earn_code
+- dbpcm_warehouse.earning_category.category_name
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name

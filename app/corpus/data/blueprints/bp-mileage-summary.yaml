@@ -1,0 +1,29 @@
+id: bp-mileage-summary
+intent: Total approved mileage reimbursement and miles for a payment period
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT round(toFloat64(SUM(amount_approved)), 2) AS "Approved Amount",
+         round(toFloat64(SUM(approved_miles)), 2) AS "Approved Miles",
+         round(toFloat64(SUM(submitted_miles)), 2) AS "Submitted Miles"
+  FROM dbpcm_warehouse.expense
+  WHERE (submitted_miles > 0
+         OR approved_miles > 0)
+    AND expense_status IN ('Approved',
+                           'Paid',
+                           'Marked as Paid')
+    AND expense_paid_date = {period}
+slots:
+- name: period
+  type: period
+  required: true
+  binds_to: dbpcm_warehouse.expense.expense_paid_date
+  temporal_type: date
+slots_summary: period
+uses:
+- dbpcm_warehouse.expense.approved_miles
+- dbpcm_warehouse.expense.submitted_miles
+- dbpcm_warehouse.expense.amount_approved
+- dbpcm_warehouse.expense.expense_status
+- dbpcm_warehouse.expense.expense_paid_date

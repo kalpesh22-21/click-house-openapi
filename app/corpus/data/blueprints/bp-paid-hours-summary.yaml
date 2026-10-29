@@ -1,0 +1,32 @@
+id: bp-paid-hours-summary
+intent: Total paid hours from the payroll register for a pay period, optionally filtered by employee home department
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT round(SUM(p.type_hours), 2) AS "Total Paid Hours"
+  FROM dbpcm_warehouse.payroll AS p
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
+  WHERE p.register_type = 'EARN'
+    AND p.pay_period_end_date = {period}
+    AND e.department_name = {dept}
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: dept
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+slots_summary: period, dept
+uses:
+- dbpcm_warehouse.payroll.type_hours
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.pay_period_end_date
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name

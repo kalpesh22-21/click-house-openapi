@@ -1,0 +1,44 @@
+id: bp-expense-monthly-trend
+intent: Monthly approved expense spend trend over the last N months with top account slice
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT formatDateTime(toStartOfMonth(expense_paid_date), '%Y-%m') AS "Month",
+         round(toFloat64(SUM(amount_approved)), 2) AS "Total Approved Spend"
+  FROM dbpcm_warehouse.expense
+  WHERE expense_status IN ('Approved',
+                           'Paid',
+                           'Marked as Paid')
+    AND expense_paid_date >=
+      (SELECT addMonths(toStartOfMonth(max(expense_paid_date)), -{window_months})
+       FROM dbpcm_warehouse.expense
+       WHERE expense_status IN ('Approved',
+                                'Paid',
+                                'Marked as Paid')
+         AND toDate32(expense_paid_date) > toDate32('1900-01-01'))
+    AND toDate32(expense_paid_date) > toDate32('1900-01-01')
+  GROUP BY "Month"
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Month"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Month"
+                     END ASC
+slots:
+- name: window_months
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: window_months, order_direction
+uses:
+- dbpcm_warehouse.expense.amount_approved
+- dbpcm_warehouse.expense.expense_status
+- dbpcm_warehouse.expense.expense_paid_date
+- dbpcm_warehouse.expense.expense_account_description

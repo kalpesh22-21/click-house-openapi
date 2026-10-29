@@ -1,0 +1,46 @@
+id: bp-unpaid-active-employees
+intent: Active employees who have no payroll earnings register line in a given pay period, identifying unpaid active
+  roster entries
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT e.employee_code AS "Employee Code",
+         e.employee_name AS "Employee Name",
+         e.department_name AS "Department"
+  FROM dbpcm_warehouse.employee AS e
+  WHERE e.employee_status = 'Active'
+    AND e.employee_code NOT IN
+      (SELECT DISTINCT p.employee_code
+       FROM dbpcm_warehouse.payroll AS p
+       WHERE p.register_type = 'EARN'
+         AND p.pay_period_end_date = {period})
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN e.employee_code
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN e.employee_code
+                     END ASC
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: period, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_end_date

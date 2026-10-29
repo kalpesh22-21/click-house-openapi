@@ -1,0 +1,27 @@
+id: bp-punch-coverage-gap
+intent: Coverage metric showing the share of active employees who had at least one punch in the last N days, with
+  counts of punchers and non-punchers
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT count(DISTINCT e.employee_code) AS "Active Employees",
+         count(DISTINCT pp.employee_code) AS "Employees With Punches",
+         count(DISTINCT e.employee_code) - count(DISTINCT pp.employee_code) AS "Employees Without Punches",
+         round(100.0 * count(DISTINCT pp.employee_code) / nullIf(count(DISTINCT e.employee_code), 0), 2) AS "Coverage Pct"
+  FROM dbpcm_warehouse.employee e
+  LEFT JOIN
+    (SELECT DISTINCT employee_code
+     FROM dbpcm_warehouse.punch_pair
+     WHERE punch_date >= today() - {win}) pp ON pp.employee_code = e.employee_code
+  WHERE e.employee_status = 'Active'
+slots:
+- name: win
+  type: relative_window
+  required: true
+slots_summary: win
+uses:
+- dbpcm_warehouse.punch_pair.employee_code
+- dbpcm_warehouse.punch_pair.punch_date
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status

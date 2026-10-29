@@ -1,0 +1,53 @@
+id: bp-pto-expiry-risk
+intent: Accrual balances at risk of expiring within the next N days where reset_date is set and balance is positive
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT b.employee_code AS "Employee Code",
+         any(e.employee_name) AS "Employee Name",
+         any(e.department_name) AS "Department",
+         b.accrual_code AS "Accrual Code",
+         round(SUM(b.beginning_balance + b.accrued_amount - b.taken_amount), 2) AS "Balance Hours",
+         b.accrual_reset_date AS "Reset Date"
+  FROM dbpcm_warehouse.time_off_balance AS b
+  LEFT JOIN dbpcm_warehouse.employee AS e ON e.employee_code = b.employee_code
+  WHERE b.accrual_status = 'Active'
+    AND b.is_archived = 0
+    AND b.accrual_reset_date IS NOT NULL
+    AND toDate32(b.accrual_reset_date) > toDate32('1900-01-01')
+    AND toDate32(b.accrual_reset_date) <= today() + INTERVAL {win} DAY
+    AND b.beginning_balance + b.accrued_amount - b.taken_amount > 0
+  GROUP BY b.employee_code,
+           b.accrual_code,
+           b.accrual_reset_date
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Balance Hours"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Balance Hours"
+                     END ASC
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: win, order_direction
+uses:
+- dbpcm_warehouse.time_off_balance.employee_code
+- dbpcm_warehouse.time_off_balance.accrual_reset_date
+- dbpcm_warehouse.time_off_balance.beginning_balance
+- dbpcm_warehouse.time_off_balance.accrued_amount
+- dbpcm_warehouse.time_off_balance.taken_amount
+- dbpcm_warehouse.time_off_balance.accrual_code
+- dbpcm_warehouse.time_off_balance.accrual_status
+- dbpcm_warehouse.time_off_balance.is_archived
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name

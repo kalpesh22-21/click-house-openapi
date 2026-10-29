@@ -1,0 +1,49 @@
+id: bp-employee-change-timeline
+intent: Chronological audit timeline of master-data changes for a single employee, showing changed field, record
+  time, effective date, and change actor
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  -- Output aliases are Title-Case display names; consumers keying on column names
+  -- must use the quoted aliases.
+
+  SELECT changed_field AS "Changed Field",
+         change_time_added AS "Record Date",
+         effective_date AS "Effective Date",
+         change_by_username AS "Changed By",
+         change_by_usertype AS "User Type",
+         change_description AS "Description"
+  FROM dbpcm_warehouse.employee_change
+  WHERE employee_code = {ee}
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN change_time_added
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN change_time_added
+                     END ASC, changed_field
+  LIMIT {max_rows}
+slots:
+- name: ee
+  type: string
+  required: true
+  binds_to: dbpcm_warehouse.employee_change.employee_code
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: ee, max_rows, order_direction
+uses:
+- dbpcm_warehouse.employee_change.employee_code
+- dbpcm_warehouse.employee_change.changed_field
+- dbpcm_warehouse.employee_change.change_description
+- dbpcm_warehouse.employee_change.change_time_added
+- dbpcm_warehouse.employee_change.effective_date
+- dbpcm_warehouse.employee_change.change_by_username
+- dbpcm_warehouse.employee_change.change_by_usertype

@@ -1,0 +1,54 @@
+id: bp-clock-time-profile
+intent: Time-of-day clock-in and clock-out distribution per employee home department using punch_pair event timestamps,
+  showing typical shift start and end profiles
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT e.department_name AS "Department",
+         round((quantileExactLow(0.5)(toHour(pp.in_punch_time) * 60 + toMinute(pp.in_punch_time)) + quantileExactHigh(0.5)(toHour(pp.in_punch_time) * 60 + toMinute(pp.in_punch_time))) / 2, 0) AS "Median Clock-In Min",
+         round((quantileExactLow(0.5)(toHour(pp.out_punch_time) * 60 + toMinute(pp.out_punch_time)) + quantileExactHigh(0.5)(toHour(pp.out_punch_time) * 60 + toMinute(pp.out_punch_time))) / 2, 0) AS "Median Clock-Out Min",
+         count() AS "Pair Count"
+  FROM
+    (SELECT employee_code,
+            punch_date,
+            in_punch_time,
+            out_punch_time
+     FROM dbpcm_warehouse.punch_pair) AS pp
+  JOIN dbpcm_warehouse.employee e ON e.employee_code = pp.employee_code
+  WHERE pp.punch_date BETWEEN {window_start} AND {window_end}
+    AND pp.in_punch_time IS NOT NULL
+    AND toDate32(pp.in_punch_time) > toDate32('1900-01-01')
+    AND pp.out_punch_time IS NOT NULL
+    AND toDate32(pp.out_punch_time) > toDate32('1900-01-01')
+  GROUP BY e.department_name
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Median Clock-In Min"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Median Clock-In Min"
+                     END ASC
+  LIMIT {max_rows}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.punch_pair.employee_code
+- dbpcm_warehouse.punch_pair.in_punch_time
+- dbpcm_warehouse.punch_pair.out_punch_time
+- dbpcm_warehouse.punch_pair.punch_date
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name

@@ -1,0 +1,46 @@
+id: bp-missing-emergency-contacts
+intent: Active employees missing a primary emergency contact phone
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         employee_name AS "Name",
+         department_name AS "Department",
+         primary_phone AS "Primary Phone"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND department_name = {department}
+    AND (primary_emergency_contact_phone IS NULL
+         OR primary_emergency_contact_phone = '')
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN employee_code
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN employee_code
+                     END ASC
+  LIMIT {max_rows}
+slots:
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: department, max_rows, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.primary_phone
+- dbpcm_warehouse.employee.primary_emergency_contact_phone
+- dbpcm_warehouse.employee.employee_status

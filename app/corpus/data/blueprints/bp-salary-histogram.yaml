@@ -1,0 +1,24 @@
+id: bp-salary-histogram
+intent: Active employee salary distribution histogram in configurable dollar bands, excluding zero or null salary
+  placeholders
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT concat('$', toString(toInt32(floor(toFloat64(annual_salary) / toUInt32({band})) * toUInt32({band}))), ' - $', toString(toInt32(floor(toFloat64(annual_salary) / toUInt32({band})) * toUInt32({band}) + toUInt32({band}) - 1))) AS "Salary Band",
+         count(DISTINCT employee_code) AS "Headcount"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND annual_salary IS NOT NULL
+    AND toFloat64(annual_salary) > 0
+  GROUP BY floor(toFloat64(annual_salary) / toUInt32({band}))
+  ORDER BY floor(toFloat64(annual_salary) / toUInt32({band})) ASC
+slots:
+- name: band
+  type: positive_integer
+  required: true
+slots_summary: band
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.annual_salary
+- dbpcm_warehouse.employee.employee_status

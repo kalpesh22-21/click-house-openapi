@@ -1,0 +1,39 @@
+id: bp-earnings-by-category
+intent: Total timecard earnings and paid hours for a specific earning category resolved via the earning category
+  dimension, for a punch date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT round(SUM(te.earn_amount), 2) AS `Total Earnings`,
+         round(SUM(te.earn_hours), 2) AS `Total Hours`
+  FROM
+    (SELECT punch_date,
+            earn_amount,
+            earn_hours,
+            earn_code
+     FROM dbpcm_warehouse.total_earning) AS te
+  JOIN
+    (SELECT earn_code,
+            category_name
+     FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
+  WHERE ec.category_name = {concept}
+    AND te.punch_date >= toDate({period_start})
+    AND te.punch_date < toDate({period_end})
+slots:
+- name: concept
+  type: string
+  required: true
+  binds_to: dbpcm_warehouse.earning_category.category_name
+- name: period
+  type: period_range
+  required: true
+  temporal_type: date
+slots_summary: concept, period
+uses:
+- dbpcm_warehouse.total_earning.earn_amount
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.earning_category.earn_code
+- dbpcm_warehouse.earning_category.category_name

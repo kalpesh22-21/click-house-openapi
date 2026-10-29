@@ -74,7 +74,8 @@ _KNOWLEDGE_IDS = {
 class TestLoadBlueprints:
     def test_loads_all_migrated_ids(self):
         blueprints = loader.load_blueprints()
-        assert set(blueprints.keys()) == _BLUEPRINT_IDS
+        assert _BLUEPRINT_IDS <= set(blueprints.keys())
+        assert len(blueprints) == 188
 
     def test_entry_carries_authored_fields_verbatim(self):
         bp = loader.load_blueprints()["bp-overtime-by-department"]

@@ -1,0 +1,44 @@
+id: bp-expense-line-size-distribution
+intent: Distribution of expense line amounts into bands by account description for a payment date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT expense_account_description AS "Account Description",
+         toInt32(floor(toFloat64(amount_approved) / {band}) * {band}) AS "Band Start",
+         count() AS "Line Count"
+  FROM dbpcm_warehouse.expense
+  WHERE expense_status IN ('Approved',
+                           'Paid',
+                           'Marked as Paid')
+    AND expense_paid_date >= {expense_window_start}
+    AND expense_paid_date <= {expense_window_end}
+  GROUP BY expense_account_description,
+           toInt32(floor(toFloat64(amount_approved) / {band}) * {band})
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Account Description"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Account Description"
+                     END ASC, "Band Start"
+slots:
+- name: expense_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: band
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: expense_window, band, order_direction
+uses:
+- dbpcm_warehouse.expense.amount_approved
+- dbpcm_warehouse.expense.expense_account_description
+- dbpcm_warehouse.expense.expense_status
+- dbpcm_warehouse.expense.expense_paid_date

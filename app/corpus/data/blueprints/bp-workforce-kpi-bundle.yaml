@@ -1,0 +1,106 @@
+id: bp-workforce-kpi-bundle
+intent: Single-row executive KPI bundle with current-state metrics plus hires, terms and turnover for one window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT count(DISTINCT CASE
+                            WHEN employee_status = 'Active' THEN employee_code
+                            ELSE NULL
+                        END) AS "Active Headcount",
+         count() AS "Total Records",
+         round(100 * count(DISTINCT CASE
+                                        WHEN employee_status = 'Active'
+                                             AND employment_type = 'W2' THEN employee_code
+                                        ELSE NULL
+                                    END) / nullIf(count(DISTINCT CASE
+                                                                     WHEN employee_status = 'Active' THEN employee_code
+                                                                     ELSE NULL
+                                                                 END), 0), 2) AS "W2 Share Pct",
+         round((quantileExactLow(0.5)(CASE
+                                          WHEN employee_status = 'Active'
+                                               AND NOT (annual_salary IS NULL) THEN toFloat64(annual_salary)
+                                          ELSE NULL
+                                      END) + quantileExactHigh(0.5)(CASE
+                                                                        WHEN employee_status = 'Active'
+                                                                             AND NOT (annual_salary IS NULL) THEN toFloat64(annual_salary)
+                                                                        ELSE NULL
+                                                                    END)) / 2, 2) AS "Median Annual Salary",
+         round(avg(CASE
+                       WHEN employee_status = 'Active' THEN DATE_DIFF(DAY, hire_date, now()) / 365.25
+                       ELSE NULL
+                   END), 1) AS "Avg Tenure Years",
+         round(100 * count(DISTINCT CASE
+                                        WHEN employee_status = 'Active'
+                                             AND dol_status_description = 'Full Time' THEN employee_code
+                                        ELSE NULL
+                                    END) / nullIf(count(DISTINCT CASE
+                                                                     WHEN employee_status = 'Active' THEN employee_code
+                                                                     ELSE NULL
+                                                                 END), 0), 2) AS "Pct Full Time",
+         round(100 * count(DISTINCT CASE
+                                        WHEN employee_status = 'Active'
+                                             AND direct_deposit = 1 THEN employee_code
+                                        ELSE NULL
+                                    END) / nullIf(count(DISTINCT CASE
+                                                                     WHEN employee_status = 'Active' THEN employee_code
+                                                                     ELSE NULL
+                                                                 END), 0), 2) AS "Pct Direct Deposit",
+         count(DISTINCT CASE
+                            WHEN (employee_status <> 'Not Hired'
+                                  OR employee_status IS NULL)
+                                 AND hire_date >= {kpi_window_start}
+                                 AND hire_date < {kpi_window_end} THEN employee_code
+                            ELSE NULL
+                        END) AS "Hires In Window",
+         count(DISTINCT CASE
+                            WHEN employee_status = 'Terminated'
+                                 AND NOT (termination_date IS NULL)
+                                 AND toDate32(termination_date) > toDate32('1900-01-01')
+                                 AND (most_recent_hire_date IS NULL
+                                      OR most_recent_hire_date < termination_date)
+                                 AND termination_date >= {kpi_window_start}
+                                 AND termination_date < {kpi_window_end} THEN employee_code
+                            ELSE NULL
+                        END) AS "Terms In Window",
+         round(count(DISTINCT CASE
+                                  WHEN employee_status = 'Terminated'
+                                       AND NOT (termination_date IS NULL)
+                                       AND toDate32(termination_date) > toDate32('1900-01-01')
+                                       AND (most_recent_hire_date IS NULL
+                                            OR most_recent_hire_date < termination_date)
+                                       AND termination_date >= {kpi_window_start}
+                                       AND termination_date < {kpi_window_end} THEN employee_code
+                                  ELSE NULL
+                              END) / nullIf(count(DISTINCT CASE
+                                                               WHEN employee_status = 'Active' THEN employee_code
+                                                               ELSE NULL
+                                                           END), 0), 4) AS "Turnover Rate In Window",
+         count(DISTINCT CASE
+                            WHEN employee_status = 'On Leave' THEN employee_code
+                            ELSE NULL
+                        END) AS "On Leave",
+         count(DISTINCT CASE
+                            WHEN employee_status = 'Active'
+                                 AND (primary_emergency_contact_phone IS NULL
+                                      OR primary_emergency_contact_phone = '') THEN employee_code
+                            ELSE NULL
+                        END) AS "Missing Emergency Contacts"
+  FROM dbpcm_warehouse.employee
+slots:
+- name: kpi_window
+  type: period_range
+  required: true
+  temporal_type: date
+slots_summary: kpi_window
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.employment_type
+- dbpcm_warehouse.employee.annual_salary
+- dbpcm_warehouse.employee.hire_date
+- dbpcm_warehouse.employee.dol_status_description
+- dbpcm_warehouse.employee.direct_deposit
+- dbpcm_warehouse.employee.termination_date
+- dbpcm_warehouse.employee.most_recent_hire_date
+- dbpcm_warehouse.employee.primary_emergency_contact_phone

@@ -1,0 +1,48 @@
+id: bp-denied-expenses
+intent: Denied expense total and denial rate by department for a payment date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT department_description AS "Department",
+         countIf(expense_status = 'Denied') AS "Denied Count",
+         round(toFloat64(SUMIf(amount_approved, expense_status = 'Denied')), 2) AS "Denied Amount",
+         round(toFloat64(countIf(expense_status = 'Denied')) / nullIf(count(), 0), 4) AS "Denial Rate"
+  FROM dbpcm_warehouse.expense
+  WHERE expense_status IN ('Approved',
+                           'Paid',
+                           'Marked as Paid',
+                           'Denied')
+    AND expense_paid_date >= {expense_window_start}
+    AND expense_paid_date <= {expense_window_end}
+    AND department_description = {department}
+  GROUP BY department_description
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Denied Amount"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Denied Amount"
+                     END ASC, "Department"
+slots:
+- name: expense_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.expense.department_description
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: expense_window, department, order_direction
+uses:
+- dbpcm_warehouse.expense.expense_status
+- dbpcm_warehouse.expense.amount_approved
+- dbpcm_warehouse.expense.department_description
+- dbpcm_warehouse.expense.expense_paid_date

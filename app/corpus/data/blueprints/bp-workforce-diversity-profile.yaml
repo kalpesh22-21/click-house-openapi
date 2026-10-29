@@ -1,0 +1,50 @@
+id: bp-workforce-diversity-profile
+intent: Active headcount distribution across gender, marital status, age band, EEO-1 category and leadership cohort
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT multiIf(gender = '', 'Not Reported', gender) AS "Gender",
+         ifNull(nullIf(marital_status_description, ''), 'Not Reported') AS "Marital Status",
+         multiIf(NOT (date_of_birth IS NOT NULL
+                      AND toDate32(date_of_birth) > toDate32('1900-01-01')), 'Unknown', date_diff('year', date_of_birth, now()) < 20, 'Under 20', date_diff('year', date_of_birth, now()) < 30, '20-29', date_diff('year', date_of_birth, now()) < 40, '30-39', date_diff('year', date_of_birth, now()) < 50, '40-49', date_diff('year', date_of_birth, now()) < 60, '50-59', date_diff('year', date_of_birth, now()) < 70, '60-69', '70+') AS "Age Band",
+         eeo1_category AS "EEO-1 Category",
+         multiIf(eeo1_category IN ('Executive/Senior Level Officials and Managers', 'First/Mid-Level Officials and Managers'), 'Leadership', 'All Other') AS "Leadership Cohort",
+         count(DISTINCT employee_code) AS "Headcount",
+         round(100 * count(DISTINCT employee_code) / sum(count(DISTINCT employee_code)) OVER (), 2) AS "Share Pct"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND department_name = {department}
+  GROUP BY "Gender",
+           "Marital Status",
+           "Age Band",
+           "EEO-1 Category",
+           "Leadership Cohort"
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Headcount"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Headcount"
+                     END ASC
+slots:
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: department, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.gender
+- dbpcm_warehouse.employee.marital_status_description
+- dbpcm_warehouse.employee.date_of_birth
+- dbpcm_warehouse.employee.eeo1_category
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status

@@ -1,0 +1,43 @@
+id: bp-deduction-breakdown
+intent: Total payroll deductions and breakdown by deduction type code for a pay period, from register deduction
+  lines
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT type_code AS "Deduction Code",
+         round(SUM(amount), 2) AS "Total Deductions"
+  FROM dbpcm_warehouse.payroll
+  WHERE register_type = 'DDUCT'
+    AND pay_period_end_date = {period}
+  GROUP BY type_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Total Deductions"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Total Deductions"
+                     END ASC
+  LIMIT {top_n}
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: top_n
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, top_n, order_direction
+uses:
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.type_code
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_end_date

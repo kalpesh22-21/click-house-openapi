@@ -1,0 +1,67 @@
+database: dbpcm_warehouse
+table: earning_category
+source: clickhouse
+region: workforce_payroll
+description: Per-client earn_code to category_name lookup. Resolve a category concept to its label, then join/filter category_name. No measures; not a fact table.
+temporal:
+  dimensions: []
+  default_pin: null
+grain: [earn_code]
+grain_verifiable: true
+primary_key: []
+primary_key_note: No declared business primary key. ORDER BY proc_center + client_code + earn_code.
+join_keys:
+- column: earn_code
+  joins: total_earning.earn_code
+  join_on: [earn_code]
+  cardinality: '1:N'
+  implicit_join_scope: [client_code, proc_center]
+- column: earn_code
+  joins: payroll.type_code
+  join_on: [earn_code]
+  cardinality: '1:N'
+  description: Only payroll register_type = 'EARN' rows.
+  implicit_join_scope: [client_code, proc_center]
+columns:
+  proc_center:
+    type: LowCardinality(FixedString(3))
+    description: Processing center, enforced by row policy.
+  client_code:
+    type: FixedString(5)
+    description: Client/company, enforced by row policy.
+  __version:
+    type: DateTime64(9)
+    description: Internal ReplacingMergeTree version; never query directly.
+  earn_code:
+    type: String
+    description_col: category_name
+    description: Client-defined earning code. Interpret using category_name; do not hardcode.
+    client_defined: true
+  category_name:
+    type: LowCardinality(String)
+    description: Client-defined analytic category label (overtime, commissions, bonus, regular pay). Resolve per client; 'Select Category' is a real unmapped/placeholder label.
+    client_defined: true
+rules:
+- id: dedup_first
+  predicate: FROM earning_category FINAL
+  applies_when: every FROM, JOIN or subquery reference
+  description: Always use FINAL to avoid duplicate/stale mappings. No __deleted column; do not invent version guards.
+- id: category_resolution
+  predicate: category_name = '<concept>'
+  applies_when: category-worded questions
+  description: Resolve via resolveValues(earning_category, category_name, '<concept>'), then join/filter the label. Do not enumerate earn codes into IN-lists. If codes are needed, use SELECT earn_code FROM dbpcm_warehouse.earning_category FINAL WHERE category_name = '<label>'.
+ambiguities:
+- term: missing_category_mapping
+  resolves_to: [State that the category mapping is unavailable for this client; never invent or recall codes from other contexts.]
+  default: unavailable_for_this_client
+  clarify_if: requested category is absent from the client's mapping
+schema_notes:
+- ReplicatedReplacingMergeTree(__version). Tenant + earn_code grain verified against warehouse data.
+- Client-level dimension: tenant row policy only, no employee-access gating.
+- __version is a hidden storage field.
+mcp_projection:
+  hidden_columns: [client_code, proc_center, __version]
+  notes: [Tenant identifiers and storage version are not model-facing.]
+row_scope:
+  implicit_filters: [client_code, proc_center]
+  enforced_by: ClickHouse row policy

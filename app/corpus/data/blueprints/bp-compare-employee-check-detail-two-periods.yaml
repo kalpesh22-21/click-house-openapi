@@ -12,6 +12,9 @@ uses:
 - dbpcm_warehouse.payroll.type_code_description
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.type_hours
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
 slots:
 - name: employee
   type: string
@@ -30,21 +33,6 @@ slots:
 result_grain:
 - register_type
 - type_code
-# Nodes 0 and 1 REFERENCE bp-employee-check-detail-for-period rather than repeating
-# its SQL: the two per-period detail queries differed only in which pay-period slot
-# they filtered on. The consumer's corpus loader resolves each `ref` and INLINES that
-# blueprint's SQL at load, renaming its `{period}` bind site to `{period_a}` /
-# `{period_b}` per the `slots` map — so the executor still sees two ordinary inline
-# nodes and this file cannot drift from the blueprint it composes.
-#
-# `employee: employee` is written out even though the names match: a reference never
-# binds a slot implicitly. After inlining only THIS blueprint's slot declarations
-# exist (slots resolve once per blueprint, before the DAG walk), so an implicit bind
-# would let a rename here silently re-point the referenced filter.
-#
-# `uses` must cover everything a reference reads — the loader refuses the load
-# otherwise. Both lists happen to be identical here; that is the union rule holding,
-# not a coincidence worth relying on.
 composes:
 - order: 0
   output:
@@ -80,7 +68,7 @@ composes:
            coalesce(a.hours, 0) AS hours_a,
            coalesce(b.hours, 0) AS hours_b
     FROM scratch.detail_a AS a
-    FULL OUTER JOIN scratch.detail_b AS b
-      ON a.register_type = b.register_type AND a.type_code = b.type_code
+    FULL OUTER JOIN scratch.detail_b AS b ON a.register_type = b.register_type
+    AND a.type_code = b.type_code
     ORDER BY coalesce(a.register_type, b.register_type),
              coalesce(a.type_code, b.type_code)

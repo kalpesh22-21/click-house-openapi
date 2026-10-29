@@ -1,10 +1,10 @@
 database: dbpcm_warehouse
-table: timeoff_balances
+table: time_off_balance
 source: mysql
 description: >
   Employee accrual-plan balance records. For beginning balances and recorded taken
   amounts, use beginning_balance and taken_amount from this table, with the relevant
-  plan and employee scope. Use timeoff_requests for event/workflow analysis; approved
+  plan and employee scope. Use time_off_request for event/workflow analysis; approved
   event hours are not interchangeable with recorded taken amounts. Do not infer
   period coverage or units from a request date in another table.
 grain: []
@@ -88,7 +88,7 @@ row_scope:
   implicit_filters: [client_code, proc_center]
 
 rules:
-- id: timeoff_balances_employee_detail_population
+- id: time_off_balance_employee_detail_population
   predicate: employee.employee_status IN ('Active', 'On Leave')
   applies_when: >
     Employee-detail requests, even with a period filter.

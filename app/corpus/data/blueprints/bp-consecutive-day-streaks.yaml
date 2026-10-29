@@ -1,0 +1,59 @@
+id: bp-consecutive-day-streaks
+intent: Employees with N or more consecutive calendar days containing at least one punch pair, showing streak length
+  and date range
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  WITH distinct_days AS
+    (SELECT DISTINCT employee_code,
+                     toDate(punch_date) AS punch_date
+     FROM dbpcm_warehouse.punch_pair
+     WHERE punch_date BETWEEN {window_start} AND {window_end}),
+       streak_groups AS
+    (SELECT employee_code,
+            punch_date,
+            dateDiff('day', toDate('1970-01-01'), punch_date) - row_number() OVER (PARTITION BY employee_code
+                                                                                   ORDER BY punch_date) AS grp
+     FROM distinct_days)
+  SELECT sg.employee_code AS "Employee Code",
+         any(e.employee_name) AS "Employee Name",
+         min(sg.punch_date) AS "Streak Start",
+         max(sg.punch_date) AS "Streak End",
+         count() AS "Streak Length"
+  FROM streak_groups sg
+  LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = sg.employee_code
+  GROUP BY sg.employee_code,
+           sg.grp
+  HAVING count() >= {streak}
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Streak Length"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Streak Length"
+                     END ASC, "Employee Code"
+  LIMIT {max_rows}
+slots:
+- name: streak
+  type: positive_integer
+  required: true
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: streak, window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.punch_pair.employee_code
+- dbpcm_warehouse.punch_pair.punch_date
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name

@@ -1,0 +1,78 @@
+id: bp-payroll-setup-gap-scorecard
+intent: Missing-payroll-setup flags and gap count per active employee
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         employee_name AS "Name",
+         department_name AS "Department",
+         toUInt8(badge_number IS NULL
+                 OR badge_number = '') AS "No Badge",
+         toUInt8(employee_gl_code IS NULL
+                 OR employee_gl_code = '') AS "No GL Code",
+         toUInt8(paycode_profile_code IS NULL
+                 OR paycode_profile_code = '') AS "No Paycode Profile",
+         toUInt8(earning_profile IS NULL
+                 OR earning_profile = '') AS "No Earning Profile",
+         toUInt8(pay_class IS NULL
+                 OR pay_class = '') AS "No Pay Class",
+         toUInt8(pay_frequency IS NULL
+                 OR pay_frequency = '') AS "No Pay Frequency",
+         toUInt8(schedule_group IS NULL
+                 OR schedule_group = '') AS "No Schedule Group",
+         toUInt8((badge_number IS NULL
+                  OR badge_number = '')) + toUInt8((employee_gl_code IS NULL
+                                                    OR employee_gl_code = '')) + toUInt8((paycode_profile_code IS NULL
+                                                                                          OR paycode_profile_code = '')) + toUInt8((earning_profile IS NULL
+                                                                                                                                    OR earning_profile = '')) + toUInt8((pay_class IS NULL
+                                                                                                                                                                         OR pay_class = '')) + toUInt8((pay_frequency IS NULL
+                                                                                                                                                                                                        OR pay_frequency = '')) + toUInt8((schedule_group IS NULL
+                                                                                                                                                                                                                                           OR schedule_group = '')) AS "Gap Count"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND department_name = {department}
+    AND (toUInt8((badge_number IS NULL
+                  OR badge_number = '')) + toUInt8((employee_gl_code IS NULL
+                                                    OR employee_gl_code = '')) + toUInt8((paycode_profile_code IS NULL
+                                                                                          OR paycode_profile_code = '')) + toUInt8((earning_profile IS NULL
+                                                                                                                                    OR earning_profile = '')) + toUInt8((pay_class IS NULL
+                                                                                                                                                                         OR pay_class = '')) + toUInt8((pay_frequency IS NULL
+                                                                                                                                                                                                        OR pay_frequency = '')) + toUInt8((schedule_group IS NULL
+                                                                                                                                                                                                                                           OR schedule_group = ''))) > 0
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Gap Count"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Gap Count"
+                     END ASC, employee_code
+  LIMIT {max_rows}
+slots:
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: department, max_rows, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.badge_number
+- dbpcm_warehouse.employee.employee_gl_code
+- dbpcm_warehouse.employee.paycode_profile_code
+- dbpcm_warehouse.employee.earning_profile
+- dbpcm_warehouse.employee.pay_class
+- dbpcm_warehouse.employee.pay_frequency
+- dbpcm_warehouse.employee.schedule_group
+- dbpcm_warehouse.employee.employee_status

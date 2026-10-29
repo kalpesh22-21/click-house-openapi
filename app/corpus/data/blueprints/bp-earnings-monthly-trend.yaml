@@ -1,0 +1,43 @@
+id: bp-earnings-monthly-trend
+intent: Monthly trend of gross or net payroll earnings over the last N completed pay periods, bucketed by pay-period
+  end month
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT formatDateTime(toStartOfMonth(pay_period_end_date), '%Y-%m') AS "Month",
+         round(SUM(amount), 2) AS "Total Earnings"
+  FROM dbpcm_warehouse.payroll
+  WHERE register_type = {register}
+    AND pay_period_end_date >= addMonths(
+                                           (SELECT max(pay_period_end_date)
+                                            FROM dbpcm_warehouse.payroll), -{win})
+  GROUP BY "Month"
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Month"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Month"
+                     END ASC
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: register
+  type: enum
+  required: true
+  enum_values:
+  - EARN
+  - NETPAYDIST
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: win, register, order_direction
+uses:
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.pay_period_end_date
+- dbpcm_warehouse.payroll.register_type

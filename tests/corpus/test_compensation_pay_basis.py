@@ -11,7 +11,7 @@ from app.semantic_catalog.loader import load_semantic_catalog
 from app.trino_client import _map_clickhouse_functions
 from app.trino_semantics import annotate_input_types
 
-VALUES = {'top_n': '10', 'employee_status': "'All'", 'department': "'Sales'", 'employee': "'s1'",
+VALUES = {"order_direction": "'DESC'",'top_n': '10', 'employee_status': "'All'", 'department': "'Sales'", 'employee': "'s1'",
           'salary_population': "'recorded'", 'group_by': "'company'", 'band_width': '10000',
           'salary': '50000', 'comparison': "'above'", 'row_limit': '20',
           'company_salary_avg': '150000', 'company_hourly_avg': '78000'}

@@ -1,0 +1,35 @@
+id: bp-placeholder-category-audit
+intent: Total timecard earnings dollars and paid hours flowing through the Select Category placeholder bucket for
+  a punch date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT count(DISTINCT te.earn_code) AS "Distinct Earn Codes",
+         round(SUM(te.earn_amount), 2) AS "Total Dollars",
+         round(SUM(te.earn_hours), 2) AS "Total Hours"
+  FROM
+    (SELECT punch_date,
+            earn_amount,
+            earn_hours,
+            earn_code
+     FROM dbpcm_warehouse.total_earning) AS te
+  JOIN
+    (SELECT earn_code,
+            category_name
+     FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
+  WHERE ec.category_name = 'Select Category'
+    AND te.punch_date BETWEEN {window_start} AND {window_end}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+slots_summary: window
+uses:
+- dbpcm_warehouse.total_earning.earn_amount
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.earning_category.earn_code
+- dbpcm_warehouse.earning_category.category_name

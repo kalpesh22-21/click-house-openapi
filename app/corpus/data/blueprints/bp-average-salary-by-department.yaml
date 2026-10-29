@@ -6,7 +6,7 @@ intent: Average annual compensation and headcount by department and pay type. Av
 slots_summary: department, employee_status
 status: validated
 drift_status: clean
-catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+catalog_sha: ''
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
@@ -43,13 +43,29 @@ slots:
 result_grain:
 - Department
 - Pay Type
-sql_template: "SELECT employee_pay_type AS `Pay Type`, CASE WHEN employee_pay_type = 'Hourly' THEN 'Estimated annual\
-  \ compensation (2080 hours)' WHEN employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown compensation\
-  \ basis' END AS `Compensation Basis`, department_name AS department,\n       AVG((CASE WHEN employee_pay_type\
-  \ = 'Salary' THEN annual_salary WHEN employee_pay_type = 'Hourly' THEN hourly_salary * 2080 ELSE NULL END)) AS\
-  \ average_annual_compensation,\n       COUNT(DISTINCT employee_code) AS headcount, avg(CASE WHEN employee_pay_type\
-  \ = 'Hourly' THEN hourly_salary ELSE NULL END) AS `Average Hourly Rate`\nFROM dbpcm_warehouse.employee\nWHERE\
-  \ department_name = {department}\n  AND (employee_status = {employee_status} OR {employee_status} = 'All')\nGROUP\
-  \ BY employee_pay_type, department_name\n"
+sql_template: |
+  SELECT employee_pay_type AS `Pay Type`,
+         CASE
+             WHEN employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+             WHEN employee_pay_type = 'Salary' THEN 'Recorded annual salary'
+             ELSE 'Unknown compensation basis'
+         END AS `Compensation Basis`,
+         department_name AS department,
+         AVG((CASE
+                  WHEN employee_pay_type = 'Salary' THEN annual_salary
+                  WHEN employee_pay_type = 'Hourly' THEN hourly_salary * 2080
+                  ELSE NULL
+              END)) AS average_annual_compensation,
+         COUNT(DISTINCT employee_code) AS headcount,
+         avg(CASE
+                 WHEN employee_pay_type = 'Hourly' THEN hourly_salary
+                 ELSE NULL
+             END) AS `Average Hourly Rate`
+  FROM dbpcm_warehouse.employee
+  WHERE department_name = {department}
+    AND (employee_status = {employee_status}
+         OR {employee_status} = 'All')
+  GROUP BY employee_pay_type,
+           department_name
 uses_rules:
 - compensation_by_pay_type

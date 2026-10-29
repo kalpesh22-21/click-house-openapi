@@ -4,10 +4,10 @@ intent: Annual compensation histogram by pay type with positive whole-currency b
   selects recorded (including zero) or positive values. Salary uses annual_salary; Hourly uses hourly_salary and
   estimated annual compensation = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes overtime). Keep pay
   types separate. Defaults to Active + On Leave; employee_status overrides or All removes the filter.
-slots_summary: band_width, salary_population, employee_status, department, employee
+slots_summary: band_width, salary_population, employee_status, department, employee, order_direction
 status: validated
 drift_status: clean
-catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+catalog_sha: ''
 uses:
 - dbpcm_warehouse.employee.annual_salary
 - dbpcm_warehouse.employee.department_name
@@ -58,22 +58,61 @@ slots:
   required: false
   binds_to: dbpcm_warehouse.employee.employee_code
   optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
 result_grain:
 - Lower Bound
 - Pay Type
-sql_template: "SELECT e.employee_pay_type AS `Pay Type`, CASE WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated\
-  \ annual compensation (2080 hours)' WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown\
-  \ compensation basis' END AS `Compensation Basis`, floor((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary\
-  \ WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) / {band_width}) * {band_width}\
-  \ AS `Lower Bound`,\n (floor((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type\
-  \ = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) / {band_width}) + 1) * {band_width} AS `Upper Bound Exclusive`,\n\
-  \ count(*) AS `Employee Count`, 100.0 * count(*) / sum(count(*)) OVER (PARTITION BY e.employee_pay_type) AS `Percent\
-  \ Within Pay Type`\nFROM dbpcm_warehouse.employee e WHERE (e.employee_status = {employee_status} OR {employee_status}\
-  \ = 'All') AND e.department_name = {department} AND e.employee_code = {employee} AND (CASE WHEN e.employee_pay_type\
-  \ = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)\
-  \ IS NOT NULL\n AND ({salary_population} = 'recorded' OR (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary\
-  \ WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) > 0)\nGROUP BY e.employee_pay_type,\
-  \ floor((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN\
-  \ e.hourly_salary * 2080 ELSE NULL END) / {band_width}) ORDER BY `Lower Bound`"
+sql_template: |
+  SELECT e.employee_pay_type AS `Pay Type`,
+         CASE
+             WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+             WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary'
+             ELSE 'Unknown compensation basis'
+         END AS `Compensation Basis`,
+         floor((CASE
+                    WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                    WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                    ELSE NULL
+                END) / {band_width}) * {band_width} AS `Lower Bound`, (floor((CASE
+                                                                                  WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                                                                                  WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                                                                                  ELSE NULL
+                                                                              END) / {band_width}) + 1) * {band_width} AS `Upper Bound Exclusive`,
+                                                                                                           count(*) AS `Employee Count`,
+                                                                                                           100.0 * count(*) / sum(count(*)) OVER (PARTITION BY e.employee_pay_type) AS `Percent Within Pay Type`
+  FROM dbpcm_warehouse.employee e
+  WHERE (e.employee_status = {employee_status}
+         OR {employee_status} = 'All')
+    AND e.department_name = {department}
+    AND e.employee_code = {employee}
+    AND (CASE
+             WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+             WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+             ELSE NULL
+         END) IS NOT NULL
+    AND ({salary_population} = 'recorded'
+         OR (CASE
+                 WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                 WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                 ELSE NULL
+             END) > 0)
+  GROUP BY e.employee_pay_type,
+           floor((CASE
+                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      ELSE NULL
+                  END) / {band_width})
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN `Lower Bound`
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN `Lower Bound`
+                     END ASC
 uses_rules:
 - compensation_by_pay_type

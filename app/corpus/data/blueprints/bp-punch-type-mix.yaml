@@ -1,0 +1,42 @@
+id: bp-punch-type-mix
+intent: Breakdown of punch pair counts by In punch type and Out punch type for a given date window, using punch-level
+  event data only
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT in_punch_type AS "In Punch Type",
+         out_punch_type AS "Out Punch Type",
+         count() AS "Pair Count"
+  FROM dbpcm_warehouse.punch_pair
+  WHERE punch_date BETWEEN {window_start} AND {window_end}
+  GROUP BY in_punch_type,
+           out_punch_type
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Pair Count"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Pair Count"
+                     END ASC, "In Punch Type",
+                              "Out Punch Type"
+  LIMIT {max_rows}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.punch_pair.in_punch_type
+- dbpcm_warehouse.punch_pair.out_punch_type
+- dbpcm_warehouse.punch_pair.punch_date

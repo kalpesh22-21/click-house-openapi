@@ -1,0 +1,95 @@
+id: bp-workforce-movements
+intent: Recent-hire, boomerang-return and full-to-part-time movements within one window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT "Employee Code",
+         "Name",
+         "Department",
+         "Movement Type",
+         "Movement Date",
+         "Gap Days"
+  FROM
+    (SELECT employee_code AS "Employee Code",
+            employee_name AS "Name",
+            department_name AS "Department",
+            'Recent Hire' AS "Movement Type",
+            most_recent_hire_date AS "Movement Date",
+            CAST(NULL AS Nullable(Int32)) AS "Gap Days"
+     FROM dbpcm_warehouse.employee
+     WHERE (employee_status != 'Not Hired'
+            OR employee_status IS NULL)
+       AND most_recent_hire_date >= {move_window_start}
+       AND most_recent_hire_date < {move_window_end}
+     UNION ALL SELECT employee_code AS "Employee Code",
+                      employee_name AS "Name",
+                      department_name AS "Department",
+                      'Boomerang Hire' AS "Movement Type",
+                      most_recent_hire_date AS "Movement Date",
+                      date_diff('day', old_termination_date, most_recent_hire_date) AS "Gap Days"
+     FROM dbpcm_warehouse.employee
+     WHERE (employee_status != 'Not Hired'
+            OR employee_status IS NULL)
+       AND old_termination_date IS NOT NULL
+       AND toDate32(old_termination_date) > toDate32('1900-01-01')
+       AND most_recent_hire_date IS NOT NULL
+       AND toDate32(most_recent_hire_date) > toDate32('1900-01-01')
+       AND most_recent_hire_date > old_termination_date
+       AND most_recent_hire_date >= {move_window_start}
+       AND most_recent_hire_date < {move_window_end}
+       AND date_diff('day', old_termination_date, most_recent_hire_date) >= {min_gap_days}
+     UNION ALL SELECT employee_code AS "Employee Code",
+                      employee_name AS "Name",
+                      department_name AS "Department",
+                      'FT To PT' AS "Movement Type",
+                      full_time_to_part_time_date AS "Movement Date",
+                      CAST(NULL AS Nullable(Int32)) AS "Gap Days"
+     FROM dbpcm_warehouse.employee
+     WHERE (employee_status != 'Not Hired'
+            OR employee_status IS NULL)
+       AND full_time_to_part_time_date IS NOT NULL
+       AND toDate32(full_time_to_part_time_date) > toDate32('1900-01-01')
+       AND full_time_to_part_time_date >= {move_window_start}
+       AND full_time_to_part_time_date < {move_window_end})
+  WHERE "Department" = {department}
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Movement Date"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Movement Date"
+                     END ASC, "Employee Code"
+  LIMIT {max_rows}
+slots:
+- name: move_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: min_gap_days
+  type: nonnegative_integer
+  required: false
+  optional_pattern: 'TRUE'
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: move_window, min_gap_days, department, max_rows, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.most_recent_hire_date
+- dbpcm_warehouse.employee.old_termination_date
+- dbpcm_warehouse.employee.full_time_to_part_time_date

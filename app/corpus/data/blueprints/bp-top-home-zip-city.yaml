@@ -1,0 +1,40 @@
+id: bp-top-home-zip-city
+intent: Top-N employee home zip codes by active headcount
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT zip_code AS "Zip Code",
+         any(city) AS "City",
+         any(state) AS "State",
+         count(DISTINCT employee_code) AS "Headcount"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND zip_code IS NOT NULL
+    AND zip_code != ''
+  GROUP BY zip_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Headcount"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Headcount"
+                     END ASC, "Zip Code"
+  LIMIT {top_n}
+slots:
+- name: top_n
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: top_n, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.zip_code
+- dbpcm_warehouse.employee.city
+- dbpcm_warehouse.employee.state
+- dbpcm_warehouse.employee.employee_status

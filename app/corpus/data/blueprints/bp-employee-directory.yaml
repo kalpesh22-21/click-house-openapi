@@ -1,0 +1,71 @@
+id: bp-employee-directory
+intent: Filtered active-employee directory with identity, contact, title and pay columns
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         employee_name AS "Name",
+         work_email AS "Work Email",
+         position_title_position_info AS "Title",
+         department_name AS "Department",
+         badge_number AS "Badge",
+         pay_basis AS "Pay Basis",
+         employment_type AS "Employment Type",
+         primary_supervisor_name AS "Supervisor"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND department_name = {department}
+    AND pay_basis = {pay_basis}
+    AND employment_type = {employment_type}
+    AND primary_supervisor_name = {supervisor}
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN employee_code
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN employee_code
+                     END ASC
+  LIMIT {max_rows}
+slots:
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: pay_basis
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.pay_basis
+  optional_pattern: 'TRUE'
+- name: employment_type
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.employment_type
+  optional_pattern: 'TRUE'
+- name: supervisor
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.primary_supervisor_name
+  optional_pattern: 'TRUE'
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: department, pay_basis, employment_type, supervisor, max_rows, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.work_email
+- dbpcm_warehouse.employee.position_title_position_info
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.badge_number
+- dbpcm_warehouse.employee.pay_basis
+- dbpcm_warehouse.employee.employment_type
+- dbpcm_warehouse.employee.primary_supervisor_name
+- dbpcm_warehouse.employee.employee_status

@@ -1,0 +1,45 @@
+id: bp-future-dated-position-changes
+intent: Active employees with position or seat effective dates inside a forward window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         employee_name AS "Name",
+         position_code AS "Position Code",
+         position_seat_number AS "Seat Number",
+         effective_date_position_info AS "Position Effective",
+         effective_date_position_seat AS "Seat Effective"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND ((effective_date_position_info >= {change_window_start}
+          AND effective_date_position_info < {change_window_end})
+         OR (effective_date_position_seat >= {change_window_start}
+             AND effective_date_position_seat < {change_window_end}))
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Position Effective"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Position Effective"
+                     END ASC
+slots:
+- name: change_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: change_window, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.position_code
+- dbpcm_warehouse.employee.position_seat_number
+- dbpcm_warehouse.employee.effective_date_position_info
+- dbpcm_warehouse.employee.effective_date_position_seat
+- dbpcm_warehouse.employee.employee_status

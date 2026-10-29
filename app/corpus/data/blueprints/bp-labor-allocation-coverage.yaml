@@ -1,0 +1,38 @@
+id: bp-labor-allocation-coverage
+intent: Coverage audit comparing active employees with and without labor allocation key 1 populated
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT 'Set' AS "Mapping Status",
+         count(DISTINCT employee_code) AS "Headcount"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND labor_allocation_key_1 IS NOT NULL
+    AND labor_allocation_key_1 != ''
+  UNION ALL
+  SELECT 'Not Set' AS "Mapping Status",
+         count(DISTINCT employee_code) AS "Headcount"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND (labor_allocation_key_1 IS NULL
+         OR labor_allocation_key_1 = '')
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Headcount"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Headcount"
+                     END ASC
+slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.labor_allocation_key_1

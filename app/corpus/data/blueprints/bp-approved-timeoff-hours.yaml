@@ -1,0 +1,47 @@
+id: bp-approved-timeoff-hours
+intent: Approved time-off hours by department or company-wide for a request-date window, counting only Approved
+  status leave events
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT e.department_name AS "Department",
+         round(SUM(t.hours), 2) AS "Approved Hours"
+  FROM dbpcm_warehouse.time_off_request AS t
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = t.employee_code
+  WHERE t.status = 'Approved'
+    AND t.hours IS NOT NULL
+    AND toDate32(t.request_date) BETWEEN {window_start} AND {window_end}
+    AND e.department_name = {dept}
+  GROUP BY e.department_name
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Approved Hours"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Approved Hours"
+                     END ASC
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: dept
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, dept, order_direction
+uses:
+- dbpcm_warehouse.time_off_request.employee_code
+- dbpcm_warehouse.time_off_request.hours
+- dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.time_off_request.request_date
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name

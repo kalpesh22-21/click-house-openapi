@@ -8,17 +8,17 @@ intent: Accrual event/day row counts, event hours and distinct employees by comp
   periods or prove full coverage. For time-off-taken questions bind event_status=Approved and event_type=Time Off
   Request, plus the requested category/date scope; assume these requests were taken and disclose it. Offer a separate
   payroll-paid-hours check without executing it unless requested.
-slots_summary: group_by, period, event_status, event_type, earn_code, employee_status, department, employee
+slots_summary: group_by, period, event_status, event_type, earn_code, employee_status, department, employee, order_direction
 status: validated
 drift_status: clean
-catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+catalog_sha: ''
 uses:
-- dbpcm_warehouse.timeoff_requests.employee_code
-- dbpcm_warehouse.timeoff_requests.status
-- dbpcm_warehouse.timeoff_requests.event_type
-- dbpcm_warehouse.timeoff_requests.earn_code
-- dbpcm_warehouse.timeoff_requests.request_date
-- dbpcm_warehouse.timeoff_requests.hours
+- dbpcm_warehouse.time_off_request.employee_code
+- dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.time_off_request.event_type
+- dbpcm_warehouse.time_off_request.earn_code
+- dbpcm_warehouse.time_off_request.request_date
+- dbpcm_warehouse.time_off_request.hours
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_status
 - dbpcm_warehouse.employee.department_name
@@ -47,17 +47,17 @@ slots:
   - Denied
   - Removed
   - Calendar Only
-  binds_to: dbpcm_warehouse.timeoff_requests.status
+  binds_to: dbpcm_warehouse.time_off_request.status
   optional_pattern: 'TRUE'
 - name: event_type
   type: entity
   required: false
-  binds_to: dbpcm_warehouse.timeoff_requests.event_type
+  binds_to: dbpcm_warehouse.time_off_request.event_type
   optional_pattern: 'TRUE'
 - name: earn_code
   type: entity
   required: false
-  binds_to: dbpcm_warehouse.timeoff_requests.earn_code
+  binds_to: dbpcm_warehouse.time_off_request.earn_code
   optional_pattern: 'TRUE'
 - name: employee_status
   type: enum
@@ -86,20 +86,69 @@ slots:
   required: false
   binds_to: dbpcm_warehouse.employee.employee_code
   optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
 result_grain:
 - Group
 - Event Status
-sql_template: "WITH a AS (\n SELECT employee_code, status, event_type, substring(toString(request_date), 1, 7) AS\
-  \ month,\n count(*) AS event_rows, sum(hours) AS hours\n FROM dbpcm_warehouse.timeoff_requests\n WHERE status\
-  \ = {event_status} AND event_type = {event_type} AND earn_code = {earn_code}\n AND toDate(request_date) >= toDate({period_start})\
-  \ AND toDate(request_date) < toDate({period_end})\n GROUP BY employee_code, status, event_type, substring(toString(request_date),\
-  \ 1, 7)\n)\nSELECT CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'department_status' THEN e.department_name\
-  \ WHEN 'status' THEN a.status WHEN 'event_type' THEN a.event_type WHEN 'month' THEN toString(a.month) ELSE 'Company'\
-  \ END AS `Group`, CASE WHEN {group_by} = 'department_status' THEN a.status ELSE 'All selected statuses' END AS\
-  \ `Event Status`, sum(CAST(a.event_rows AS Nullable(Decimal(20, 0)))) AS `Event Day Rows`,\n sum(CAST(a.hours\
-  \ AS Nullable(Decimal(38, 6)))) AS `Event Hours`, uniqExact(a.employee_code) AS `Employee Count`\nFROM a LEFT\
-  \ JOIN dbpcm_warehouse.employee e ON a.employee_code = e.employee_code\nWHERE e.employee_status = {employee_status}\
-  \ AND e.department_name = {department} AND e.employee_code = {employee}\nGROUP BY CASE {group_by} WHEN 'department'\
-  \ THEN e.department_name WHEN 'department_status' THEN e.department_name WHEN 'status' THEN a.status WHEN 'event_type'\
-  \ THEN a.event_type WHEN 'month' THEN toString(a.month) ELSE 'Company' END\n, CASE WHEN {group_by} = 'department_status'\
-  \ THEN a.status ELSE 'All selected statuses' END\nORDER BY `Group`, `Event Status`\n"
+sql_template: |
+  WITH a AS
+    (SELECT employee_code,
+            status,
+            event_type,
+            SUBSTRING(toString(request_date), 1, 7) AS month,
+            count(*) AS event_rows,
+            sum(hours) AS hours
+     FROM dbpcm_warehouse.time_off_request
+     WHERE status = {event_status}
+       AND event_type = {event_type}
+       AND earn_code = {earn_code}
+       AND toDate(request_date) >= toDate({period_start})
+       AND toDate(request_date) < toDate({period_end})
+     GROUP BY employee_code,
+              status,
+              event_type,
+              SUBSTRING(toString(request_date), 1, 7))
+  SELECT CASE {group_by}
+             WHEN 'department' THEN e.department_name
+             WHEN 'department_status' THEN e.department_name
+             WHEN 'status' THEN a.status
+             WHEN 'event_type' THEN a.event_type
+             WHEN 'month' THEN toString(a.month)
+             ELSE 'Company'
+         END AS "Group",
+         CASE
+             WHEN {group_by} = 'department_status' THEN a.status
+             ELSE 'All selected statuses'
+         END AS "Event Status",
+         sum(CAST(a.event_rows AS Nullable(Decimal(20, 0)))) AS "Event Day Rows",
+         sum(CAST(a.hours AS Nullable(Decimal(38, 6)))) AS "Event Hours",
+         uniqExact(a.employee_code) AS "Employee Count"
+  FROM a
+  LEFT JOIN dbpcm_warehouse.employee AS e ON a.employee_code = e.employee_code
+  WHERE e.employee_status = {employee_status}
+    AND e.department_name = {department}
+    AND e.employee_code = {employee}
+  GROUP BY CASE {group_by}
+               WHEN 'department' THEN e.department_name
+               WHEN 'department_status' THEN e.department_name
+               WHEN 'status' THEN a.status
+               WHEN 'event_type' THEN a.event_type
+               WHEN 'month' THEN toString(a.month)
+               ELSE 'Company'
+           END,
+           CASE
+               WHEN {group_by} = 'department_status' THEN a.status
+               ELSE 'All selected statuses'
+           END
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Group"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Group"
+                     END ASC, "Event Status"

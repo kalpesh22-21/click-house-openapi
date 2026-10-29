@@ -1,0 +1,78 @@
+id: bp-employee-record-dq-flags
+intent: Per-employee data-quality flags across SUI state, hire date and date of birth
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         employee_name AS "Name",
+         department_name AS "Department",
+         works_in_state AS "Works In State",
+         sui_state AS "SUI State",
+         hire_date AS "Hire Date",
+         date_of_birth AS "Date Of Birth",
+         flag AS "DQ Flag"
+  FROM dbpcm_warehouse.employee
+  CROSS JOIN
+    (SELECT arrayJoin(['Age Over 90', 'Age Under 16', 'Missing Or Sentinel DOB', 'SUI Mismatch', 'Future Hire Date']) AS flag) AS flags
+  WHERE ((flag = 'Age Over 90'
+          AND (employee_status = 'Active'
+               AND NOT (date_of_birth IS NULL)
+               AND toDate32(date_of_birth) > toDate32('1900-01-01')
+               AND DATE_DIFF(YEAR, date_of_birth, now()) > 90))
+         OR (flag = 'Age Under 16'
+             AND (employee_status = 'Active'
+                  AND NOT (date_of_birth IS NULL)
+                  AND toDate32(date_of_birth) > toDate32('1900-01-01')
+                  AND DATE_DIFF(YEAR, date_of_birth, now()) < 16))
+         OR (flag = 'Missing Or Sentinel DOB'
+             AND (employee_status = 'Active'
+                  AND NOT (NOT (date_of_birth IS NULL)
+                           AND toDate32(date_of_birth) > toDate32('1900-01-01'))))
+         OR (flag = 'SUI Mismatch'
+             AND (employee_status = 'Active'
+                  AND NOT (lives_in_state IS NULL)
+                  AND lives_in_state <> ''
+                  AND NOT (works_in_state IS NULL)
+                  AND works_in_state <> ''
+                  AND NOT (sui_state IS NULL)
+                  AND sui_state <> ''
+                  AND works_in_state <> sui_state))
+         OR (flag = 'Future Hire Date'
+             AND (employee_status = 'Active'
+                  AND hire_date > now())))
+    AND department_name = {department}
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Employee Code"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Employee Code"
+                     END ASC, "DQ Flag"
+  LIMIT {max_rows}
+slots:
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: department, max_rows, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.works_in_state
+- dbpcm_warehouse.employee.sui_state
+- dbpcm_warehouse.employee.lives_in_state
+- dbpcm_warehouse.employee.hire_date
+- dbpcm_warehouse.employee.date_of_birth
+- dbpcm_warehouse.employee.employee_status

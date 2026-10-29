@@ -1,0 +1,39 @@
+id: bp-employer-tax-summary
+intent: Total employer payroll tax and breakdown by tax type code for a pay period, from payroll register employer-tax
+  lines
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT type_code AS "Tax Code",
+         round(SUM(amount), 2) AS "Total Employer Tax"
+  FROM dbpcm_warehouse.payroll
+  WHERE register_type = 'ERTAX'
+    AND pay_period_end_date = {period}
+  GROUP BY type_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Total Employer Tax"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Total Employer Tax"
+                     END ASC
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, order_direction
+uses:
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.type_code
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_end_date

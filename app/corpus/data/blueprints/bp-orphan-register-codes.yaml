@@ -1,0 +1,39 @@
+id: bp-orphan-register-codes
+intent: Payroll register employee codes that have no match in the employee roster, a data-quality orphan audit
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT p.employee_code AS "Employee Code",
+         count() AS "Register Lines"
+  FROM dbpcm_warehouse.payroll AS p
+  WHERE p.employee_code NOT IN
+      (SELECT DISTINCT employee_code
+       FROM dbpcm_warehouse.employee)
+    AND p.pay_period_end_date = {period}
+  GROUP BY p.employee_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Register Lines"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Register Lines"
+                     END ASC
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, order_direction
+uses:
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.pay_period_end_date
+- dbpcm_warehouse.employee.employee_code

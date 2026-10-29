@@ -1,0 +1,49 @@
+id: bp-effective-mileage-rate
+intent: Effective mileage rate by expense rule for a payment date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT expense_rule_description AS "Expense Rule",
+         round(toFloat64(SUM(amount_approved)), 2) AS "Total Approved",
+         round(toFloat64(SUM(approved_miles)), 2) AS "Total Miles",
+         round(toFloat64(SUM(amount_approved)) / nullIf(toFloat64(SUM(approved_miles)), 0), 4) AS "Effective Rate"
+  FROM dbpcm_warehouse.expense
+  WHERE (submitted_miles > 0
+         OR approved_miles > 0)
+    AND expense_status IN ('Approved',
+                           'Paid',
+                           'Marked as Paid')
+    AND expense_paid_date >= {expense_window_start}
+    AND expense_paid_date <= {expense_window_end}
+  GROUP BY expense_rule_description
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Total Approved"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Total Approved"
+                     END ASC, "Expense Rule"
+  LIMIT {max_rows}
+slots:
+- name: expense_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: expense_window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.expense.amount_approved
+- dbpcm_warehouse.expense.approved_miles
+- dbpcm_warehouse.expense.expense_rule_description
+- dbpcm_warehouse.expense.expense_status
+- dbpcm_warehouse.expense.expense_paid_date
+- dbpcm_warehouse.expense.submitted_miles

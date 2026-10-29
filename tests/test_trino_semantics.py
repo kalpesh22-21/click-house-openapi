@@ -569,3 +569,84 @@ def test_nested_union_preserves_unknown_projection_positions():
     assert "COALESCE(SUM(y), 0)" in convert(sql)
     with pytest.raises(QueryValidationError):
         convert(sql.replace("sum(y)", "sum(x)"))
+
+
+@pytest.mark.parametrize('expression,fragment', [
+    ("toHour(toDateTime('2024-02-29 23:47:00'))", 'HOUR('),
+    ("toMinute(toDateTime('2024-02-29 23:47:00'))", 'MINUTE('),
+    ("toDayOfYear(toDate32('2024-02-29'))", 'DAY_OF_YEAR('),
+    ("toLastDayOfMonth(toDate32('2024-02-01'))", 'LAST_DAY_OF_MONTH('),
+    ('toInt32(2147483648)', 'DECIMAL(38, 0)'),
+    ('toInt32(-2147483649)', 'DECIMAL(38, 0)'),
+])
+def test_calendar_and_int32_function_coverage(expression, fragment):
+    assert fragment in convert('SELECT ' + expression)
+
+
+def test_calendar_parts_keep_nullable_derived_aggregate_contract():
+    sql = convert("SELECT avg(part) FROM (SELECT toDayOfYear(CAST(NULL AS Nullable(DateTime64(6)))) AS part)")
+    assert 'AVG(CAST(part AS DOUBLE))' in sql
+    assert 'COALESCE(AVG' not in sql
+
+
+def test_relative_day_origin_rejected_with_actionable_guidance():
+    with pytest.raises(QueryValidationError, match='implementation-specific origin'):
+        convert('SELECT toRelativeDayNum(today())')
+
+
+@pytest.mark.parametrize('expression', ["toHour('12:30:00')", "toMinute(123)", "toInt32('12')", "toDayOfYear(now(), 'UTC')"])
+def test_new_function_overloads_do_not_guess_types(expression):
+    with pytest.raises(QueryValidationError):
+        convert('SELECT '+expression)
+
+
+@pytest.mark.parametrize('unit', ['hour', 'minute', 'second'])
+def test_subday_datediff_retains_type_through_derived_aggregate(unit):
+    sql = convert(f"WITH gaps AS (SELECT dateDiff('{unit}', toDateTime64('2024-02-29 10:59:59.9',6), toDateTime64('2024-02-29 11:00:00.1',6)) AS gap) SELECT avg(gap) FROM gaps")
+    assert 'DATE_TRUNC' in sql and 'AVG(CAST(gap AS DOUBLE))' in sql
+
+
+def test_multi_input_exact_distinct_excludes_any_null():
+    sql = convert('SELECT uniqExact(name, stamp) FROM staff')
+    assert 'COUNT(DISTINCT' in sql
+    assert 'name IS NULL' in sql and 'stamp IS NULL' in sql
+    assert '(name, stamp)' in sql
+
+
+@pytest.mark.parametrize('expression', ['range(0)', 'range(2,2)', 'range(5,2)', 'range(-3,toInt32(2))'])
+def test_integer_range_emits_empty_guard_and_sequence(expression):
+    sql = convert('SELECT '+expression)
+    assert 'SEQUENCE(' in sql and 'ARRAY(BIGINT)' in sql
+
+
+def test_range_and_row_number_types_survive_derived_queries():
+    assert 'BIGINT' in convert('SELECT toInt64(n) FROM (SELECT row_number() OVER () n FROM staff)')
+    assert 'INTEGER' in convert('SELECT toInt32(n) FROM (SELECT arrayJoin(range(0,5)) n)')
+
+
+def test_month_interval_uses_calendar_month_arithmetic():
+    assert "DATE_ADD('month', -1" in convert("SELECT toDate32('2024-03-31') - toIntervalMonth(1)")
+    with pytest.raises(QueryValidationError, match='arithmetic operand'):
+        convert('SELECT toIntervalMonth(1)')
+
+
+def test_unsigned32_wraps_integer_and_rejects_unverified_float_domain():
+    assert '4294967296' in convert('SELECT toUInt32(-1)')
+    with pytest.raises(QueryValidationError, match='floating-point'):
+        convert('SELECT toUInt32(-12.9)')
+
+
+def test_stddev_preserves_empty_input_nullability():
+    assert 'NAN()' in convert('SELECT stddevPop(stamp) FROM staff')
+    assert 'NAN()' not in convert('SELECT stddevPop(salary) FROM staff')
+
+
+def test_subday_conversion_does_not_round_nanoseconds_before_boundary_counting():
+    sql = convert("SELECT dateDiff('second', toDateTime64('2024-02-29 10:59:59.9999999',9), toDateTime64('2024-02-29 11:00:00',9))")
+    assert 'TIMESTAMP(9)' in sql
+    assert 'TIMESTAMP(6)' not in sql
+
+
+def test_unsigned32_does_not_wrap_decimal_overflow_that_clickhouse_rejects():
+    with pytest.raises(QueryValidationError, match='Decimal'):
+        convert("SELECT toUInt32(CAST('-12.9' AS Decimal(18,1)))")

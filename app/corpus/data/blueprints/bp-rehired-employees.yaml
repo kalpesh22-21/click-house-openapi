@@ -1,0 +1,49 @@
+id: bp-rehired-employees
+intent: Terminated-then-rehired employees with rehire event history — employees who left and came back, showing
+  previous termination and rehire dates within a calendar window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         employee_name AS "Name",
+         department_name AS "Department",
+         old_termination_date AS "Old Termination Date",
+         ifNull(rehire_date, most_recent_hire_date) AS "Rehire Date",
+         date_diff('day', old_termination_date, ifNull(rehire_date, most_recent_hire_date)) AS "Days Between"
+  FROM dbpcm_warehouse.employee
+  WHERE old_termination_date IS NOT NULL
+    AND toDate32(old_termination_date) > toDate32('1900-01-01')
+    AND ((rehire_date IS NOT NULL
+          AND toDate32(rehire_date) > toDate32('1900-01-01')
+          AND rehire_date > old_termination_date)
+         OR (most_recent_hire_date IS NOT NULL
+             AND most_recent_hire_date > old_termination_date))
+    AND ifNull(rehire_date, most_recent_hire_date) >= {window_start}
+    AND ifNull(rehire_date, most_recent_hire_date) < {window_end}
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Rehire Date"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Rehire Date"
+                     END ASC, "Employee Code"
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.old_termination_date
+- dbpcm_warehouse.employee.rehire_date
+- dbpcm_warehouse.employee.most_recent_hire_date

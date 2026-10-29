@@ -1,0 +1,36 @@
+id: bp-future-termination-roster
+intent: Employees with future termination dates already on the roster, upcoming planned departures
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         employee_name AS "Name",
+         department_name AS "Department",
+         employee_status AS "Status",
+         termination_date AS "Termination Date"
+  FROM dbpcm_warehouse.employee
+  WHERE termination_date IS NOT NULL
+    AND toDate32(termination_date) > toDate32('1900-01-01')
+    AND termination_date > now()
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN termination_date
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN termination_date
+                     END ASC, employee_code
+slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.termination_date

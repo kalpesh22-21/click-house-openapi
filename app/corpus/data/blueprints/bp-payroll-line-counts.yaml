@@ -1,0 +1,22 @@
+id: bp-payroll-line-counts
+intent: Count of payroll register lines and distinct employee-check combinations for a pay period
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT count() AS "Register Lines",
+         uniqExact(employee_code, pay_period_end_date) AS "Distinct Checks"
+  FROM dbpcm_warehouse.payroll
+  WHERE pay_period_end_date = {period}
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+slots_summary: period
+uses:
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.pay_period_end_date

@@ -1,0 +1,45 @@
+id: bp-expense-senders-no-punches
+intent: Employees who submitted expense activity but have zero punched timecard records over the trailing N months
+  — a cross-check audit of expense submitters with no timecards
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT *
+  FROM
+    (SELECT DISTINCT e.employee_code AS "Employee Code",
+                     e.employee_name AS "Employee Name",
+                     e.department_name AS "Department"
+     FROM dbpcm_warehouse.expense AS ex
+     JOIN dbpcm_warehouse.employee AS e ON e.employee_code = ex.employee_code
+     WHERE ex.expense_paid_date >= addMonths(today(), -{win})
+       AND ex.employee_code NOT IN
+         (SELECT DISTINCT employee_code
+          FROM dbpcm_warehouse.punch_pair
+          WHERE punch_date >= addMonths(today(), -{win}))) AS results
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Employee Code"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Employee Code"
+                     END ASC
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: win, order_direction
+uses:
+- dbpcm_warehouse.expense.employee_code
+- dbpcm_warehouse.expense.expense_paid_date
+- dbpcm_warehouse.punch_pair.employee_code
+- dbpcm_warehouse.punch_pair.punch_date
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name

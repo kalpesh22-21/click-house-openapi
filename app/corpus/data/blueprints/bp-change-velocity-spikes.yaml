@@ -1,0 +1,50 @@
+id: bp-change-velocity-spikes
+intent: Days with unusually high employee master-data change volume within a trailing window, flagged when daily
+  counts exceed one standard deviation above the mean
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  -- Output aliases are Title-Case display names; consumers keying on column names
+  -- must use the quoted aliases.
+  WITH daily_counts AS
+    (SELECT toDate(change_time_added) AS day,
+            count() AS cnt
+     FROM dbpcm_warehouse.employee_change
+     WHERE change_time_added >= addMonths(today(), -{win})
+     GROUP BY toDate(change_time_added)),
+       stats AS
+    (SELECT avg(cnt) AS avg_cnt,
+            stddevPop(cnt) AS sd_cnt
+     FROM daily_counts)
+  SELECT toString(d.day) AS "Day",
+         d.cnt AS "Change Events",
+         round(s.avg_cnt, 2) AS "Daily Mean",
+         round(s.sd_cnt, 2) AS "Daily Std Dev"
+  FROM daily_counts AS d
+  CROSS JOIN stats AS s
+  WHERE d.cnt > s.avg_cnt + s.sd_cnt
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN d.cnt
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN d.cnt
+                     END ASC, d.day
+  LIMIT {max_rows}
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: win, max_rows, order_direction
+uses:
+- dbpcm_warehouse.employee_change.change_time_added

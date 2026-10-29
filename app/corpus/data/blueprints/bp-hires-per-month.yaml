@@ -1,5 +1,6 @@
 id: bp-hires-per-month
-intent: New hires per month over a trailing window of the last N months — counts by original hire date; rehires are not re-counted
+intent: New hires per month over a trailing window of the last N months — counts by original hire date; rehires
+  are not re-counted
 slots_summary: window_months
 status: validated
 drift_status: clean
@@ -21,10 +22,11 @@ sql_template: |
   SELECT toStartOfMonth(hire_date) AS month,
          COUNT(DISTINCT employee_code) AS hires
   FROM dbpcm_warehouse.employee
-  WHERE hire_date >= (
-          SELECT toStartOfMonth(max(hire_date))
-          FROM dbpcm_warehouse.employee
-          WHERE employee_status != 'N' OR employee_status IS NULL
-        ) - INTERVAL {window_months} MONTH
-    AND (employee_status != 'N' OR employee_status IS NULL)
+  WHERE hire_date >=
+      (SELECT toStartOfMonth(max(hire_date))
+       FROM dbpcm_warehouse.employee
+       WHERE employee_status != 'N'
+         OR employee_status IS NULL) - INTERVAL {window_months} MONTH
+    AND (employee_status != 'N'
+         OR employee_status IS NULL)
   GROUP BY toStartOfMonth(hire_date)

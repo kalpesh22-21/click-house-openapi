@@ -1,0 +1,54 @@
+id: bp-long-shift-days
+intent: Employees whose total paid hours across all timecard entries in a single day exceed a configurable threshold,
+  using total_ earning as the authoritative hours source, ranked by daily hours
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT te.employee_code AS "Employee Code",
+         any(e.employee_name) AS "Employee Name",
+         te.punch_date AS "Punch Date",
+         round(SUM(te.earn_hours), 2) AS "Daily Hours",
+         count() AS "Line Count"
+  FROM
+    (SELECT employee_code,
+            punch_date,
+            earn_hours
+     FROM dbpcm_warehouse.total_earning) AS te
+  JOIN dbpcm_warehouse.employee e ON e.employee_code = te.employee_code
+  WHERE te.punch_date BETWEEN {window_start} AND {window_end}
+  GROUP BY te.employee_code,
+           te.punch_date
+  HAVING SUM(te.earn_hours) > {threshold}
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Daily Hours"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Daily Hours"
+                     END ASC, "Employee Code"
+  LIMIT {max_rows}
+slots:
+- name: threshold
+  type: positive_integer
+  required: true
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: threshold, window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.total_earning.employee_code
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name

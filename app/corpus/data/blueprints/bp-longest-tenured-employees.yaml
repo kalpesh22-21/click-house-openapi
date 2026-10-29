@@ -1,0 +1,27 @@
+id: bp-longest-tenured-employees
+intent: Top-N longest-tenured active employees by original hire date
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         employee_name AS "Name",
+         department_name AS "Department",
+         hire_date AS "Hire Date",
+         round(date_diff('day', hire_date, now()) / 365.25, 1) AS "Tenure Years"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+  ORDER BY hire_date ASC,
+           employee_code
+  LIMIT {top_n}
+slots:
+- name: top_n
+  type: relative_window
+  required: true
+slots_summary: top_n
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.hire_date
+- dbpcm_warehouse.employee.employee_status

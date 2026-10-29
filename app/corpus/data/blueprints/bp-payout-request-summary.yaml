@@ -1,0 +1,26 @@
+id: bp-payout-request-summary
+intent: Payout request summary of counts and hours over a request-date window, returning empty when no payout rows
+  exist
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT COUNT(*) AS "Payout Requests",
+         round(SUM(t.hours), 2) AS "Total Hours",
+         COUNT(DISTINCT t.employee_code) AS "Employees"
+  FROM dbpcm_warehouse.time_off_request AS t
+  WHERE t.event_type = 'Payout Request'
+    AND t.status = 'Approved'
+    AND toDate32(t.request_date) BETWEEN {window_start} AND {window_end}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+slots_summary: window
+uses:
+- dbpcm_warehouse.time_off_request.event_type
+- dbpcm_warehouse.time_off_request.hours
+- dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.time_off_request.request_date
+- dbpcm_warehouse.time_off_request.employee_code

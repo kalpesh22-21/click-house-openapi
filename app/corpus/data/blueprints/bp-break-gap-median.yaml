@@ -1,0 +1,64 @@
+id: bp-break-gap-median
+intent: Median break gap in hours between consecutive punch pairs on the same employee-day using punch_pair event
+  timestamps only
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  WITH ordered AS
+    (SELECT employee_code,
+            punch_date,
+            in_punch_time,
+            out_punch_time,
+            toInt64(row_number() OVER (PARTITION BY employee_code, punch_date
+                                       ORDER BY in_punch_time)) AS rn
+     FROM
+       (SELECT employee_code,
+               punch_date,
+               in_punch_time,
+               out_punch_time
+        FROM dbpcm_warehouse.punch_pair)
+     WHERE punch_date BETWEEN {window_start} AND {window_end}
+       AND in_punch_time IS NOT NULL
+       AND toDate32(in_punch_time) > toDate32('1900-01-01')
+       AND out_punch_time IS NOT NULL
+       AND toDate32(out_punch_time) > toDate32('1900-01-01'))
+  SELECT current.employee_code AS "Employee Code",
+         current.punch_date AS "Punch Date",
+         round(((quantileExactLow(0.5)(dateDiff('minute', prev.out_punch_time, current.in_punch_time)) + quantileExactHigh(0.5)(dateDiff('minute', prev.out_punch_time, current.in_punch_time))) / 2) / 60.0, 2) AS "Median Break Gap Hours",
+         count() AS "Gap Count"
+  FROM ordered current
+  JOIN ordered prev ON prev.employee_code = current.employee_code
+  AND prev.punch_date = current.punch_date
+  AND prev.rn = current.rn - 1
+  GROUP BY current.employee_code,
+           current.punch_date
+  HAVING count() > 0
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Median Break Gap Hours"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Median Break Gap Hours"
+                     END ASC, "Employee Code"
+  LIMIT {max_rows}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.punch_pair.employee_code
+- dbpcm_warehouse.punch_pair.punch_date
+- dbpcm_warehouse.punch_pair.in_punch_time
+- dbpcm_warehouse.punch_pair.out_punch_time

@@ -1,0 +1,37 @@
+id: bp-register-type-breakdown
+intent: Split of the payroll register across register types for a pay period — EARN earnings, EETAX employee taxes,
+  DDUCT deductions, EEBEN benefits, ERTAX employer taxes, NETPAYDIST net pay — showing dollars by register type
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT register_type AS "Register Type",
+         round(SUM(amount), 2) AS "Total Amount"
+  FROM dbpcm_warehouse.payroll
+  WHERE pay_period_end_date = {period}
+  GROUP BY register_type
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Total Amount"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Total Amount"
+                     END ASC
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, order_direction
+uses:
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.pay_period_end_date

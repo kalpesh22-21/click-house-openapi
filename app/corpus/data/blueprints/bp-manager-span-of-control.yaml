@@ -1,0 +1,38 @@
+id: bp-manager-span-of-control
+intent: Top-N primary supervisors by number of active direct reports
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT primary_supervisor_ee_code AS "Manager Code",
+         any(primary_supervisor_name) AS "Manager",
+         count(DISTINCT employee_code) AS "Direct Reports"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND primary_supervisor_ee_code IS NOT NULL
+    AND primary_supervisor_ee_code != ''
+  GROUP BY primary_supervisor_ee_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Direct Reports"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Direct Reports"
+                     END ASC, "Manager Code"
+  LIMIT {top_n}
+slots:
+- name: top_n
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: top_n, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.primary_supervisor_ee_code
+- dbpcm_warehouse.employee.primary_supervisor_name
+- dbpcm_warehouse.employee.employee_status

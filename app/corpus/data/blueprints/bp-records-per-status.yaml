@@ -1,0 +1,34 @@
+id: bp-records-per-status
+intent: Record counts per employee status including Not Hired records
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_status AS "Employee Status",
+         count() AS "Records"
+  FROM dbpcm_warehouse.employee
+  WHERE department_name = {department}
+  GROUP BY employee_status
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Records"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Records"
+                     END ASC
+slots:
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: department, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.department_name

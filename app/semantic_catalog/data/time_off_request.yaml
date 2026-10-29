@@ -1,5 +1,5 @@
 database: dbpcm_warehouse
-table: timeoff_requests
+table: time_off_request
 source: mysql
 description: >
   Employee accrual-event log containing all types of accrual events, not only PTO or
@@ -121,7 +121,7 @@ measures:
     defined_over: "rows after temporal, status, event_type, employee, and earn_code/earn_description filters"
 
 rules:
-  - id: timeoff_requests_employee_detail_population
+  - id: time_off_request_employee_detail_population
     predicate: employee.employee_status IN ('Active', 'On Leave')
     applies_when: >
       Employee-detail requests, even with a period filter.

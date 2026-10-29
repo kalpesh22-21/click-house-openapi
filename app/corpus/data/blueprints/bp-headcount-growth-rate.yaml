@@ -1,0 +1,58 @@
+id: bp-headcount-growth-rate
+intent: Monthly hires, terminations and net headcount delta over the last N months
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT formatDateTime(m.month_start, '%Y-%m') AS "Month",
+         countIf(e.most_recent_hire_date >= m.month_start
+                 AND e.most_recent_hire_date <= m.month_end
+                 AND e.most_recent_hire_date IS NOT NULL
+                 AND toDate32(e.most_recent_hire_date) > toDate32('1900-01-01')) AS "Hires",
+         countIf(e.termination_date >= m.month_start
+                 AND e.termination_date <= m.month_end
+                 AND e.termination_date IS NOT NULL
+                 AND toDate32(e.termination_date) > toDate32('1900-01-01')
+                 AND (e.most_recent_hire_date IS NULL
+                      OR e.most_recent_hire_date < e.termination_date)) AS "Terms",
+         countIf(e.most_recent_hire_date >= m.month_start
+                 AND e.most_recent_hire_date <= m.month_end
+                 AND e.most_recent_hire_date IS NOT NULL
+                 AND toDate32(e.most_recent_hire_date) > toDate32('1900-01-01')) - countIf(e.termination_date >= m.month_start
+                                                                                           AND e.termination_date <= m.month_end
+                                                                                           AND e.termination_date IS NOT NULL
+                                                                                           AND toDate32(e.termination_date) > toDate32('1900-01-01')
+                                                                                           AND (e.most_recent_hire_date IS NULL
+                                                                                                OR e.most_recent_hire_date < e.termination_date)) AS "Net Delta"
+  FROM
+    (SELECT addMonths(toStartOfMonth(anchor.latest_hire), -toInt32(number)) AS month_start,
+            toLastDayOfMonth(addMonths(anchor.latest_hire, -toInt32(number))) AS month_end
+     FROM
+       (SELECT max(most_recent_hire_date) AS latest_hire
+        FROM dbpcm_warehouse.employee
+        WHERE toDate32(most_recent_hire_date) > toDate32('1900-01-01')) AS anchor
+     CROSS JOIN
+       (SELECT arrayJoin(range(0, toInt32({win}))) AS number) AS seq) AS m
+  CROSS JOIN dbpcm_warehouse.employee AS e
+  GROUP BY "Month"
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Month"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Month"
+                     END ASC
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: win, order_direction
+uses:
+- dbpcm_warehouse.employee.most_recent_hire_date
+- dbpcm_warehouse.employee.termination_date

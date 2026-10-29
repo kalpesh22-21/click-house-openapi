@@ -1,0 +1,34 @@
+id: bp-department-label-audit
+intent: Department label normalization audit showing employee department names not present in the official department
+  dimension with affected employee counts
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT e.department_name AS "Department Name",
+         count(DISTINCT e.employee_code) AS "Affected Employees"
+  FROM dbpcm_warehouse.employee AS e
+  LEFT JOIN dbpcm_warehouse.department AS d ON d.department_name = e.department_name
+  WHERE d.department_name IS NULL
+    AND e.department_name IS NOT NULL
+    AND e.department_name != ''
+  GROUP BY e.department_name
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Affected Employees"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Affected Employees"
+                     END ASC, e.department_name
+slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: order_direction
+uses:
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.department.department_name

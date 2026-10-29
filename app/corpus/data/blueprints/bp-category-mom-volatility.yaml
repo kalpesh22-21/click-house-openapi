@@ -1,0 +1,58 @@
+id: bp-category-mom-volatility
+intent: Month-over-month earnings dollar volatility by earning category, comparing the last two completed punch-date
+  months via adjacent month self-join
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  WITH monthly AS
+    (SELECT toStartOfMonth(te.punch_date) AS month,
+            ifNull(ec.category_name, 'Uncategorized') AS category,
+            SUM(te.earn_amount) AS dollars
+     FROM
+       (SELECT punch_date,
+               earn_code,
+               earn_amount
+        FROM dbpcm_warehouse.total_earning) AS te
+     LEFT JOIN
+       (SELECT earn_code,
+               category_name
+        FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
+     WHERE te.punch_date >= addMonths(
+                                        (SELECT CASE
+                                                    WHEN count() = 0 THEN NULL
+                                                    ELSE max(punch_date)
+                                                END
+                                         FROM dbpcm_warehouse.total_earning), -2)
+     GROUP BY toStartOfMonth(te.punch_date),
+              ifNull(ec.category_name, 'Uncategorized'))
+  SELECT curr.category AS "Category",
+         round(curr.dollars, 2) AS "Current Month Dollars",
+         round(prior.dollars, 2) AS "Prior Month Dollars",
+         round((curr.dollars - prior.dollars), 2) AS "Dollar Change",
+         round((curr.dollars - prior.dollars) * 100.0 / nullIf(prior.dollars, 0), 2) AS "Pct Change"
+  FROM monthly AS curr
+  JOIN monthly AS
+  prior ON curr.category = prior.category
+  AND prior.month = date_add(month, -1, curr.month)
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN abs(round((curr.dollars - prior.dollars) * 100.0 / nullIf(prior.dollars, 0), 2))
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN abs(round((curr.dollars - prior.dollars) * 100.0 / nullIf(prior.dollars, 0), 2))
+                     END ASC, "Category"
+slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: order_direction
+uses:
+- dbpcm_warehouse.total_earning.earn_amount
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.earning_category.earn_code
+- dbpcm_warehouse.earning_category.category_name

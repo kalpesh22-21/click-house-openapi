@@ -1,0 +1,53 @@
+id: bp-department-scorecard
+intent: Per-department KPI scorecard covering active headcount, pay, tenure, demographics and long-running leaves
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT department_name AS "Department",
+         countIf(employee_status = 'Active') AS "Active Headcount",
+         round(avgIf(toFloat64(annual_salary), employee_status = 'Active'), 2) AS "Avg Salary (Active)",
+         round(avgIf(date_diff('day', hire_date, now()) / 365.25, employee_status = 'Active'), 1) AS "Avg Tenure Years (Active)",
+         round(100 * countIf(employee_status = 'Active'
+                             AND gender = 'Female') / nullIf(countIf(employee_status = 'Active'), 0), 2) AS "Pct Female (Active)",
+         round(100 * countIf(employee_status = 'Active'
+                             AND direct_deposit = 1) / nullIf(countIf(employee_status = 'Active'), 0), 2) AS "Pct Direct Deposit (Active)",
+         countIf(employee_status = 'On Leave') AS "On Leave",
+         countIf(employee_status = 'On Leave'
+                 AND leave_absence_start IS NOT NULL
+                 AND toDate32(leave_absence_start) > toDate32('1900-01-01')
+                 AND NOT (leave_absence_end IS NOT NULL
+                          AND toDate32(leave_absence_end) > toDate32('1900-01-01'))
+                 AND leave_absence_start < now() - INTERVAL 1 YEAR) AS "On Leave Over 1 Year No End"
+  FROM dbpcm_warehouse.employee
+  WHERE department_name = {department}
+  GROUP BY department_name
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Department"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Department"
+                     END ASC
+slots:
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: department, order_direction
+uses:
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.annual_salary
+- dbpcm_warehouse.employee.hire_date
+- dbpcm_warehouse.employee.gender
+- dbpcm_warehouse.employee.direct_deposit
+- dbpcm_warehouse.employee.leave_absence_start
+- dbpcm_warehouse.employee.leave_absence_end

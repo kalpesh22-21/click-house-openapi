@@ -33,7 +33,13 @@ uses_rules:
 - gross_earnings
 result_grain:
 - Department
-sql_template: "SELECT e.department_name AS department, SUM(p.amount) AS earnings\nFROM dbpcm_warehouse.payroll AS\
-  \ p\nJOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code\nWHERE p.register_type = 'EARN'\n\
-  \  AND p.type_code = {type_code}\n  AND e.department_name = {department}\n  AND p.pay_period_end_date = {pay_period}\n\
-  GROUP BY e.department_name\n"
+sql_template: |
+  SELECT e.department_name AS department,
+         SUM(p.amount) AS earnings
+  FROM dbpcm_warehouse.payroll AS p
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
+  WHERE p.register_type = 'EARN'
+    AND p.type_code = {type_code}
+    AND e.department_name = {department}
+    AND p.pay_period_end_date = {pay_period}
+  GROUP BY e.department_name

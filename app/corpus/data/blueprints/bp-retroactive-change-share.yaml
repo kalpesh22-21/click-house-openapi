@@ -1,0 +1,51 @@
+id: bp-retroactive-change-share
+intent: Count and share of retroactive employee master-data changes where the effective date precedes the record
+  date by more than a specified number of days, grouped by changed field
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  -- Output aliases are Title-Case display names; consumers keying on column names
+  -- must use the quoted aliases.
+
+  SELECT changed_field AS "Changed Field",
+         count() AS "Retroactive Changes",
+         round(count() * 100.0 / nullIf(
+                                          (SELECT count()
+                                           FROM dbpcm_warehouse.employee_change
+                                           WHERE change_time_added >= addMonths(today(), -{win})
+                                             AND effective_date IS NOT NULL), 0), 2) AS "Share Pct"
+  FROM dbpcm_warehouse.employee_change
+  WHERE change_time_added >= addMonths(today(), -{win})
+    AND effective_date IS NOT NULL
+    AND dateDiff('day', effective_date, change_time_added) > {lag_days}
+  GROUP BY changed_field
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Retroactive Changes"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Retroactive Changes"
+                     END ASC, "Changed Field"
+  LIMIT {max_rows}
+slots:
+- name: lag_days
+  type: positive_integer
+  required: true
+- name: win
+  type: relative_window
+  required: true
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: lag_days, win, max_rows, order_direction
+uses:
+- dbpcm_warehouse.employee_change.effective_date
+- dbpcm_warehouse.employee_change.change_time_added
+- dbpcm_warehouse.employee_change.changed_field

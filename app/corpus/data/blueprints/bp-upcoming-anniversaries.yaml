@@ -1,0 +1,41 @@
+id: bp-upcoming-anniversaries
+intent: Active employees with upcoming work anniversaries based on hire date month and day within the next N days
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         employee_name AS "Name",
+         department_name AS "Department",
+         hire_date AS "Hire Date",
+         date_diff('year', hire_date, now()) AS "Years of Service"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND hire_date IS NOT NULL
+    AND toDate32(hire_date) > toDate32('1900-01-01')
+    AND toDayOfYear(hire_date) >= toDayOfYear(now())
+    AND toDayOfYear(hire_date) <= toDayOfYear(now()) + {win}
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN toDayOfYear(hire_date)
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN toDayOfYear(hire_date)
+                     END ASC, employee_code
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: win, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.hire_date
+- dbpcm_warehouse.employee.employee_status

@@ -1,0 +1,42 @@
+id: bp-duplicate-expense-flag-list
+intent: Expense lines flagged as potential duplicate for a payment date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         round(toFloat64(SUM(amount_approved)), 2) AS "Flagged Amount",
+         count() AS "Flagged Lines"
+  FROM dbpcm_warehouse.expense
+  WHERE potential_duplicate_expense = 'Yes'
+    AND expense_paid_date >= {expense_window_start}
+    AND expense_paid_date <= {expense_window_end}
+  GROUP BY employee_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Flagged Amount"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Flagged Amount"
+                     END ASC, "Employee Code"
+  LIMIT {max_rows}
+slots:
+- name: expense_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: expense_window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.expense.potential_duplicate_expense
+- dbpcm_warehouse.expense.amount_approved
+- dbpcm_warehouse.expense.employee_code
+- dbpcm_warehouse.expense.expense_paid_date

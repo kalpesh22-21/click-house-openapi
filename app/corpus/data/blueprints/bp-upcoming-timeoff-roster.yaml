@@ -1,0 +1,42 @@
+id: bp-upcoming-timeoff-roster
+intent: Roster of employees with approved time-off requests in the next N days for coverage planning, optionally
+  filtered by department
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT t.employee_code AS "Employee Code",
+         any(e.employee_name) AS "Employee Name",
+         any(e.department_name) AS "Department",
+         toDate32(t.request_date) AS "Request Date",
+         t.earn_description AS "Leave Type",
+         round(SUM(t.hours), 2) AS "Hours"
+  FROM dbpcm_warehouse.time_off_request AS t
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = t.employee_code
+  WHERE t.status = 'Approved'
+    AND toDate32(t.request_date) >= today()
+    AND toDate32(t.request_date) <= today() + INTERVAL {win} DAY
+    AND e.department_name = {dept}
+  GROUP BY t.employee_code,
+           toDate32(t.request_date),
+           t.earn_description
+  ORDER BY toDate32(t.request_date) ASC, "Employee Code"
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: dept
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+slots_summary: win, dept
+uses:
+- dbpcm_warehouse.time_off_request.employee_code
+- dbpcm_warehouse.time_off_request.request_date
+- dbpcm_warehouse.time_off_request.hours
+- dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.time_off_request.earn_description
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name

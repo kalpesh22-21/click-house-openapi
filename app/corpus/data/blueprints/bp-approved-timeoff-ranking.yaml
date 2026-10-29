@@ -2,16 +2,19 @@ id: bp-approved-timeoff-ranking
 intent: Rank employees by approved time-off request hours in a half-open requested-for-date period. Assume approved
   requests were taken and disclose that assumption. Include all accessible request records, retain ties at the requested
   rank, and offer a separate payroll-paid-hours check. Days are distinct requested calendar dates, not punch days.
-slots_summary: period, top_n
+slots_summary: period, top_n, order_direction
 status: validated
 drift_status: clean
-catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+catalog_sha: ''
 uses:
-- dbpcm_warehouse.timeoff_requests.employee_code
-- dbpcm_warehouse.timeoff_requests.hours
-- dbpcm_warehouse.timeoff_requests.request_date
-- dbpcm_warehouse.timeoff_requests.status
-- dbpcm_warehouse.timeoff_requests.event_type
+- dbpcm_warehouse.time_off_request.employee_code
+- dbpcm_warehouse.time_off_request.hours
+- dbpcm_warehouse.time_off_request.request_date
+- dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.time_off_request.event_type
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
 slots:
 - name: period
   type: period_range
@@ -22,29 +25,47 @@ slots:
   required: true
   min_value: 1
   max_value: 100
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
 result_grain:
 - Employee Code
-sql_template: 'WITH totals AS (
-
-  SELECT employee_code, sum(hours) AS approved_hours, uniqExact(toDate(request_date)) AS requested_days
-
-  FROM dbpcm_warehouse.timeoff_requests
-
-  WHERE status = ''Approved'' AND event_type = ''Time Off Request''
-
-  AND request_date >= {period_start} AND request_date < {period_end}
-
-  GROUP BY employee_code
-
-  ), ranked AS (
-
-  SELECT employee_code, approved_hours, requested_days, dense_rank() OVER (ORDER BY approved_hours DESC) AS hours_rank
-  FROM totals
-
-  )
-
-  SELECT employee_code AS `Employee Code`, approved_hours AS `Approved Time-Off Hours`, requested_days AS `Requested
-  Days`, hours_rank AS `Rank`
-
-  FROM ranked WHERE hours_rank <= {top_n} ORDER BY hours_rank, employee_code'
+sql_template: |
+  WITH totals AS
+    (SELECT employee_code,
+            sum(hours) AS approved_hours,
+            uniqExact(toDate(request_date)) AS requested_days
+     FROM dbpcm_warehouse.time_off_request
+     WHERE status = 'Approved'
+       AND event_type = 'Time Off Request'
+       AND request_date >= {period_start}
+       AND request_date < {period_end}
+     GROUP BY employee_code),
+       ranked AS
+    (SELECT employee_code,
+            approved_hours,
+            requested_days,
+            dense_rank() OVER (
+                               ORDER BY CASE
+                                            WHEN {order_direction} = 'DESC' THEN approved_hours
+                                        END DESC, CASE
+                                                      WHEN {order_direction} = 'ASC' THEN approved_hours
+                                                  END ASC) AS hours_rank
+     FROM totals)
+  SELECT r.employee_code AS `Employee Code`,
+         e.employee_name AS `Employee Name`,
+         e.department_name AS `Department`,
+         r.approved_hours AS `Approved Time-Off Hours`,
+         r.requested_days AS `Requested Days`,
+         r.hours_rank AS `Rank`
+  FROM ranked r
+  LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = r.employee_code
+  WHERE r.hours_rank <= {top_n}
+  ORDER BY r.hours_rank,
+           r.employee_code
 uses_rules: []

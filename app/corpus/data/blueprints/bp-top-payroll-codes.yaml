@@ -1,0 +1,52 @@
+id: bp-top-payroll-codes
+intent: Top-N payroll type codes by dollar amount within a chosen register family for a pay period
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT type_code AS "Type Code",
+         round(SUM(amount), 2) AS "Total Amount"
+  FROM dbpcm_warehouse.payroll
+  WHERE register_type = {register}
+    AND pay_period_end_date = {period}
+  GROUP BY type_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Total Amount"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Total Amount"
+                     END ASC
+  LIMIT {top_n}
+slots:
+- name: top_n
+  type: positive_integer
+  required: true
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: register
+  type: enum
+  required: true
+  enum_values:
+  - EARN
+  - DDUCT
+  - EETAX
+  - ERTAX
+  - EEBEN
+  - NETPAYDIST
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: top_n, period, register, order_direction
+uses:
+- dbpcm_warehouse.payroll.type_code
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_end_date

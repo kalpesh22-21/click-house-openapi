@@ -179,16 +179,16 @@ class TestBackendScopedMachinery:
 
 
 class TestAccrualBalancesYaml:
-    """Loader/projection contract for the view-first timeoff_balances table
+    """Loader/projection contract for the view-first time_off_balance table
     (authored with the four-template Trino view conversion; no ClickHouse ETL
     counterpart exists yet)."""
 
     def test_loads_with_mysql_source_and_grain(self):
         catalog = loader.load_semantic_catalog()
-        entry = catalog["dbpcm_warehouse.timeoff_balances"]
+        entry = catalog["dbpcm_warehouse.time_off_balance"]
         assert entry["source"] == "mysql"
         assert entry["database"] == "dbpcm_warehouse"
-        assert entry["table"] == "timeoff_balances"
+        assert entry["table"] == "time_off_balance"
         assert entry["grain"] == []
         assert entry["grain_verifiable"] is False
         assert entry["primary_key"] == []
@@ -198,7 +198,7 @@ class TestAccrualBalancesYaml:
 
     def test_hidden_identity_pins_and_row_scope(self):
         catalog = loader.load_semantic_catalog()
-        entry = catalog["dbpcm_warehouse.timeoff_balances"]
+        entry = catalog["dbpcm_warehouse.time_off_balance"]
         hidden = set(entry["mcp_projection"]["hidden_columns"])
         assert {"client_code", "proc_center"} <= hidden
         # Declarations describe source types; model-facing schemas hide pins.
@@ -211,10 +211,10 @@ class TestAccrualBalancesYaml:
         assert hidden.isdisjoint(c["name"] for c in response["columns"])
         assert set(entry["row_scope"]["implicit_filters"]) >= {"client_code", "proc_center"}
 
-    def test_timeoff_requests_yaml_rls_projection_matches_house_pattern(self):
+    def test_time_off_request_yaml_rls_projection_matches_house_pattern(self):
         """Source identity declarations must remain hidden on the public schema."""
         catalog = loader.load_semantic_catalog()
-        entry = catalog["dbpcm_warehouse.timeoff_requests"]
+        entry = catalog["dbpcm_warehouse.time_off_request"]
         hidden = set(entry["mcp_projection"]["hidden_columns"])
         assert {"client_code", "proc_center"} <= hidden
         assert set(entry["row_scope"]["implicit_filters"]) >= {"client_code", "proc_center"}
@@ -235,7 +235,7 @@ class TestAccrualBalancesYaml:
             assert "treat approved time-off requests as assumed taken" in public
             assert "payroll-paid hours" in public
             assert "trino_join_keys" not in public
-        events = catalog["dbpcm_warehouse.timeoff_requests"]
+        events = catalog["dbpcm_warehouse.time_off_request"]
         taken = next(a for a in events["ambiguities"] if a["term"] == "time_off_taken")
         assert "Treat approved time-off request hours as taken" in taken["default"]
         approved = next(r for r in events["rules"] if r["id"] == "approved_events")

@@ -3,10 +3,10 @@ intent: Counts of distinct employees with recorded original hire, most recent hi
   half-open period. Group by company, department, current status or event month. These are current employee records,
   not a complete employment-event history or turnover rate. Current-status filter is optional and may exclude rehired
   employees. No implicit active/terminated filter; no zero-filled months.
-slots_summary: date_basis, group_by, period, employee_status, department, employee
+slots_summary: date_basis, group_by, period, employee_status, department, employee, order_direction
 status: validated
 drift_status: clean
-catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+catalog_sha: ''
 uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_code
@@ -62,17 +62,45 @@ slots:
   required: false
   binds_to: dbpcm_warehouse.employee.employee_code
   optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
 result_grain:
 - Group
-sql_template: 'SELECT CASE {group_by} WHEN ''month'' THEN substring(toString(CASE {date_basis} WHEN ''most_recent_hire''
-  THEN e.most_recent_hire_date WHEN ''termination'' THEN e.termination_date ELSE e.hire_date END), 1, 7) WHEN ''department''
-  THEN e.department_name WHEN ''status'' THEN e.employee_status ELSE ''Company'' END AS `Group`, uniqExact(e.employee_code)
-  AS `Employee Count`
-
-  FROM dbpcm_warehouse.employee e WHERE e.employee_status = {employee_status} AND e.department_name = {department}
-  AND e.employee_code = {employee} AND (CASE {date_basis} WHEN ''most_recent_hire'' THEN e.most_recent_hire_date
-  WHEN ''termination'' THEN e.termination_date ELSE e.hire_date END) >= toDate({period_start}) AND (CASE {date_basis}
-  WHEN ''most_recent_hire'' THEN e.most_recent_hire_date WHEN ''termination'' THEN e.termination_date ELSE e.hire_date
-  END) < toDate({period_end})
-
-  GROUP BY `Group` ORDER BY `Group`'
+sql_template: |
+  SELECT CASE {group_by}
+             WHEN 'month' THEN substring(toString(CASE {date_basis}
+                                                      WHEN 'most_recent_hire' THEN e.most_recent_hire_date
+                                                      WHEN 'termination' THEN e.termination_date
+                                                      ELSE e.hire_date
+                                                  END), 1, 7)
+             WHEN 'department' THEN e.department_name
+             WHEN 'status' THEN e.employee_status
+             ELSE 'Company'
+         END AS `Group`,
+         uniqExact(e.employee_code) AS `Employee Count`
+  FROM dbpcm_warehouse.employee e
+  WHERE e.employee_status = {employee_status}
+    AND e.department_name = {department}
+    AND e.employee_code = {employee}
+    AND (CASE {date_basis}
+             WHEN 'most_recent_hire' THEN e.most_recent_hire_date
+             WHEN 'termination' THEN e.termination_date
+             ELSE e.hire_date
+         END) >= toDate({period_start})
+    AND (CASE {date_basis}
+             WHEN 'most_recent_hire' THEN e.most_recent_hire_date
+             WHEN 'termination' THEN e.termination_date
+             ELSE e.hire_date
+         END) < toDate({period_end})
+  GROUP BY `Group`
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN `Group`
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN `Group`
+                     END ASC

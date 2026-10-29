@@ -87,6 +87,15 @@ def normalize_constructs(tree):
                     unsupported("Unsupported positional tuple reference.")
                 # offset=1 prevents dialect index rebasing: ROW uses 1-based fields.
                 node.replace(exp.Bracket(this=base.copy(), expressions=[position.copy()], offset=1))
+        elif (isinstance(node, (exp.Add, exp.Sub)) and isinstance(node.expression, exp.Anonymous)
+              and node.expression.name.lower() == "tointervalmonth" and len(node.expression.expressions) == 1):
+            from app.trino_semantics import require_type
+            amount = node.expression.expressions[0].copy()
+            if require_type(node.this, "month interval").kind != "datetime" or require_type(amount, "month interval").kind != "integer":
+                unsupported("Month intervals require a date/timestamp and integer offset.")
+            if isinstance(node, exp.Sub):
+                amount = exp.Neg(this=amount)
+            node.replace(exp.Anonymous(this="DATE_ADD", expressions=[exp.Literal.string("month"), amount, node.this.copy()]))
         elif isinstance(node, (exp.Add, exp.Sub)) and isinstance(node.this, exp.CurrentDate):
             amount = node.expression.unnest()
             if isinstance(amount, exp.Interval):

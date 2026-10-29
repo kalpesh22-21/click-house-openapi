@@ -1,0 +1,57 @@
+id: bp-position-change-activity
+intent: Employee master-data change counts by department and changed field, useful for auditing position seat, title,
+  level, and family churn
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  -- Output aliases are Title-Case display names; consumers keying on column names
+  -- must use the quoted aliases.
+
+  SELECT any(e.department_name) AS "Department",
+         ec.changed_field AS "Changed Field",
+         count() AS "Change Events"
+  FROM
+    (SELECT employee_code,
+            changed_field,
+            change_time_added
+     FROM dbpcm_warehouse.employee_change) AS ec
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = ec.employee_code
+  WHERE ec.change_time_added >= addMonths(today(), -{win})
+    AND ec.changed_field = {changed_field}
+  GROUP BY e.department_name,
+           ec.changed_field
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Change Events"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Change Events"
+                     END ASC, "Department",
+                              "Changed Field"
+  LIMIT {max_rows}
+slots:
+- name: changed_field
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee_change.changed_field
+  optional_pattern: 'TRUE'
+- name: win
+  type: relative_window
+  required: true
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: changed_field, win, max_rows, order_direction
+uses:
+- dbpcm_warehouse.employee_change.employee_code
+- dbpcm_warehouse.employee_change.changed_field
+- dbpcm_warehouse.employee_change.change_time_added
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name

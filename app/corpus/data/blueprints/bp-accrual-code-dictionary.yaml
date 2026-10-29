@@ -1,0 +1,32 @@
+id: bp-accrual-code-dictionary
+intent: Distinct accrual codes with descriptions and counts of employees who hold each bank type
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT b.accrual_code AS "Accrual Code",
+         any(b.accrual_description) AS "Accrual Description",
+         COUNT(DISTINCT b.employee_code) AS "Holder Count"
+  FROM dbpcm_warehouse.time_off_balance AS b
+  WHERE NOT (b.accrual_code IS NULL)
+    AND b.accrual_code <> ''
+  GROUP BY b.accrual_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Holder Count"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Holder Count"
+                     END ASC
+slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: order_direction
+uses:
+- dbpcm_warehouse.time_off_balance.accrual_code
+- dbpcm_warehouse.time_off_balance.accrual_description
+- dbpcm_warehouse.time_off_balance.employee_code

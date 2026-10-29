@@ -1,0 +1,34 @@
+id: bp-negative-pto-balances
+intent: Employees with negative accrual balances per bank, ranked by most overdrawn
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT b.employee_code AS "Employee Code",
+         any(e.employee_name) AS "Employee Name",
+         any(e.department_name) AS "Department",
+         b.accrual_code AS "Accrual Code",
+         any(b.accrual_description) AS "Accrual Description",
+         round(SUM(b.beginning_balance + b.accrued_amount - b.taken_amount), 2) AS "Balance Hours"
+  FROM dbpcm_warehouse.time_off_balance AS b
+  LEFT JOIN dbpcm_warehouse.employee AS e ON e.employee_code = b.employee_code
+  WHERE b.beginning_balance + b.accrued_amount - b.taken_amount < 0
+  GROUP BY b.employee_code,
+           b.accrual_code
+  ORDER BY "Balance Hours" ASC
+  LIMIT {top_n}
+slots:
+- name: top_n
+  type: positive_integer
+  required: true
+slots_summary: top_n
+uses:
+- dbpcm_warehouse.time_off_balance.beginning_balance
+- dbpcm_warehouse.time_off_balance.accrued_amount
+- dbpcm_warehouse.time_off_balance.taken_amount
+- dbpcm_warehouse.time_off_balance.employee_code
+- dbpcm_warehouse.time_off_balance.accrual_code
+- dbpcm_warehouse.time_off_balance.accrual_description
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name

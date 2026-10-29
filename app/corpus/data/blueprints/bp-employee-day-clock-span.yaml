@@ -8,10 +8,10 @@ intent: Employee-day first recorded In time, last recorded Out time and matched-
   first/last dates do not prove completeness; missing days/months are not zero-filled. Salaried approved leave and
   automatic pay-period-end entries can generate these records; this blueprint does not establish physical attendance
   or current clock-in.
-slots_summary: period, source, employee, department, hours_type, pay_class, in_type, out_type
+slots_summary: period, source, employee, department, hours_type, pay_class, in_type, out_type, order_direction
 status: validated
 drift_status: clean
-catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+catalog_sha: ''
 uses:
 - dbpcm_warehouse.punch_pair.department_code
 - dbpcm_warehouse.punch_pair.earn_hours
@@ -24,6 +24,9 @@ uses:
 - dbpcm_warehouse.punch_pair.pay_class_code
 - dbpcm_warehouse.punch_pair.punch_date
 - dbpcm_warehouse.punch_pair.table_source
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
 slots:
 - name: period
   type: period_range
@@ -73,16 +76,43 @@ slots:
   - OL
   - OB
   - OX
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
 result_grain:
 - Employee Code
 - Punch Date
-sql_template: 'SELECT employee_code AS `Employee Code`, punch_date AS `Punch Date`, min(in_punch_time) AS `First
-  Recorded In`, max(out_punch_time) AS `Last Recorded Out`, count(*) AS `Pair Count`, sum(earn_hours) AS `Paid Hours`
-
-  FROM dbpcm_warehouse.punch_pair FINAL
-
-  WHERE punch_date >= toDate({period_start}) AND punch_date < toDate({period_end}) AND table_source = {source} AND
-  employee_code = {employee} AND department_code = {department} AND hours_type = {hours_type} AND pay_class_code
-  = {pay_class} AND in_punch_type = {in_type} AND out_punch_type = {out_type}
-
-  GROUP BY employee_code, punch_date ORDER BY employee_code, punch_date'
+sql_template: |
+  SELECT p.employee_code AS `Employee Code`,
+         e.employee_name AS `Employee Name`,
+         e.department_name AS `Department`,
+         p.punch_date AS `Punch Date`,
+         min(p.in_punch_time) AS `First Recorded In`,
+         max(p.out_punch_time) AS `Last Recorded Out`,
+         count(*) AS `Pair Count`,
+         sum(p.earn_hours) AS `Paid Hours`
+  FROM dbpcm_warehouse.punch_pair AS p
+  LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = p.employee_code
+  WHERE p.punch_date >= toDate({period_start})
+    AND p.punch_date < toDate({period_end})
+    AND p.table_source = {source}
+    AND p.employee_code = {employee}
+    AND p.department_code = {department}
+    AND p.hours_type = {hours_type}
+    AND p.pay_class_code = {pay_class}
+    AND p.in_punch_type = {in_type}
+    AND p.out_punch_type = {out_type}
+  GROUP BY p.employee_code,
+           e.employee_name,
+           e.department_name,
+           p.punch_date
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN p.employee_code
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN p.employee_code
+                     END ASC, p.punch_date

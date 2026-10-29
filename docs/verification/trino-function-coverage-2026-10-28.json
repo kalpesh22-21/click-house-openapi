@@ -1,0 +1,117 @@
+[
+  {
+    "expression": "toInt32(0)",
+    "passed": true,
+    "result": 0
+  },
+  {
+    "expression": "toInt32(2147483647)",
+    "passed": true,
+    "result": 2147483647
+  },
+  {
+    "expression": "toInt32(2147483648)",
+    "passed": true,
+    "result": -2147483648
+  },
+  {
+    "expression": "toInt32(-2147483649)",
+    "passed": true,
+    "result": 2147483647
+  },
+  {
+    "expression": "toInt32(4294967295)",
+    "passed": true,
+    "result": -1
+  },
+  {
+    "expression": "toInt32(-4294967297)",
+    "passed": true,
+    "result": -1
+  },
+  {
+    "expression": "toInt32(9223372036854775807)",
+    "passed": true,
+    "result": -1
+  },
+  {
+    "expression": "toInt32(-9223372036854775808)",
+    "passed": true,
+    "result": 0
+  },
+  {
+    "expression": "toInt32(12.9)",
+    "passed": true,
+    "result": 12
+  },
+  {
+    "expression": "toInt32(-12.9)",
+    "passed": true,
+    "result": -12
+  },
+  {
+    "expression": "toInt32(toNullable(12))",
+    "passed": true,
+    "result": 12
+  },
+  {
+    "expression": "toInt32(CAST(NULL AS Nullable(Int64)))",
+    "passed": true,
+    "result": null
+  },
+  {
+    "expression": "toHour(toDateTime('2024-02-29 23:47:00'))",
+    "passed": true,
+    "result": 23
+  },
+  {
+    "expression": "toMinute(toDateTime('2024-02-29 23:47:00'))",
+    "passed": true,
+    "result": 47
+  },
+  {
+    "expression": "toDayOfYear(toDate32('2024-02-29'))",
+    "passed": true,
+    "result": 60
+  },
+  {
+    "expression": "toDayOfYear(toDate32('2023-12-31'))",
+    "passed": true,
+    "result": 365
+  },
+  {
+    "expression": "toLastDayOfMonth(toDate32('2024-02-01'))",
+    "passed": true,
+    "result": "2024-02-29"
+  },
+  {
+    "expression": "toLastDayOfMonth(toDate32('2023-02-01'))",
+    "passed": true,
+    "result": "2023-02-28"
+  },
+  {
+    "expression": "toLastDayOfMonth(toDate32('1900-02-01'))",
+    "passed": true,
+    "result": "2079-08-04"
+  },
+  {
+    "expression": "toLastDayOfMonth(toDate32('2149-06-01'))",
+    "passed": true,
+    "result": "1970-01-24"
+  },
+  {
+    "expression": "toHour(CAST(NULL AS Nullable(DateTime64(6))))",
+    "passed": true,
+    "result": null
+  },
+  {
+    "expression": "toMinute(CAST(NULL AS Nullable(DateTime64(6))))",
+    "passed": true,
+    "result": null
+  },
+  {
+    "expression": "toLastDayOfMonth(CAST(NULL AS Nullable(DateTime64(6))))",
+    "passed": true,
+    "result": null
+  }
+]

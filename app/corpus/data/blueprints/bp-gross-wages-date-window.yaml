@@ -1,0 +1,23 @@
+id: bp-gross-wages-date-window
+intent: Gross wages from payroll register for a custom date window, matching pay periods that overlap the requested
+  date range
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT round(SUM(amount), 2) AS "Total Gross Wages"
+  FROM dbpcm_warehouse.payroll
+  WHERE register_type = 'EARN'
+    AND pay_period_start_date <= {window_end}
+    AND pay_period_end_date >= {window_start}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+slots_summary: window
+uses:
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_start_date
+- dbpcm_warehouse.payroll.pay_period_end_date

@@ -1,0 +1,42 @@
+id: bp-worked-hours-daily
+intent: Total timecard-grade paid hours per calendar day from total_earning, the authoritative hours source, for
+  a date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT punch_date AS "Punch Date",
+         round(SUM(earn_hours), 2) AS "Total Hours",
+         count() AS "Line Count"
+  FROM
+    (SELECT punch_date,
+            earn_hours
+     FROM dbpcm_warehouse.total_earning)
+  WHERE punch_date BETWEEN {window_start} AND {window_end}
+  GROUP BY punch_date
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Punch Date"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Punch Date"
+                     END ASC
+  LIMIT {max_rows}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_hours

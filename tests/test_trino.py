@@ -276,7 +276,6 @@ def test_uniqexact_nested_in_aggregate_query(trino_settings, principal):
 
 @pytest.mark.parametrize("expression", [
     "uniqCombined64(employee_code)",
-    "uniqExact(department_code, employee_code)",
 ])
 def test_unmapped_functions_fail_before_dispatch(expression, trino_settings, principal):
     with pytest.raises(QueryValidationError, match="no verified Trino conversion") as error:
@@ -289,7 +288,7 @@ def test_unmapped_functions_fail_before_dispatch(expression, trino_settings, pri
     "SELECT toDateTime64(1, 10) FROM employee",
     "SELECT toDate('not a date') FROM employee",
     "SELECT employee_code FROM employee WHERE employee_status = TRUE",
-    "SELECT sum(n) FROM (SELECT uniqExact(employee_code, department_code) n FROM employee)",
+    "SELECT sum(n) FROM (SELECT uniqCombined64(employee_code, department_code) n FROM employee)",
 ])
 def test_invalid_conversion_never_opens_connection(sql, monkeypatch, trino_settings, principal):
     connect, _, _ = mock_connection(monkeypatch, [])
@@ -1307,3 +1306,13 @@ def test_gateway_group_preserves_auth_identity_and_no_retry(monkeypatch, trino_s
 def test_gateway_group_rejects_invalid_headers(group):
     with pytest.raises(ValidationError):
         Settings(_env_file=None, trino_routing_group=group)
+
+
+def test_copied_scalar_subquery_sources_are_still_routed(trino_settings, principal):
+    sql = trino_client.rewrite_query(
+        'SELECT toLastDayOfMonth((SELECT max(hire_date) FROM dbpcm_warehouse.employee))',
+        trino_settings,
+    )
+    tree = sqlglot.parse_one(sql, read='trino')
+    assert not any(t.db == 'dbpcm_warehouse' and t.name == 'employee' for t in tree.find_all(exp.Table))
+    assert "client_code = '10R37'" in sql

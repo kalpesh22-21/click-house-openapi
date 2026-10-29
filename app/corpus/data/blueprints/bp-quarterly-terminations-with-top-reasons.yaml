@@ -1,0 +1,60 @@
+id: bp-quarterly-terminations-with-top-reasons
+intent: Terminations per quarter within a window, ranked to the top-N termination reasons per quarter
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT "Quarter",
+         "Term Reason",
+         "Terms",
+         "Quarter Total"
+  FROM
+    (SELECT "Quarter",
+            "Term Reason",
+            "Terms",
+            sum("Terms") OVER (PARTITION BY "Quarter") AS "Quarter Total",
+            row_number() OVER (PARTITION BY "Quarter"
+                               ORDER BY "Terms" DESC) AS reason_rank
+     FROM
+       (SELECT toStartOfQuarter(termination_date) AS "Quarter",
+               ifNull(nullIf(term_reason, ''), 'Unspecified') AS "Term Reason",
+               count(DISTINCT employee_code) AS "Terms"
+        FROM dbpcm_warehouse.employee
+        WHERE employee_status = 'Terminated'
+          AND termination_date >= {term_window_start}
+          AND termination_date < {term_window_end}
+          AND termination_date IS NOT NULL
+          AND toDate32(termination_date) > toDate32('1900-01-01')
+          AND (most_recent_hire_date IS NULL
+               OR most_recent_hire_date < termination_date)
+        GROUP BY "Quarter",
+                 "Term Reason"))
+  WHERE reason_rank <= {top_n}
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Quarter"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Quarter"
+                     END ASC, "Terms" DESC
+slots:
+- name: term_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: top_n
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: term_window, top_n, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.termination_date
+- dbpcm_warehouse.employee.most_recent_hire_date
+- dbpcm_warehouse.employee.term_reason

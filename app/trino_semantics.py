@@ -73,10 +73,18 @@ def value_type(node):
         return ValueType("datetime", False, year_safe=True)
     if isinstance(node, (exp.TimestampTrunc, exp.DateTrunc)):
         return value_type(node.this)
+    if isinstance(node, exp.Subquery) and isinstance(node.this, exp.Select):
+        select = node.this
+        if len(select.expressions) == 1 and not any(select.args.get(k) for k in ("group", "having", "qualify", "limit", "offset")):
+            projection = select.expressions[0].unnest()
+            if isinstance(projection, exp.Alias):
+                projection = projection.this
+            if isinstance(projection, (exp.Min, exp.Max, exp.Count)):
+                return value_type(projection)
     if isinstance(node, exp.DateDiff):
         start, end = value_type(node.expression), value_type(node.this)
         if (start and end and start.kind == end.kind == "datetime"
-                and node.text("unit").upper() in {"DAY", "YEAR"}
+                and node.text("unit").upper() in {"DAY", "YEAR", "HOUR", "MINUTE", "SECOND"}
                 and node.args.get("zone") is None):
             if node.text("unit").upper() == "YEAR" and not (start.year_safe and end.year_safe):
                 return None
@@ -91,8 +99,12 @@ def value_type(node):
         ):
             return None
         return target
-    if isinstance(node, (exp.Count, exp.CountIf)):
+    if isinstance(node, (exp.Count, exp.CountIf, exp.RowNumber)):
         return ValueType("integer", False, True)
+    if isinstance(node, exp.Explode) and isinstance(node.this, exp.Anonymous) and node.this.name.lower() == "range":
+        types = [value_type(arg) for arg in node.this.expressions]
+        if types and all(t and t.kind == "integer" and not t.nullable and t.intdiv_safe for t in types):
+            return ValueType("integer", False, True)
     if isinstance(node, (exp.Window, exp.Filter)):
         return value_type(node.this)
     if isinstance(node, exp.Coalesce):
@@ -169,7 +181,7 @@ def value_type(node):
         # The supported single-input mapping becomes COUNT(DISTINCT ...).
         # Its result is non-null even when the source column is nullable.
         # Record this before resolving derived projections and outer aggregates.
-        if name in {"uniqexact", "countdistinct"} and len(args) == 1:
+        if name in {"uniqexact", "countdistinct"} and len(args) >= 1:
             return ValueType("integer", False, True)
         if name == "intdiv" and len(args) == 2:
             source = value_type(args[0])
@@ -180,8 +192,10 @@ def value_type(node):
         if len(args) == 1:
             source = value_type(args[0])
             if source:
-                if name in {"toint64", "toyear", "tomonth", "todayofmonth"}:
+                if name in {"toint32", "touint32", "toint64", "toyear", "tomonth", "todayofmonth", "todayofyear", "tohour", "tominute"}:
                     return ValueType("integer", source.nullable, True)
+                if name == "tolastdayofmonth" and source.kind == "datetime":
+                    return source
                 if name == "tonullable":
                     return replace(source, nullable=True)
                 if name == "lowerutf8" and source.kind in {"string", "null"}:
@@ -428,20 +442,40 @@ def map_calendar_part(node):
     info = require_type(value, node.name)
     if info.kind != "datetime" or not info.year_safe:
         unsupported(f"{node.name} requires a known Date/Date32 or timezone-free timestamp contract; string, numeric and timezone overloads are unverified.")
-    return {"toyear": exp.Year, "tomonth": exp.Month, "todayofmonth": exp.DayOfMonth}[name](this=value.copy())
+    if name == "tolastdayofmonth":
+        # Default CH result is Date (UInt16 days), including wrapping Date32
+        # endpoints outside its range. LAST_DAY alone silently changes that.
+        from sqlglot import parse_one
+        result = parse_one("date_add('day', mod(mod(date_diff('day', DATE '1970-01-01', last_day_of_month(x)), 65536) + 65536, 65536), DATE '1970-01-01')", read="trino")
+        for col in list(result.find_all(exp.Column)):
+            col.replace(value.copy())
+        return result
+    return {"toyear": exp.Year, "tomonth": exp.Month, "todayofmonth": exp.DayOfMonth,
+            "todayofyear": exp.DayOfYear, "tohour": exp.Hour, "tominute": exp.Minute}[name](this=value.copy())
+
+
+def map_to_int32(node):
+    # Reuse the proven numeric domain/truncation, then wrap to signed Int32.
+    # DECIMAL arithmetic avoids overflow even at the Int64 endpoints.
+    from sqlglot import parse_one
+    value = map_to_int64(node)
+    result = parse_one("CAST(mod(mod(CAST(x AS DECIMAL(38,0)) + 2147483648, 4294967296) + 4294967296, 4294967296) - 2147483648 AS INTEGER)", read="trino")
+    for col in list(result.find_all(exp.Column)):
+        col.replace(value.copy())
+    return result
 
 
 def map_to_int64(node):
     if len(node.expressions) != 1:
-        unsupported("toInt64 requires one numeric argument.")
+        unsupported(f"{node.name} requires one numeric argument.")
     value = node.expressions[0]
-    info = require_type(value, "toInt64")
+    info = require_type(value, node.name)
     if info.kind == "null":
         return exp.Cast(this=exp.Null(), to=exp.DataType.build("BIGINT"))
     if info.kind not in {"integer", "decimal", "float"} or (
         info.kind != "float" and not info.intdiv_safe
     ):
-        unsupported("toInt64 supports signed-64-compatible integers, Decimal precision up to 18, and finite in-range floating-point inputs. String parsing, UInt64 wraparound and wider numeric types are unverified.")
+        unsupported(f"{node.name} supports signed-64-compatible integers, Decimal precision up to 18, and finite in-range floating-point inputs. String parsing, UInt64 wraparound and wider numeric types are unverified.")
     result = value.copy()
     if info.kind in {"decimal", "float"}:
         result = exp.Anonymous(this="TRUNCATE", expressions=[result])
@@ -671,15 +705,21 @@ def normalize_semantics(tree):
             if isinstance(node.parent, (exp.Window, exp.Filter)):
                 continue
             node.replace(aggregate(node))
-        elif isinstance(node, exp.DateDiff) and node.text("unit").upper() in {"DAY", "YEAR"}:
+        elif isinstance(node, exp.DateDiff) and node.text("unit").upper() in {"DAY", "YEAR", "HOUR", "MINUTE", "SECOND"}:
             if value_type(node) is None:
-                unsupported("Day/year dateDiff requires known date/timestamp inputs without an explicit timezone override.")
+                unsupported("dateDiff requires known date/timestamp inputs without an explicit timezone override.")
             if node.text("unit").upper() == "YEAR":
                 # CH counts January-1 boundaries, not complete elapsed years.
                 replacement = exp.Sub(this=exp.Year(this=node.this.copy()),
                                       expression=exp.Year(this=node.expression.copy()))
                 replacement.meta["ch_value_type"] = value_type(node)
                 node.replace(replacement)
+                continue
+            if node.text("unit").upper() in {"HOUR", "MINUTE", "SECOND"}:
+                # CH counts unit boundaries, not complete elapsed units.
+                unit = node.text("unit").lower()
+                for key in ("this", "expression"):
+                    node.set(key, exp.TimestampTrunc(this=exp.Cast(this=node.args[key].copy(), to=exp.DataType.build("TIMESTAMP(9)")), unit=exp.Var(this=unit)))
                 continue
             # CH counts calendar-day boundaries; Trino timestamp date_diff
             # counts complete days. Cast both endpoints to DATE first.
@@ -695,12 +735,20 @@ def normalize_semantics(tree):
             node.replace(map_json_string(node))
         elif isinstance(node, (exp.Anonymous, exp.AnonymousAggFunc)):
             name = node.name.lower()
-            if name in {"toyear", "tomonth", "todayofmonth"}:
+            if name in {"toyear", "tomonth", "todayofmonth", "todayofyear", "tohour", "tominute", "tolastdayofmonth"}:
                 replacement = map_calendar_part(node)
                 replacement.meta["ch_value_type"] = value_type(node)
                 node.replace(replacement)
-            elif name == "toint64":
-                replacement = map_to_int64(node)
+            elif name in {"toint32", "touint32", "toint64"}:
+                replacement = map_to_int32(node) if name == "toint32" else map_to_int64(node)
+                if name == "touint32":
+                    if require_type(node.expressions[0], "toUInt32").kind not in {"integer", "null"}:
+                        unsupported("toUInt32 supports integer inputs only; Decimal and floating-point overflow semantics require a separate conversion contract.")
+                    from sqlglot import parse_one
+                    wrapped = parse_one("mod(mod(CAST(x AS DECIMAL(38,0)), 4294967296) + 4294967296, 4294967296)", read="trino")
+                    for column in list(wrapped.find_all(exp.Column)):
+                        column.replace(replacement.copy())
+                    replacement = exp.Cast(this=wrapped, to=exp.DataType.build("BIGINT"))
                 replacement.meta["ch_value_type"] = value_type(node)
                 node.replace(replacement)
             elif name == "intdiv":

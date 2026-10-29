@@ -1,0 +1,57 @@
+id: bp-post-termination-pay-audit
+intent: Terminated employees who received payroll earnings after their termination date, rehire-aware, for a given
+  pay-date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT p.employee_code AS "Employee Code",
+         any(e.employee_name) AS "Employee Name",
+         count() AS "Register Lines",
+         round(SUM(p.amount), 2) AS "Total Earnings",
+         any(e.termination_date) AS "Termination Date",
+         max(p.pay_date) AS "Last Pay Date"
+  FROM dbpcm_warehouse.payroll AS p
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
+  WHERE p.register_type = 'EARN'
+    AND p.pay_date >= {pay_window_start}
+    AND p.pay_date <= {pay_window_end}
+    AND e.termination_date IS NOT NULL
+    AND toDate32(e.termination_date) > toDate32('1900-01-01')
+    AND p.pay_date > e.termination_date
+    AND (e.most_recent_hire_date IS NULL
+         OR toDate32(e.most_recent_hire_date) <= toDate32('1900-01-01')
+         OR e.most_recent_hire_date <= e.termination_date)
+  GROUP BY p.employee_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Total Earnings"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Total Earnings"
+                     END ASC
+  LIMIT {max_rows}
+slots:
+- name: pay_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: pay_window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_date
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.termination_date
+- dbpcm_warehouse.employee.most_recent_hire_date

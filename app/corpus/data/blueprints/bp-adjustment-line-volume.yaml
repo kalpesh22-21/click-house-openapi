@@ -1,0 +1,39 @@
+id: bp-adjustment-line-volume
+intent: Volume of negative payroll register earnings lines per month, counting adjustment and reversal activity
+  over the last N pay periods
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT formatDateTime(toStartOfMonth(pay_period_end_date), '%Y-%m') AS "Month",
+         count() AS "Adjustment Lines",
+         round(SUM(amount), 2) AS "Adjustment Amount"
+  FROM dbpcm_warehouse.payroll
+  WHERE register_type = 'EARN'
+    AND amount < 0
+    AND pay_period_end_date >= addMonths(
+                                           (SELECT max(pay_period_end_date)
+                                            FROM dbpcm_warehouse.payroll), -{win})
+  GROUP BY "Month"
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Month"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Month"
+                     END ASC
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: win, order_direction
+uses:
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_end_date

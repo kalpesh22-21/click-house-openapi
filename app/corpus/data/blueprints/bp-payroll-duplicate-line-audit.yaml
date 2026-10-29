@@ -1,0 +1,48 @@
+id: bp-payroll-duplicate-line-audit
+intent: Candidate duplicate payroll register lines grouped by employee, period, register type, type code, and amount,
+  with occurrence counts
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         pay_period_end_date AS "Pay Period End",
+         register_type AS "Register Type",
+         type_code AS "Type Code",
+         amount AS "Amount",
+         count() AS "Duplicate Count"
+  FROM dbpcm_warehouse.payroll
+  WHERE pay_period_end_date = {period}
+  GROUP BY employee_code,
+           pay_period_end_date,
+           register_type,
+           type_code,
+           amount
+  HAVING count() > 1
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Duplicate Count"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Duplicate Count"
+                     END ASC
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, order_direction
+uses:
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.type_code
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_end_date

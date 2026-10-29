@@ -1,0 +1,37 @@
+[
+  {
+    "id": "bp-avg-balance-by-cohort",
+    "missing_columns": [
+      "dbpcm_warehouse.timeoff_balances.is_archived"
+    ],
+    "status": "blocked: source definition required"
+  },
+  {
+    "id": "bp-pto-liability-hours",
+    "missing_columns": [
+      "dbpcm_warehouse.timeoff_balances.is_archived"
+    ],
+    "status": "blocked: source definition required"
+  },
+  {
+    "id": "bp-pto-expiry-risk",
+    "missing_columns": [
+      "dbpcm_warehouse.timeoff_balances.is_archived"
+    ],
+    "status": "blocked: source definition required"
+  },
+  {
+    "id": "bp-pto-balances",
+    "missing_columns": [
+      "dbpcm_warehouse.timeoff_balances.is_archived"
+    ],
+    "status": "blocked: source definition required"
+  },
+  {
+    "id": "bp-pay-type-mismatch",
+    "missing_columns": [
+      "dbpcm_warehouse.employee.position_pay_type"
+    ],
+    "status": "blocked: source definition required"
+  }
+]

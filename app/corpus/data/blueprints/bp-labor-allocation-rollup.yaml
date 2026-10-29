@@ -1,0 +1,93 @@
+id: bp-labor-allocation-rollup
+intent: Active headcount and average salary grouped by a chosen labor allocation slot value, ranked by headcount
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT la.code AS "Allocation Code",
+         la.description AS "Allocation Description",
+         count(DISTINCT e.employee_code) AS "Active Headcount",
+         round(avgIf(toFloat64(e.annual_salary), e.annual_salary IS NOT NULL
+                     AND toFloat64(e.annual_salary) > 0), 2) AS "Avg Salary"
+  FROM
+    (SELECT employee_code,
+            employee_status,
+            annual_salary,
+            CASE {slot}
+                WHEN 1 THEN labor_allocation_key_1
+                WHEN 2 THEN labor_allocation_key_2
+                WHEN 3 THEN labor_allocation_key_3
+                WHEN 4 THEN labor_allocation_key_4
+                WHEN 5 THEN labor_allocation_key_5
+                WHEN 6 THEN labor_allocation_key_6
+                WHEN 7 THEN labor_allocation_key_7
+                WHEN 8 THEN labor_allocation_key_8
+                WHEN 9 THEN labor_allocation_key_9
+                WHEN 10 THEN labor_allocation_key_10
+                WHEN 11 THEN labor_allocation_key_11
+                WHEN 12 THEN labor_allocation_key_12
+                WHEN 13 THEN labor_allocation_key_13
+                WHEN 14 THEN labor_allocation_key_14
+                WHEN 15 THEN labor_allocation_key_15
+                WHEN 16 THEN labor_allocation_key_16
+                WHEN 17 THEN labor_allocation_key_17
+                WHEN 18 THEN labor_allocation_key_18
+                WHEN 19 THEN labor_allocation_key_19
+                ELSE labor_allocation_key_20
+            END AS selected_key
+     FROM dbpcm_warehouse.employee) AS e
+  LEFT JOIN dbpcm_warehouse.labor_allocation AS la ON la.join_key = e.selected_key
+  WHERE e.employee_status = 'Active'
+    AND e.selected_key IS NOT NULL
+    AND e.selected_key != ''
+  GROUP BY la.code,
+           la.description
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Active Headcount"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Active Headcount"
+                     END ASC, "Allocation Code"
+  LIMIT {top_n}
+slots:
+- name: slot
+  type: positive_integer
+  required: true
+- name: top_n
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: slot, top_n, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.annual_salary
+- dbpcm_warehouse.employee.labor_allocation_key_1
+- dbpcm_warehouse.employee.labor_allocation_key_2
+- dbpcm_warehouse.employee.labor_allocation_key_3
+- dbpcm_warehouse.employee.labor_allocation_key_4
+- dbpcm_warehouse.employee.labor_allocation_key_5
+- dbpcm_warehouse.employee.labor_allocation_key_6
+- dbpcm_warehouse.employee.labor_allocation_key_7
+- dbpcm_warehouse.employee.labor_allocation_key_8
+- dbpcm_warehouse.employee.labor_allocation_key_9
+- dbpcm_warehouse.employee.labor_allocation_key_10
+- dbpcm_warehouse.employee.labor_allocation_key_11
+- dbpcm_warehouse.employee.labor_allocation_key_12
+- dbpcm_warehouse.employee.labor_allocation_key_13
+- dbpcm_warehouse.employee.labor_allocation_key_14
+- dbpcm_warehouse.employee.labor_allocation_key_15
+- dbpcm_warehouse.employee.labor_allocation_key_16
+- dbpcm_warehouse.employee.labor_allocation_key_17
+- dbpcm_warehouse.employee.labor_allocation_key_18
+- dbpcm_warehouse.employee.labor_allocation_key_19
+- dbpcm_warehouse.employee.labor_allocation_key_20
+- dbpcm_warehouse.labor_allocation.join_key
+- dbpcm_warehouse.labor_allocation.code
+- dbpcm_warehouse.labor_allocation.description

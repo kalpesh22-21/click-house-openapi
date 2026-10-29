@@ -1,0 +1,55 @@
+id: bp-ytd-earnings-per-employee
+intent: Year-to-date gross earnings, net pay, and paid hours per employee from the payroll register, optionally
+  filtered by employee or department
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT p.employee_code AS "Employee Code",
+         any(e.employee_name) AS "Employee Name",
+         round(SUMIf(p.amount, p.register_type = 'EARN'), 2) AS "Gross Earnings",
+         round(SUMIf(p.amount, p.register_type = 'NETPAYDIST'), 2) AS "Net Pay",
+         round(SUMIf(p.type_hours, p.register_type = 'EARN'), 2) AS "Paid Hours"
+  FROM dbpcm_warehouse.payroll AS p
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
+  WHERE p.employee_code = {ee}
+    AND e.department_name = {dept}
+  GROUP BY p.employee_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Gross Earnings"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Gross Earnings"
+                     END ASC
+  LIMIT {top_n}
+slots:
+- name: ee
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.payroll.employee_code
+  optional_pattern: 'TRUE'
+- name: dept
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: top_n
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: ee, dept, top_n, order_direction
+uses:
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.type_hours
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_end_date
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name

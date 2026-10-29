@@ -1,0 +1,47 @@
+id: bp-department-turnover-rate
+intent: Department turnover rate for a window using terms divided by current active headcount, ranked by rate
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT department_name AS "Department",
+         countIf(termination_date >= {window_start}
+                 AND termination_date < {window_end}
+                 AND termination_date IS NOT NULL
+                 AND toDate32(termination_date) > toDate32('1900-01-01')
+                 AND (most_recent_hire_date IS NULL
+                      OR most_recent_hire_date < termination_date)) AS "Terms",
+         round(100 * countIf(termination_date >= {window_start}
+                             AND termination_date < {window_end}
+                             AND termination_date IS NOT NULL
+                             AND toDate32(termination_date) > toDate32('1900-01-01')
+                             AND (most_recent_hire_date IS NULL
+                                  OR most_recent_hire_date < termination_date)) / nullIf(countIf(employee_status = 'Active'), 0), 2) AS "Turnover Rate Pct"
+  FROM dbpcm_warehouse.employee
+  WHERE department_name IS NOT NULL
+    AND department_name != ''
+  GROUP BY department_name
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Turnover Rate Pct"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Turnover Rate Pct"
+                     END ASC, "Department"
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, order_direction
+uses:
+- dbpcm_warehouse.employee.termination_date
+- dbpcm_warehouse.employee.most_recent_hire_date
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status

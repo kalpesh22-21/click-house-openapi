@@ -1,0 +1,42 @@
+id: bp-fica-medicare-totals
+intent: Combined employee and employer tax totals with type-code breakdown for a pay period, showing both employee-tax
+  and employer-tax register lines
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT type_code AS "Tax Code",
+         register_type AS "Tax Side",
+         round(SUM(amount), 2) AS "Total Tax"
+  FROM dbpcm_warehouse.payroll
+  WHERE register_type IN ('EETAX',
+                          'ERTAX')
+    AND pay_period_end_date = {period}
+  GROUP BY type_code,
+           register_type
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Total Tax"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Total Tax"
+                     END ASC
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, order_direction
+uses:
+- dbpcm_warehouse.payroll.type_code
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_end_date

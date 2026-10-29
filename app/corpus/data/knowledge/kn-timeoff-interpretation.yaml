@@ -2,9 +2,9 @@ id: kn-timeoff-interpretation
 title: Time-off requests, taken leave and payroll-paid hours
 doc_id: hr-reporting-timeoff
 status: validated
-text: 'For time-off-taken questions, use timeoff_requests: status = ''Approved'', event_type = ''Time Off Request'',
+text: 'For time-off-taken questions, use time_off_request: status = ''Approved'', event_type = ''Time Off Request'',
   the requested request_date period and applicable leave-category filters. Assume approved requests were taken and
   state that assumption; do not ask permission to use this default. Offer to check how many hours were paid in payroll,
-  but only run that check if requested. Request hours and payroll-paid hours are distinct measures. Use timeoff_balances
+  but only run that check if requested. Request hours and payroll-paid hours are distinct measures. Use time_off_balance
   for plan balances and recorded usage, not event-date rankings. Reuse the established employee for follow-ups;
   if identity is unresolved or tied, ask which employee before querying pay or punches.'

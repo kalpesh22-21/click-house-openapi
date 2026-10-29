@@ -1,0 +1,28 @@
+id: bp-earning-category-dictionary
+intent: Full earning category dimension mapping with each earn code and its assigned category label, zero-slot static
+  lookup
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT earn_code AS `Earn Code`,
+         category_name AS `Category`
+  FROM dbpcm_warehouse.earning_category FINAL
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN category_name
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN category_name
+                     END ASC, earn_code
+slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: order_direction
+uses:
+- dbpcm_warehouse.earning_category.earn_code
+- dbpcm_warehouse.earning_category.category_name

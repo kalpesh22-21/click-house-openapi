@@ -16,11 +16,11 @@ def catalog(monkeypatch):
     monkeypatch.setattr(trino_client, 'get_semantic_catalog', lambda: {
         f'dbpcm_warehouse.{name}': {'source': source, 'table': name, 'database': 'dbpcm_warehouse',
             'trino_join_keys': {'employee_code': {'column': 'employee_code_num', 'encoding': 'employee_ascii4_be_v1'}}}
-        for name, source in [('employee', 'mysql'), ('timeoff_balances', 'mysql'), ('payroll', 'clickhouse')]
+        for name, source in [('employee', 'mysql'), ('time_off_balance', 'mysql'), ('payroll', 'clickhouse')]
     })
 
 
-SQL = ('SELECT e.employee_code FROM employee e JOIN timeoff_balances b '
+SQL = ('SELECT e.employee_code FROM employee e JOIN time_off_balance b '
        'ON e.client_code=b.client_code AND e.employee_code=b.employee_code')
 
 
@@ -36,10 +36,10 @@ def test_direct_join_preserves_projection_and_tenant(join_settings, join_princip
 @pytest.mark.parametrize('query', [
     'SELECT e.employee_code FROM employee e JOIN payroll p ON e.employee_code=p.employee_code',
     'SELECT e.employee_code FROM employee e JOIN employee m ON e.primary_supervisor_ee_code=m.employee_code',
-    'SELECT employee_code FROM employee JOIN timeoff_balances USING (employee_code)',
-    'WITH e AS (SELECT employee_code FROM employee) SELECT e.employee_code FROM e JOIN timeoff_balances b ON e.employee_code=b.employee_code',
-    'SELECT e.employee_code FROM employee e JOIN timeoff_balances b ON e.employee_code=b.employee_code OR e.client_code=b.client_code',
-    'SELECT e.employee_code FROM employee e JOIN timeoff_balances b ON trim(e.employee_code)=b.employee_code',
+    'SELECT employee_code FROM employee JOIN time_off_balance USING (employee_code)',
+    'WITH e AS (SELECT employee_code FROM employee) SELECT e.employee_code FROM e JOIN time_off_balance b ON e.employee_code=b.employee_code',
+    'SELECT e.employee_code FROM employee e JOIN time_off_balance b ON e.employee_code=b.employee_code OR e.client_code=b.client_code',
+    'SELECT e.employee_code FROM employee e JOIN time_off_balance b ON trim(e.employee_code)=b.employee_code',
 ])
 def test_unsupported_shapes_unchanged(query, join_settings, join_principal):
     assert 'employee_code_num' not in trino_client.rewrite_query(query, join_settings)
@@ -104,9 +104,9 @@ def test_result_cap_not_retried(monkeypatch, join_settings, join_principal):
 
 def test_catalog_driven_new_entity_and_encoding_match(monkeypatch, join_settings, join_principal):
     catalog = trino_client.get_semantic_catalog()
-    catalog['dbpcm_warehouse.new_entity'] = dict(catalog['dbpcm_warehouse.timeoff_balances'], table='new_entity')
+    catalog['dbpcm_warehouse.new_entity'] = dict(catalog['dbpcm_warehouse.time_off_balance'], table='new_entity')
     monkeypatch.setattr(trino_client, 'get_semantic_catalog', lambda: catalog)
-    query = SQL.replace('timeoff_balances', 'new_entity')
+    query = SQL.replace('time_off_balance', 'new_entity')
     assert 'e.employee_code = b.employee_code' in trino_client.rewrite_query(query, join_settings)
     catalog['dbpcm_warehouse.new_entity']['trino_join_keys'] = {'employee_code': {'column': 'other_key', 'encoding': 'different_v2'}}
     assert 'employee_code_num' not in trino_client.rewrite_query(query, join_settings)

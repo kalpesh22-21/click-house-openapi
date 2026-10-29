@@ -1,0 +1,48 @@
+id: bp-timeoff-by-leave-type
+intent: Approved time-off hours grouped by earn code concept resolved dynamically via earn_code, or all earn codes
+  when no concept is provided
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT t.earn_description AS "Earn Description",
+         t.earn_code AS "Earn Code",
+         round(SUM(t.hours), 2) AS "Approved Hours"
+  FROM dbpcm_warehouse.time_off_request AS t
+  WHERE t.status = 'Approved'
+    AND t.hours IS NOT NULL
+    AND toDate32(t.request_date) BETWEEN {window_start} AND {window_end}
+    AND t.earn_description = {concept}
+  GROUP BY t.earn_description,
+           t.earn_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Approved Hours"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Approved Hours"
+                     END ASC
+slots:
+- name: concept
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.time_off_request.earn_description
+  optional_pattern: 'TRUE'
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: concept, window, order_direction
+uses:
+- dbpcm_warehouse.time_off_request.employee_code
+- dbpcm_warehouse.time_off_request.earn_code
+- dbpcm_warehouse.time_off_request.earn_description
+- dbpcm_warehouse.time_off_request.hours
+- dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.time_off_request.request_date

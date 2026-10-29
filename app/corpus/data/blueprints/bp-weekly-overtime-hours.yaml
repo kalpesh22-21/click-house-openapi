@@ -1,0 +1,62 @@
+id: bp-weekly-overtime-hours
+intent: Overtime hours per employee per work week based on total_earning earn_hours, the authoritative hours source,
+  with a configurable weekly threshold
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  WITH weekly AS
+    (SELECT employee_code,
+            toMonday(punch_date) AS week_start,
+            SUM(earn_hours) AS weekly_hours
+     FROM
+       (SELECT employee_code,
+               punch_date,
+               earn_hours
+        FROM dbpcm_warehouse.total_earning)
+     WHERE punch_date BETWEEN {window_start} AND {window_end}
+     GROUP BY employee_code,
+              toMonday(punch_date))
+  SELECT w.employee_code AS "Employee Code",
+         max(e.employee_name) AS "Employee Name",
+         w.week_start AS "Week Start",
+         round(w.weekly_hours, 2) AS "Weekly Hours",
+         round(greatest(w.weekly_hours - {threshold}, 0), 2) AS "Overtime Hours"
+  FROM weekly w
+  LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = w.employee_code
+  WHERE w.weekly_hours > {threshold}
+  GROUP BY w.employee_code,
+           w.week_start,
+           w.weekly_hours
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Overtime Hours"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Overtime Hours"
+                     END ASC, "Employee Code"
+  LIMIT {max_rows}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: threshold
+  type: positive_integer
+  required: true
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, threshold, max_rows, order_direction
+uses:
+- dbpcm_warehouse.total_earning.employee_code
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name

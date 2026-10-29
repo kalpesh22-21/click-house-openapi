@@ -1,0 +1,46 @@
+id: bp-timeoff-lead-time
+intent: Median days from submission date to requested leave date by leave type for approved requests
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT t.earn_description AS "Leave Type",
+         t.earn_code AS "Earn Code",
+         round((quantileExactLow(0.5)(t.lead_days) + quantileExactHigh(0.5)(t.lead_days)) / 2, 1) AS "Median Lead Days",
+         COUNT(*) AS "Request Rows"
+  FROM
+    (SELECT earn_description,
+            earn_code,
+            dateDiff('day', date_added, request_date) AS lead_days
+     FROM dbpcm_warehouse.time_off_request
+     WHERE status = 'Approved'
+       AND request_date IS NOT NULL
+       AND toDate32(request_date) > toDate32('1900-01-01')
+       AND toDate32(request_date) BETWEEN {window_start} AND {window_end}) AS t
+  GROUP BY t.earn_description,
+           t.earn_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Median Lead Days"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Median Lead Days"
+                     END ASC
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, order_direction
+uses:
+- dbpcm_warehouse.time_off_request.date_added
+- dbpcm_warehouse.time_off_request.request_date
+- dbpcm_warehouse.time_off_request.earn_code
+- dbpcm_warehouse.time_off_request.earn_description
+- dbpcm_warehouse.time_off_request.status

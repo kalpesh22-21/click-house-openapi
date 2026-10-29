@@ -1,0 +1,60 @@
+id: bp-post-termination-changes
+intent: Employee master-data changes with an effective date after the employee's termination date, flagged as a
+  post-termination audit anomaly
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  -- Output aliases are Title-Case display names; consumers keying on column names
+  -- must use the quoted aliases.
+
+  SELECT ec.employee_code AS "Employee Code",
+         any(e.employee_name) AS "Name",
+         ec.changed_field AS "Changed Field",
+         count() AS "Post-Termination Changes"
+  FROM
+    (SELECT employee_code,
+            effective_date,
+            change_time_added,
+            changed_field
+     FROM dbpcm_warehouse.employee_change) AS ec
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = ec.employee_code
+  WHERE ec.effective_date IS NOT NULL
+    AND ec.change_time_added BETWEEN {window_start} AND {window_end}
+    AND e.termination_date IS NOT NULL
+    AND toDate32(e.termination_date) > toDate32('1900-01-01')
+    AND ec.effective_date > e.termination_date
+  GROUP BY ec.employee_code,
+           ec.changed_field
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Post-Termination Changes"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Post-Termination Changes"
+                     END ASC, "Employee Code",
+                              "Changed Field"
+  LIMIT {max_rows}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.employee_change.employee_code
+- dbpcm_warehouse.employee_change.effective_date
+- dbpcm_warehouse.employee_change.change_time_added
+- dbpcm_warehouse.employee_change.changed_field
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.termination_date
+- dbpcm_warehouse.employee.employee_name

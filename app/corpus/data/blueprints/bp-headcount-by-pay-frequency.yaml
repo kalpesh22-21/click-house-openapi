@@ -1,0 +1,37 @@
+id: bp-headcount-by-pay-frequency
+intent: Active employee headcount grouped by pay frequency schedule with optional department filter
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT ifNull(pay_frequency, 'Unspecified') AS "Pay Frequency",
+         count(DISTINCT employee_code) AS "Headcount"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND department_name = {department}
+  GROUP BY pay_frequency
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Headcount"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Headcount"
+                     END ASC, "Pay Frequency"
+slots:
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: department, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.pay_frequency
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status

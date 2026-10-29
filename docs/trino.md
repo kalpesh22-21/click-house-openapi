@@ -165,7 +165,9 @@ SQL, grant lists or business rows. Validate template authorization and deploymen
 MySQL logical tables expand into private Trino SELECT templates loaded from
 `TRINO_MYSQL_SOURCES_DIR` (default `app/semantic_catalog/mysql_views`). Each template is named
 `<logical_table>.txt`; `labor_allocation` also accepts `labour_allocation.txt`.
-The six supported tables are accrual_events, accrual_balances, employee,
+When deploying the time-off rename, rename the private templates to
+`time_off_request.txt` and `time_off_balance.txt`; these files are not shipped in Git.
+The six supported tables are time_off_request, time_off_balance, employee,
 department, expense and labor_allocation. The six catalog entries without
 source definitions are retained under `app/semantic_catalog/archive`, outside
 the active catalog. Missing or invalid templates fail with
@@ -431,6 +433,51 @@ an authored contract, not proof of physical compatibility: deployments must stil
 check precision, scale, nullability, date ranges and timezone semantics against
 actual source projections. Never fix a disagreement by silently rounding money,
 dropping Nullable, or inventing a type for an unknown expression.
+
+### Calendar parts and Int32
+
+`toHour`, `toMinute`, and `toDayOfYear` now use typed Trino calendar extraction,
+retaining input nullability. Timezone overrides and untyped string/numeric date
+inputs remain unsupported. `toLastDayOfMonth` preserves ClickHouse's default
+Date result, including UInt16 day wrapping for out-of-range Date32 values; this
+contract assumes `enable_extended_results_for_datetime_functions=0`.
+
+`toInt32` uses the existing verified numeric domain for `toInt64`, truncates
+fractions toward zero, and wraps to signed 32 bits. It is not a plain INTEGER cast:
+ClickHouse wraps overflow whereas Trino rejects it. String parsing and wider or
+unverified numeric domains remain unsupported.
+
+Standalone `toRelativeDayNum` remains rejected because ClickHouse documents its
+origin as an implementation detail. Use `dateDiff('day', start, end)` when the
+intent is a calendar-day difference; do not substitute an invented epoch.
+
+### Imported blueprint execution coverage
+
+The imported corpus has 188 executable blueprints; five definitions that require
+unavailable source columns remain archived. The local repair matrix covers 810
+slot variants (824 node executions), including ASC/DESC, optional filters and
+composite scratch steps. See
+[`verification/blueprint-execution-repairs-2026-10-28.json`](verification/blueprint-execution-repairs-2026-10-28.json)
+for results and fixture limitations. These checks establish local executability,
+not production schema parity or correctness of every HR interpretation.
+
+Verified conversions now include multi-input `uniqExact` (excluding rows with
+any NULL argument), `stddevPop` with nullable/empty-input semantics, integer
+`range` with an exclusive upper endpoint, integer `toUInt32`, and
+`toIntervalMonth` used in date arithmetic. Decimal/floating-point `toUInt32` remains
+rejected because its overflow semantics are not portable. Hour/minute/second
+`dateDiff` counts unit boundaries and preserves nanosecond input precision.
+
+Expression normalization can duplicate scalar subqueries. Every copied source
+is routed using its validated source metadata so physical expansion and identity
+filters remain attached. Large employee KPI/DQ blueprints use one employee scan
+instead of repeated expanded views. Empty date-window anchors explicitly return
+NULL rather than subtracting months from ClickHouse's empty MAX date default.
+
+Native ClickHouse can omit column headers on an empty result. The regular query
+path recovers them with a metadata-only `DESCRIBE TABLE (query)` using the same
+parameters and read-only settings; it does not rerun the data query. This permits
+empty composite results to retain their columns during scratch materialization.
 
 ### Year extraction and integer conversion
 

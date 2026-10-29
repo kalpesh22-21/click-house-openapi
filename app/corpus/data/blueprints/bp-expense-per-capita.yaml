@@ -1,0 +1,47 @@
+id: bp-expense-per-capita
+intent: Per-capita approved expense spend by department for a payment date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT COALESCE(e.department_name, x.department_description) AS "Department",
+         round(toFloat64(SUM(x.amount_approved)), 2) AS "Approved Spend",
+         count(DISTINCT e.employee_code) AS "Active Headcount",
+         round(toFloat64(SUM(x.amount_approved)) / nullIf(count(DISTINCT e.employee_code), 0), 2) AS "Per Capita Spend"
+  FROM dbpcm_warehouse.expense AS x
+  LEFT JOIN dbpcm_warehouse.employee AS e ON e.employee_code = x.employee_code
+  AND e.employee_status = 'Active'
+  WHERE x.expense_status IN ('Approved',
+                             'Paid',
+                             'Marked as Paid')
+    AND x.expense_paid_date >= {expense_window_start}
+    AND x.expense_paid_date <= {expense_window_end}
+  GROUP BY COALESCE(e.department_name, x.department_description)
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Per Capita Spend"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Per Capita Spend"
+                     END ASC, "Department"
+slots:
+- name: expense_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: expense_window, order_direction
+uses:
+- dbpcm_warehouse.expense.amount_approved
+- dbpcm_warehouse.expense.expense_status
+- dbpcm_warehouse.expense.expense_paid_date
+- dbpcm_warehouse.expense.department_description
+- dbpcm_warehouse.expense.employee_code
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status

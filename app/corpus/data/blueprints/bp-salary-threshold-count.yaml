@@ -6,7 +6,7 @@ intent: Employee counts by pay type above, below, at least or exactly a whole-cu
 slots_summary: comparison, salary, employee_status, department, employee
 status: validated
 drift_status: clean
-catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+catalog_sha: ''
 uses:
 - dbpcm_warehouse.employee.annual_salary
 - dbpcm_warehouse.employee.department_name
@@ -60,16 +60,43 @@ slots:
   optional_pattern: 'TRUE'
 result_grain:
 - Pay Type
-sql_template: SELECT e.employee_pay_type AS `Pay Type`, CASE WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated
-  annual compensation (2080 hours)' WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown
-  compensation basis' END AS `Compensation Basis`, count(DISTINCT e.employee_code) AS `Employee Count` FROM dbpcm_warehouse.employee
-  e WHERE (e.employee_status = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department}
-  AND e.employee_code = {employee} AND (({comparison} = 'above' AND (CASE WHEN e.employee_pay_type = 'Salary' THEN
-  e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) > {salary}) OR
-  ({comparison} = 'at_least' AND (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type
-  = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) >= {salary}) OR ({comparison} = 'equal' AND (CASE WHEN e.employee_pay_type
-  = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)
-  = {salary}) OR ({comparison} = 'below' AND (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN
-  e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) < {salary})) GROUP BY e.employee_pay_type
+sql_template: |
+  SELECT e.employee_pay_type AS `Pay Type`,
+         CASE
+             WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+             WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary'
+             ELSE 'Unknown compensation basis'
+         END AS `Compensation Basis`,
+         count(DISTINCT e.employee_code) AS `Employee Count`
+  FROM dbpcm_warehouse.employee e
+  WHERE (e.employee_status = {employee_status}
+         OR {employee_status} = 'All')
+    AND e.department_name = {department}
+    AND e.employee_code = {employee}
+    AND (({comparison} = 'above'
+          AND (CASE
+                   WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                   WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                   ELSE NULL
+               END) > {salary})
+         OR ({comparison} = 'at_least'
+             AND (CASE
+                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      ELSE NULL
+                  END) >= {salary})
+         OR ({comparison} = 'equal'
+             AND (CASE
+                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      ELSE NULL
+                  END) = {salary})
+         OR ({comparison} = 'below'
+             AND (CASE
+                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      ELSE NULL
+                  END) < {salary}))
+  GROUP BY e.employee_pay_type
 uses_rules:
 - compensation_by_pay_type

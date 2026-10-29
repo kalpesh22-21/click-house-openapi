@@ -1,0 +1,42 @@
+id: bp-avg-balance-by-cohort
+intent: Average current accrual balance hours per employee department for active non-archived balances
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT e.department_name AS "Department",
+         round(AVG(b.beginning_balance + b.accrued_amount - b.taken_amount), 2) AS "Average Balance Hours",
+         COUNT(DISTINCT b.employee_code) AS "Employees"
+  FROM dbpcm_warehouse.time_off_balance AS b
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = b.employee_code
+  WHERE b.accrual_status = 'Active'
+    AND b.is_archived = 0
+  GROUP BY e.department_name
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Average Balance Hours"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Average Balance Hours"
+                     END ASC
+  LIMIT {top_n}
+slots:
+- name: top_n
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: top_n, order_direction
+uses:
+- dbpcm_warehouse.time_off_balance.beginning_balance
+- dbpcm_warehouse.time_off_balance.accrued_amount
+- dbpcm_warehouse.time_off_balance.taken_amount
+- dbpcm_warehouse.time_off_balance.accrual_status
+- dbpcm_warehouse.time_off_balance.is_archived
+- dbpcm_warehouse.time_off_balance.employee_code
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name

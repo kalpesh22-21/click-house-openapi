@@ -1,0 +1,43 @@
+id: bp-expense-approval-backlog
+intent: Expenses awaiting approval longest, by submission age, with optional minimum wait threshold
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         count() AS "Pending Lines",
+         round(toFloat64(SUM(amount_approved)), 2) AS "Pending Amount",
+         round(AVG(dateDiff('day', date_time_submitted, today())), 1) AS "Avg Days Pending"
+  FROM dbpcm_warehouse.expense
+  WHERE expense_status = 'Pending Approval'
+    AND date_time_submitted IS NOT NULL
+    AND toDate32(date_time_submitted) > toDate32('1900-01-01')
+    AND dateDiff('day', date_time_submitted, today()) >= {min_age}
+  GROUP BY employee_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Avg Days Pending"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Avg Days Pending"
+                     END ASC, "Employee Code"
+  LIMIT {top_n}
+slots:
+- name: min_age
+  type: nonnegative_integer
+  required: true
+- name: top_n
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: min_age, top_n, order_direction
+uses:
+- dbpcm_warehouse.expense.expense_status
+- dbpcm_warehouse.expense.date_time_submitted
+- dbpcm_warehouse.expense.amount_approved
+- dbpcm_warehouse.expense.employee_code

@@ -1,0 +1,23 @@
+id: bp-earnings-quarter-to-date
+intent: Quarter-to-date gross and net earnings from the payroll register, matching pay periods that fall within
+  the selected calendar quarter
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT round(SUMIf(amount, register_type = 'EARN'), 2) AS "Gross Earnings",
+         round(SUMIf(amount, register_type = 'NETPAYDIST'), 2) AS "Net Pay"
+  FROM dbpcm_warehouse.payroll
+  WHERE pay_period_start_date >= {quarter_start}
+    AND pay_period_end_date <= {quarter_end}
+slots:
+- name: quarter
+  type: period_range
+  required: true
+  temporal_type: date
+slots_summary: quarter
+uses:
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_start_date
+- dbpcm_warehouse.payroll.pay_period_end_date

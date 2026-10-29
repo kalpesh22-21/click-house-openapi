@@ -1,0 +1,30 @@
+id: bp-tenure-band-distribution
+intent: Active headcount by seniority-date tenure band
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT multiIf(NOT (seniority_date IS NOT NULL
+                      AND toDate32(seniority_date) > toDate32('1900-01-01')), 'Unknown', yrs < 1, 'Under 1 Year', yrs < 3, '1-3 Years', yrs < 5, '3-5 Years', yrs < 10, '5-10 Years', yrs < 20, '10-20 Years', '20+ Years') AS "Tenure Band",
+         count(DISTINCT employee_code) AS "Headcount"
+  FROM
+    (SELECT employee_code,
+            seniority_date,
+            date_diff('day', seniority_date, now()) / 365.25 AS yrs
+     FROM dbpcm_warehouse.employee
+     WHERE employee_status = 'Active'
+       AND department_name = {department})
+  GROUP BY "Tenure Band"
+  ORDER BY min(yrs) ASC
+slots:
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+slots_summary: department
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.seniority_date
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status

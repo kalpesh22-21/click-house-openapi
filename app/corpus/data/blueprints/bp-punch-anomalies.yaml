@@ -1,0 +1,77 @@
+id: bp-punch-anomalies
+intent: Matched In/Out punch pairs with a missing In punch or missing Out punch edge detected via sentinel timestamps
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT "Employee Code",
+         "Employee Name",
+         "Punch Date",
+         "Anomaly Type"
+  FROM
+    (SELECT pp.employee_code AS "Employee Code",
+            any(e.employee_name) AS "Employee Name",
+            pp.punch_date AS "Punch Date",
+            'Missing Out Punch' AS "Anomaly Type"
+     FROM
+       (SELECT employee_code,
+               punch_date,
+               in_punch_time,
+               out_punch_time
+        FROM dbpcm_warehouse.punch_pair) AS pp
+     LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = pp.employee_code
+     WHERE pp.in_punch_time IS NOT NULL
+       AND toDate32(pp.in_punch_time) > toDate32('1900-01-01')
+       AND NOT (pp.out_punch_time IS NOT NULL
+                AND toDate32(pp.out_punch_time) > toDate32('1900-01-01'))
+       AND pp.punch_date BETWEEN {window_start} AND {window_end}
+     GROUP BY pp.employee_code,
+              pp.punch_date
+     UNION ALL SELECT pp.employee_code AS "Employee Code",
+                      any(e.employee_name) AS "Employee Name",
+                      pp.punch_date AS "Punch Date",
+                      'Missing In Punch' AS "Anomaly Type"
+     FROM
+       (SELECT employee_code,
+               punch_date,
+               in_punch_time,
+               out_punch_time
+        FROM dbpcm_warehouse.punch_pair) AS pp
+     LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = pp.employee_code
+     WHERE pp.out_punch_time IS NOT NULL
+       AND toDate32(pp.out_punch_time) > toDate32('1900-01-01')
+       AND NOT (pp.in_punch_time IS NOT NULL
+                AND toDate32(pp.in_punch_time) > toDate32('1900-01-01'))
+       AND pp.punch_date BETWEEN {window_start} AND {window_end}
+     GROUP BY pp.employee_code,
+              pp.punch_date) AS anomalies
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Punch Date"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Punch Date"
+                     END ASC, "Employee Code"
+  LIMIT {max_rows}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.punch_pair.employee_code
+- dbpcm_warehouse.punch_pair.punch_date
+- dbpcm_warehouse.punch_pair.in_punch_time
+- dbpcm_warehouse.punch_pair.out_punch_time
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name

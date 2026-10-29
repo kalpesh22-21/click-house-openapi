@@ -1,0 +1,39 @@
+id: bp-zero-net-pay-employees
+intent: Employees with exactly $0.00 net pay in a pay period, distinguishing those with no net-pay-distribution
+  rows from those with a zero net-pay amount
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code"
+  FROM dbpcm_warehouse.payroll
+  WHERE pay_period_end_date = {period}
+  GROUP BY employee_code
+  HAVING SUMIf(amount, register_type = 'EARN') > 0
+  AND SUMIf(amount, register_type = 'NETPAYDIST') = 0
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Employee Code"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Employee Code"
+                     END ASC
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: period, order_direction
+uses:
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_end_date

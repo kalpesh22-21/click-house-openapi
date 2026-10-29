@@ -4,10 +4,10 @@ intent: Employee directory filtered by a whole-currency annual compensation thre
   annual_salary; Hourly uses hourly_salary and estimated annual compensation = hourly_salary * 2080 (40 hours/week,
   52 weeks/year; excludes overtime). Keep pay types separate. Defaults to Active + On Leave; employee_status overrides
   or All removes the filter.
-slots_summary: comparison, salary, row_limit, employee_status, department, employee
+slots_summary: comparison, salary, row_limit, employee_status, department, employee, order_direction
 status: validated
 drift_status: clean
-catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+catalog_sha: ''
 uses:
 - dbpcm_warehouse.employee.annual_salary
 - dbpcm_warehouse.employee.department_name
@@ -64,26 +64,70 @@ slots:
   required: false
   binds_to: dbpcm_warehouse.employee.employee_code
   optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
 result_grain:
 - Employee Code
-sql_template: 'SELECT e.employee_pay_type AS `Pay Type`, CASE WHEN e.employee_pay_type = ''Hourly'' THEN ''Estimated
-  annual compensation (2080 hours)'' WHEN e.employee_pay_type = ''Salary'' THEN ''Recorded annual salary'' ELSE
-  ''Unknown compensation basis'' END AS `Compensation Basis`, e.employee_code AS `Employee Code`, e.department_name
-  AS `Department`, e.employee_status AS `Status`, (CASE WHEN e.employee_pay_type = ''Salary'' THEN e.annual_salary
-  WHEN e.employee_pay_type = ''Hourly'' THEN e.hourly_salary * 2080 ELSE NULL END) AS `Annual Compensation`, e.hourly_salary
-  AS `Hourly Rate`
-
-  FROM dbpcm_warehouse.employee e WHERE (e.employee_status = {employee_status} OR {employee_status} = ''All'') AND
-  e.department_name = {department} AND e.employee_code = {employee} AND (({comparison} = ''above'' AND (CASE WHEN
-  e.employee_pay_type = ''Salary'' THEN e.annual_salary WHEN e.employee_pay_type = ''Hourly'' THEN e.hourly_salary
-  * 2080 ELSE NULL END) > {salary}) OR ({comparison} = ''at_least'' AND (CASE WHEN e.employee_pay_type = ''Salary''
-  THEN e.annual_salary WHEN e.employee_pay_type = ''Hourly'' THEN e.hourly_salary * 2080 ELSE NULL END) >= {salary})
-  OR ({comparison} = ''equal'' AND (CASE WHEN e.employee_pay_type = ''Salary'' THEN e.annual_salary WHEN e.employee_pay_type
-  = ''Hourly'' THEN e.hourly_salary * 2080 ELSE NULL END) = {salary}) OR ({comparison} = ''below'' AND (CASE WHEN
-  e.employee_pay_type = ''Salary'' THEN e.annual_salary WHEN e.employee_pay_type = ''Hourly'' THEN e.hourly_salary
-  * 2080 ELSE NULL END) < {salary}))
-
-  ORDER BY e.employee_pay_type, (CASE WHEN e.employee_pay_type = ''Salary'' THEN e.annual_salary WHEN e.employee_pay_type
-  = ''Hourly'' THEN e.hourly_salary * 2080 ELSE NULL END) DESC, e.employee_code LIMIT {row_limit}'
+sql_template: |
+  SELECT e.employee_pay_type AS `Pay Type`,
+         CASE
+             WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+             WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary'
+             ELSE 'Unknown compensation basis'
+         END AS `Compensation Basis`,
+         e.employee_code AS `Employee Code`,
+         e.department_name AS `Department`,
+         e.employee_status AS `Status`,
+         (CASE
+              WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+              WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+              ELSE NULL
+          END) AS `Annual Compensation`,
+         e.hourly_salary AS `Hourly Rate`
+  FROM dbpcm_warehouse.employee e
+  WHERE (e.employee_status = {employee_status}
+         OR {employee_status} = 'All')
+    AND e.department_name = {department}
+    AND e.employee_code = {employee}
+    AND (({comparison} = 'above'
+          AND (CASE
+                   WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                   WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                   ELSE NULL
+               END) > {salary})
+         OR ({comparison} = 'at_least'
+             AND (CASE
+                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      ELSE NULL
+                  END) >= {salary})
+         OR ({comparison} = 'equal'
+             AND (CASE
+                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      ELSE NULL
+                  END) = {salary})
+         OR ({comparison} = 'below'
+             AND (CASE
+                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      ELSE NULL
+                  END) < {salary}))
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN e.employee_pay_type
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN e.employee_pay_type
+                     END ASC, (CASE
+                                   WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                                   WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                                   ELSE NULL
+                               END) DESC, e.employee_code
+  LIMIT {row_limit}
 uses_rules:
 - compensation_by_pay_type

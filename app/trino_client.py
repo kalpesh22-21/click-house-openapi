@@ -154,7 +154,13 @@ def _uniq_exact_as_count_distinct(func: exp.Func) -> exp.Expression:
     while uniqExact is exact, like COUNT(DISTINCT x). Both count distinct
     values ignoring NULLs.
     """
-    return exp.Count(this=exp.Distinct(expressions=list(func.expressions)))
+    # Multi-argument CH distinct skips rows with any NULL argument.
+    values = list(func.expressions)
+    if len(values) == 1:
+        return exp.Count(this=exp.Distinct(expressions=values))
+    row = exp.Tuple(expressions=[v.copy() for v in values])
+    condition = exp.and_(*[exp.Not(this=exp.Is(this=v.copy(), expression=exp.Null())) for v in values])
+    return exp.Count(this=exp.Distinct(expressions=[exp.If(this=condition, true=row, false=exp.Null())]))
 
 
 def _to_date32_as_cast_date(func: exp.Func) -> exp.Expression:
@@ -400,10 +406,39 @@ def _lower_utf8(func: exp.Func) -> exp.Expression:
     return exp.Lower(this=func.expressions[0].copy())
 
 
+def _integer_range(func):
+    from app.trino_semantics import require_type
+    from app.trino_constructs import unsupported
+    args = list(func.expressions)
+    if len(args) == 1:
+        args.insert(0, exp.Literal.number(0))
+    for value in args:
+        info = require_type(value, "range")
+        if info.kind != "integer" or info.nullable or not info.intdiv_safe:
+            unsupported("range requires non-null signed-64-compatible integer endpoints.")
+    start, stop = args
+    return exp.If(this=exp.LTE(this=stop.copy(), expression=start.copy()),
+                  true=exp.Cast(this=exp.Array(expressions=[]), to=exp.DataType.build("ARRAY(BIGINT)", dialect="trino")),
+                  false=exp.Anonymous(this="sequence", expressions=[start, exp.Sub(this=stop, expression=exp.Literal.number(1))]))
+
+
+def _stddev_pop(func):
+    from app.trino_semantics import require_type
+    from app.trino_constructs import unsupported
+    value = func.expressions[0]
+    info = require_type(value, "stddevPop")
+    if info.kind not in {"integer", "decimal", "float"}:
+        unsupported("stddevPop requires numeric input.")
+    result = exp.StddevPop(this=value)
+    return result if info.nullable else exp.Coalesce(this=result, expressions=[exp.Anonymous(this="nan")])
+
+
 _CLICKHOUSE_FUNCTION_MAP: dict[str, _FunctionMapping] = {
+    "range": _FunctionMapping(_integer_range, lambda n: n in {1, 2}),
+    "stddevpop": _FunctionMapping(_stddev_pop, lambda n: n == 1),
     "datetrunc": _FunctionMapping(_date_trunc, lambda n: n == 2),
     "lowerutf8": _FunctionMapping(_lower_utf8, lambda n: n == 1),
-    "uniqexact": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n == 1),
+    "uniqexact": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n >= 1),
     "countdistinct": _FunctionMapping(_uniq_exact_as_count_distinct, lambda n: n == 1),
     "now": _FunctionMapping(lambda _: exp.CurrentTimestamp(), lambda n: n == 0),
     "addyears": _FunctionMapping(lambda f: _typed_date_add(f, "year"), lambda n: n == 2),
@@ -438,12 +473,14 @@ def _map_clickhouse_functions(tree: exp.Query) -> None:
     # These names are handled by the type/construct passes below. Validate
     # caller nodes before those passes introduce Trino-native helper functions.
     semantic_names = {
-        "toyear", "tomonth", "todayofmonth", "toint64", "intdiv", "todatetime", "tonullable",
+        "toyear", "tomonth", "todayofmonth", "todayofyear", "tohour", "tominute", "tolastdayofmonth", "toint32", "touint32", "toint64", "intdiv", "todatetime", "tonullable",
         "sumif", "avgif", "minif", "maxif", "today", "groupuniqarray",
-        "arraysort", "arraystringconcat", "formatreadablequantity",
+        "arraysort", "arraystringconcat", "formatreadablequantity", "tointervalmonth",
     }
     for func in tree.find_all(exp.Anonymous, exp.AnonymousAggFunc):
         name = func.name.lower()
+        if name == "torelativedaynum":
+            unsupported("toRelativeDayNum has an implementation-specific origin; use dateDiff('day', start, end) for elapsed calendar days.")
         mapping = _CLICKHOUSE_FUNCTION_MAP.get(name)
         if mapping is not None and mapping.accepts(len(func.expressions)):
             continue
@@ -453,6 +490,8 @@ def _map_clickhouse_functions(tree: exp.Query) -> None:
 
     normalize_semantics(tree)
     normalize_constructs(tree)
+    if any(f.name.lower() == "tointervalmonth" for f in tree.find_all(exp.Anonymous)):
+        unsupported("toIntervalMonth is supported only as a date/timestamp arithmetic operand.")
     for conditional in tree.find_all(exp.If):
         # sqlglot represents both CASE variants' WHEN arms as If nodes.
         # Simple CASE compares values; only searched CASE/IF take predicates.
@@ -569,6 +608,7 @@ def _rewrite_query(sql: str, settings: Settings) -> str:
                 # proc_center is NOT a routing input (paycompy client-code range model).
                 if entry.get("source", "clickhouse") == "mysql" and shard is None:
                     shard = resolve_mysql_shard(client_code, settings)
+                source.meta["trino_route_index"] = len(replacements)
                 replacements.append((source, entry, shard or ""))
                 routed.add(id(source))
         # Catch table-function/other relation forms that scope traversal omitted.
@@ -584,7 +624,14 @@ def _rewrite_query(sql: str, settings: Settings) -> str:
                 count.set("this", exp.Star())
         # Map caller expressions before inserting backend-native source SQL.
         _map_clickhouse_functions(tree)
-        for source, entry, resolved_shard in replacements:
+        # Expression normalization can copy a scalar subquery (for example
+        # toLastDayOfMonth's overflow-preserving rewrite). Route every surviving
+        # copy, not the detached pre-normalization table objects.
+        for source in list(tree.find_all(exp.Table)):
+            route_index = source.meta.get("trino_route_index")
+            if route_index is None:
+                continue  # CTE name; every physical source was checked above.
+            _, entry, resolved_shard = replacements[route_index]
             final = source.parent if isinstance(source.parent, exp.Final) else None
             if final is not None and entry.get("source", "clickhouse") != "clickhouse":
                 raise QueryValidationError("FINAL requires a ClickHouse catalog table.", "TRINO_UNSUPPORTED_SQL")

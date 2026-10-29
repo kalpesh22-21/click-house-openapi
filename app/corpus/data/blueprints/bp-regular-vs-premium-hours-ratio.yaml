@@ -1,0 +1,52 @@
+id: bp-regular-vs-premium-hours-ratio
+intent: Monthly regular versus premium paid hours ratio from timecard earnings, bucketed by punch date month, showing
+  regular share and premium share
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT formatDateTime(toStartOfMonth(te.punch_date), '%Y-%m') AS "Month",
+         round(SUMIf(te.earn_hours, ec.category_name = 'Regular'), 2) AS "Regular Hours",
+         round(SUMIf(te.earn_hours, ec.category_name != 'Regular'
+                     OR ec.category_name IS NULL), 2) AS "Premium Hours",
+         round(SUMIf(te.earn_hours, ec.category_name = 'Regular') * 100.0 / nullIf(SUM(te.earn_hours), 0), 2) AS "Regular Pct"
+  FROM
+    (SELECT punch_date,
+            earn_hours,
+            earn_code
+     FROM dbpcm_warehouse.total_earning) AS te
+  LEFT JOIN
+    (SELECT earn_code,
+            category_name
+     FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
+  WHERE te.punch_date >= addMonths(
+                                     (SELECT CASE
+                                                 WHEN count() = 0 THEN NULL
+                                                 ELSE max(punch_date)
+                                             END
+                                      FROM dbpcm_warehouse.total_earning), -{win})
+  GROUP BY "Month"
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Month"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Month"
+                     END ASC
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: win, order_direction
+uses:
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.earning_category.earn_code
+- dbpcm_warehouse.earning_category.category_name

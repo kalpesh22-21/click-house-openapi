@@ -1,0 +1,36 @@
+id: bp-shift-differential-spend
+intent: Shift-differential dollars and hours from the payroll register, resolving earn codes dynamically against
+  type_code for a date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT round(SUM(p.amount), 2) AS "Shift Differential Dollars",
+         round(SUM(p.type_hours), 2) AS "Shift Differential Hours"
+  FROM dbpcm_warehouse.payroll AS p
+  WHERE p.register_type = 'EARN'
+    AND p.type_code IN
+      (SELECT earn_code
+       FROM dbpcm_warehouse.earning_category FINAL
+       WHERE category_name = {shift_category})
+    AND p.pay_period_end_date BETWEEN {window_start} AND {window_end}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: shift_category
+  type: entity
+  required: true
+  binds_to: dbpcm_warehouse.earning_category.category_name
+  description: Resolve the requested shift concept to this client's category label; do not invent earning codes.
+slots_summary: window, shift_category
+uses:
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.type_code
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.type_hours
+- dbpcm_warehouse.payroll.pay_period_end_date
+- dbpcm_warehouse.earning_category.earn_code
+- dbpcm_warehouse.earning_category.category_name

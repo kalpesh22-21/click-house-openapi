@@ -1,0 +1,54 @@
+id: bp-holiday-work-audit
+intent: Total paid hours and employee counts on company-observed holiday dates from total_earning using runtime-resolved
+  holiday earn codes
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT te.punch_date AS "Punch Date",
+         count(DISTINCT te.employee_code) AS "Employees",
+         round(SUM(te.earn_hours), 2) AS "Total Hours",
+         count() AS "Line Count"
+  FROM
+    (SELECT employee_code,
+            punch_date,
+            earn_hours,
+            earn_code
+     FROM dbpcm_warehouse.total_earning) te
+  WHERE te.punch_date BETWEEN {window_start} AND {window_end}
+    AND te.earn_code = {concept}
+  GROUP BY te.punch_date
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Total Hours"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Total Hours"
+                     END ASC, "Punch Date"
+  LIMIT {max_rows}
+slots:
+- name: concept
+  type: string
+  required: true
+  binds_to: dbpcm_warehouse.total_earning.earn_code
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: concept, window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.total_earning.employee_code
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name

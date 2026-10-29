@@ -1,0 +1,64 @@
+id: bp-punch-plus-timeoff-overlap
+intent: Employees with punch pair entries on days that also have approved time-off requests, a same-day double-dip
+  audit with configurable overlap-day threshold
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  WITH punch_days AS
+    (SELECT DISTINCT employee_code,
+                     punch_date
+     FROM dbpcm_warehouse.punch_pair
+     WHERE punch_date BETWEEN {window_start} AND {window_end}),
+       overlap AS
+    (SELECT pd.employee_code,
+            pd.punch_date AS overlap_date
+     FROM punch_days pd
+     JOIN dbpcm_warehouse.time_off_request tor ON tor.employee_code = pd.employee_code
+     WHERE tor.status = 'Approved'
+       AND toDate32(tor.request_date) = pd.punch_date)
+  SELECT e.employee_code AS "Employee Code",
+         e.employee_name AS "Employee Name",
+         e.department_name AS "Department",
+         count(DISTINCT o.overlap_date) AS "Overlap Days"
+  FROM overlap o
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = o.employee_code
+  GROUP BY e.employee_code,
+           e.employee_name,
+           e.department_name
+  HAVING count(DISTINCT o.overlap_date) >= {threshold}
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Overlap Days"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Overlap Days"
+                     END ASC, e.employee_code
+  LIMIT {max_rows}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: threshold
+  type: positive_integer
+  required: true
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, threshold, max_rows, order_direction
+uses:
+- dbpcm_warehouse.punch_pair.employee_code
+- dbpcm_warehouse.punch_pair.punch_date
+- dbpcm_warehouse.time_off_request.employee_code
+- dbpcm_warehouse.time_off_request.request_date
+- dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name

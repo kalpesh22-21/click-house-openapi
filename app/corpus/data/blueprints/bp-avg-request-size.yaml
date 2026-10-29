@@ -1,0 +1,41 @@
+id: bp-avg-request-size
+intent: Average approved time-off request hours per row by leave type over a request-date window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT t.earn_description AS "Leave Type",
+         t.earn_code AS "Earn Code",
+         round(AVG(t.hours), 2) AS "Average Hours",
+         COUNT(*) AS "Request Rows"
+  FROM dbpcm_warehouse.time_off_request AS t
+  WHERE t.status = 'Approved'
+    AND t.hours IS NOT NULL
+    AND toDate32(t.request_date) BETWEEN {window_start} AND {window_end}
+  GROUP BY t.earn_description,
+           t.earn_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Average Hours"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Average Hours"
+                     END ASC
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, order_direction
+uses:
+- dbpcm_warehouse.time_off_request.hours
+- dbpcm_warehouse.time_off_request.earn_code
+- dbpcm_warehouse.time_off_request.earn_description
+- dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.time_off_request.request_date

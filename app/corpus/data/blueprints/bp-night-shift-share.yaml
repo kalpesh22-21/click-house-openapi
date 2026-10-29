@@ -1,0 +1,87 @@
+id: bp-night-shift-share
+intent: Night-shift hours share by department using total_earning earn_hours where the shift date is identified
+  by In punch time between configurable night-start and night-end hours
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  WITH night_dates AS
+    (SELECT DISTINCT pp.employee_code,
+                     pp.punch_date
+     FROM
+       (SELECT employee_code,
+               punch_date,
+               in_punch_time
+        FROM dbpcm_warehouse.punch_pair) pp
+     WHERE pp.punch_date BETWEEN {window_start} AND {window_end}
+       AND pp.in_punch_time IS NOT NULL
+       AND toDate32(pp.in_punch_time) > toDate32('1900-01-01')
+       AND (toHour(pp.in_punch_time) >= {night_start}
+            OR toHour(pp.in_punch_time) < {night_end})),
+       dept_total AS
+    (SELECT e.department_name AS dept,
+            SUM(te.earn_hours) AS total_hours
+     FROM
+       (SELECT employee_code,
+               punch_date,
+               earn_hours
+        FROM dbpcm_warehouse.total_earning) te
+     JOIN dbpcm_warehouse.employee e ON e.employee_code = te.employee_code
+     WHERE te.punch_date BETWEEN {window_start} AND {window_end}
+     GROUP BY e.department_name),
+       dept_night AS
+    (SELECT e.department_name AS dept,
+            SUM(te.earn_hours) AS night_hours
+     FROM night_dates nd
+     JOIN
+       (SELECT employee_code,
+               punch_date,
+               earn_hours
+        FROM dbpcm_warehouse.total_earning) te ON te.employee_code = nd.employee_code
+     AND te.punch_date = nd.punch_date
+     JOIN dbpcm_warehouse.employee e ON e.employee_code = te.employee_code
+     GROUP BY e.department_name)
+  SELECT COALESCE(d.dept, n.dept) AS "Department",
+         round(COALESCE(d.total_hours, 0), 2) AS "Total Hours",
+         round(COALESCE(n.night_hours, 0), 2) AS "Night Hours",
+         round(100.0 * COALESCE(n.night_hours, 0) / nullIf(COALESCE(d.total_hours, 0), 0), 2) AS "Night Share Pct"
+  FROM dept_total d
+  FULL OUTER JOIN dept_night n ON n.dept = d.dept
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Night Share Pct"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Night Share Pct"
+                     END ASC, "Department"
+  LIMIT {max_rows}
+slots:
+- name: window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: night_start
+  type: positive_integer
+  required: true
+- name: night_end
+  type: positive_integer
+  required: true
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: window, night_start, night_end, max_rows, order_direction
+uses:
+- dbpcm_warehouse.total_earning.employee_code
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.punch_pair.employee_code
+- dbpcm_warehouse.punch_pair.in_punch_time
+- dbpcm_warehouse.punch_pair.punch_date
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name

@@ -1,0 +1,60 @@
+id: bp-pay-timing-exceptions
+intent: Employees paid after termination or active employees not paid within N days
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         department_name AS "Department",
+         employee_status AS "Status",
+         termination_date AS "Termination Date",
+         last_check_date AS "Last Check Date",
+         multiIf(employee_status = 'Terminated', 'Paid After Termination', 'Active Not Paid') AS "Exception Type"
+  FROM dbpcm_warehouse.employee
+  WHERE department_name = {department}
+    AND ((employee_status = 'Terminated'
+          AND (most_recent_hire_date IS NULL
+               OR most_recent_hire_date < termination_date)
+          AND last_check_date IS NOT NULL
+          AND toDate32(last_check_date) > toDate32('1900-01-01')
+          AND termination_date IS NOT NULL
+          AND toDate32(termination_date) > toDate32('1900-01-01')
+          AND last_check_date > termination_date)
+         OR (employee_status = 'Active'
+             AND (NOT (last_check_date IS NOT NULL
+                       AND toDate32(last_check_date) > toDate32('1900-01-01'))
+                  OR last_check_date < now() - INTERVAL {days_since_pay} DAY)))
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Exception Type"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Exception Type"
+                     END ASC, employee_code
+  LIMIT {max_rows}
+slots:
+- name: days_since_pay
+  type: positive_integer
+  required: true
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: days_since_pay, department, max_rows, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.termination_date
+- dbpcm_warehouse.employee.most_recent_hire_date
+- dbpcm_warehouse.employee.last_check_date

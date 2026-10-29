@@ -1,0 +1,51 @@
+id: bp-category-hours-monthly
+intent: Monthly trend of paid hours for a specific earning category (such as Sick or Vacation) from timecard earnings,
+  bucketed by punch date month
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT formatDateTime(toStartOfMonth(te.punch_date), '%Y-%m') AS "Month",
+         round(SUM(te.earn_hours), 2) AS "Total Hours"
+  FROM
+    (SELECT punch_date,
+            earn_code,
+            earn_hours
+     FROM dbpcm_warehouse.total_earning) AS te
+  JOIN
+    (SELECT earn_code,
+            category_name
+     FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
+  WHERE ec.category_name = {concept}
+    AND te.punch_date >= addMonths(
+                                     (SELECT max(punch_date)
+                                      FROM dbpcm_warehouse.total_earning), -{win})
+  GROUP BY "Month"
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Month"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Month"
+                     END ASC
+slots:
+- name: concept
+  type: string
+  required: true
+  binds_to: dbpcm_warehouse.earning_category.category_name
+- name: win
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: concept, win, order_direction
+uses:
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.earning_category.earn_code
+- dbpcm_warehouse.earning_category.category_name

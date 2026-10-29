@@ -1,0 +1,61 @@
+id: bp-post-termination-accrual-audit
+intent: Terminated employees with time-off balance accrual activity dated after their termination date, rehire-aware
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT b.employee_code AS "Employee Code",
+         e.employee_name AS "Employee Name",
+         b.accrual_code AS "Accrual Code",
+         b.accrual_date AS "Accrual Date",
+         e.termination_date AS "Termination Date",
+         round(toFloat64(SUM(b.accrued_amount)), 2) AS "Accrual Amount"
+  FROM dbpcm_warehouse.time_off_balance AS b
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = b.employee_code
+  WHERE e.termination_date IS NOT NULL
+    AND toDate32(e.termination_date) > toDate32('1900-01-01')
+    AND b.accrual_date IS NOT NULL
+    AND b.accrual_date > toDate32(e.termination_date)
+    AND (e.most_recent_hire_date IS NULL
+         OR toDate32(e.most_recent_hire_date) <= toDate32('1900-01-01')
+         OR e.most_recent_hire_date <= e.termination_date)
+    AND b.accrued_amount > 0
+    AND b.accrual_date >= {accrual_window_start}
+    AND b.accrual_date <= {accrual_window_end}
+  GROUP BY b.employee_code,
+           e.employee_name,
+           b.accrual_code,
+           b.accrual_date,
+           e.termination_date
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN b.accrual_date
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN b.accrual_date
+                     END ASC
+  LIMIT {max_rows}
+slots:
+- name: accrual_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: accrual_window, max_rows, order_direction
+uses:
+- dbpcm_warehouse.time_off_balance.employee_code
+- dbpcm_warehouse.time_off_balance.accrual_date
+- dbpcm_warehouse.time_off_balance.accrued_amount
+- dbpcm_warehouse.time_off_balance.accrual_code
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.termination_date
+- dbpcm_warehouse.employee.most_recent_hire_date

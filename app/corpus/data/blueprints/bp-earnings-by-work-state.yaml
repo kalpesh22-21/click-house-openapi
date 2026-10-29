@@ -1,0 +1,48 @@
+id: bp-earnings-by-work-state
+intent: Gross earnings by employee works-in-state for a pay period, with optional state filter, reflecting tax-situs
+  work location
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT e.works_in_state AS "Work State",
+         round(SUM(p.amount), 2) AS "Gross Earnings"
+  FROM dbpcm_warehouse.payroll AS p
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
+  WHERE p.register_type = 'EARN'
+    AND p.pay_period_end_date = {period}
+    AND e.works_in_state = {state}
+  GROUP BY e.works_in_state
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Gross Earnings"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Gross Earnings"
+                     END ASC
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: state
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.works_in_state
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, state, order_direction
+uses:
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.pay_period_end_date
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.works_in_state

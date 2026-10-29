@@ -1,0 +1,59 @@
+id: bp-expense-payroll-recon
+intent: Reconcile approved expense amounts against payroll deduction reimbursement lines by payroll transaction
+  number for a pay period
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  WITH exp_agg AS
+    (SELECT payroll_transaction_number AS txn,
+            round(toFloat64(SUM(amount_approved)), 2) AS exp_amount
+     FROM dbpcm_warehouse.expense
+     WHERE expense_status IN ('Approved',
+                              'Paid',
+                              'Marked as Paid')
+       AND payroll_transaction_number != ''
+     GROUP BY payroll_transaction_number),
+       pay_agg AS
+    (SELECT transaction_number AS txn,
+            round(toFloat64(SUM(amount)), 2) AS pay_amount
+     FROM dbpcm_warehouse.payroll
+     WHERE register_type = 'DDUCT'
+       AND pay_period_end_date = {period}
+     GROUP BY transaction_number)
+  SELECT COALESCE(e.txn, p.txn) AS "Transaction Number",
+         round(COALESCE(e.exp_amount, 0), 2) AS "Expense Amount",
+         round(COALESCE(p.pay_amount, 0), 2) AS "Payroll Amount",
+         round(COALESCE(e.exp_amount, 0) - COALESCE(p.pay_amount, 0), 2) AS "Difference",
+         round(abs(COALESCE(e.exp_amount, 0) - COALESCE(p.pay_amount, 0)) / nullIf(COALESCE(p.pay_amount, 0), 0) * 100, 2) AS "Pct Diff"
+  FROM exp_agg e
+  FULL OUTER JOIN pay_agg p ON p.txn = e.txn
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN abs(COALESCE(e.exp_amount, 0) - COALESCE(p.pay_amount, 0))
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN abs(COALESCE(e.exp_amount, 0) - COALESCE(p.pay_amount, 0))
+                     END ASC
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, order_direction
+uses:
+- dbpcm_warehouse.expense.payroll_transaction_number
+- dbpcm_warehouse.expense.amount_approved
+- dbpcm_warehouse.expense.expense_status
+- dbpcm_warehouse.payroll.transaction_number
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.amount
+- dbpcm_warehouse.payroll.pay_period_end_date

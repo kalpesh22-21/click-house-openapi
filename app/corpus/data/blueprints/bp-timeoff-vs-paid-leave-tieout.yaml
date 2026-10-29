@@ -1,0 +1,93 @@
+id: bp-timeoff-vs-paid-leave-tieout
+intent: Reconcile approved time-off request hours against paid leave hours from total_earning per employee per month,
+  showing variance and percentage difference
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  WITH tor_monthly AS
+    (SELECT employee_code,
+            formatDateTime(toStartOfMonth(request_date), '%Y-%m') AS month,
+            round(SUM(hours), 2) AS tor_hours
+     FROM dbpcm_warehouse.time_off_request
+     WHERE status = 'Approved'
+       AND request_date >= addMonths(today(), -{win})
+       AND earn_code IN
+         (SELECT earn_code
+          FROM dbpcm_warehouse.earning_category FINAL
+          WHERE category_name = {timeoff_category})
+     GROUP BY employee_code,
+              formatDateTime(toStartOfMonth(request_date), '%Y-%m')),
+       te_monthly AS
+    (SELECT employee_code,
+            formatDateTime(toStartOfMonth(punch_date), '%Y-%m') AS month,
+            round(SUM(earn_hours), 2) AS te_hours
+     FROM
+       (SELECT employee_code,
+               punch_date,
+               earn_code,
+               earn_hours
+        FROM dbpcm_warehouse.total_earning)
+     WHERE punch_date >= addMonths(today(), -{win})
+       AND earn_code IN
+         (SELECT earn_code
+          FROM dbpcm_warehouse.earning_category FINAL
+          WHERE category_name = {timeoff_category})
+     GROUP BY employee_code,
+              formatDateTime(toStartOfMonth(punch_date), '%Y-%m'))
+  SELECT COALESCE(r.employee_code, t.employee_code) AS "Employee Code",
+         max(e.employee_name) AS "Employee Name",
+         COALESCE(r.month, t.month) AS "Month",
+         round(COALESCE(r.tor_hours, 0), 2) AS "Approved Timeoff Hours",
+         round(COALESCE(t.te_hours, 0), 2) AS "Paid Leave Hours",
+         round(COALESCE(r.tor_hours, 0) - COALESCE(t.te_hours, 0), 2) AS "Difference",
+         round(abs(COALESCE(r.tor_hours, 0) - COALESCE(t.te_hours, 0)) / nullIf(COALESCE(t.te_hours, 0), 0) * 100, 2) AS "Pct Diff"
+  FROM tor_monthly r
+  FULL OUTER JOIN te_monthly t ON t.employee_code = r.employee_code
+  AND t.month = r.month
+  LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = COALESCE(r.employee_code, t.employee_code)
+  GROUP BY COALESCE(r.employee_code, t.employee_code),
+           COALESCE(r.month, t.month),
+           r.tor_hours,
+           t.te_hours
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN abs(COALESCE(r.tor_hours, 0) - COALESCE(t.te_hours, 0))
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN abs(COALESCE(r.tor_hours, 0) - COALESCE(t.te_hours, 0))
+                     END ASC
+  LIMIT {top_n}
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: top_n
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+- name: timeoff_category
+  type: entity
+  required: true
+  binds_to: dbpcm_warehouse.earning_category.category_name
+  description: Resolve the requested timeoff concept to this client's category label; do not invent earning codes.
+slots_summary: win, top_n, order_direction, timeoff_category
+uses:
+- dbpcm_warehouse.time_off_request.employee_code
+- dbpcm_warehouse.time_off_request.request_date
+- dbpcm_warehouse.time_off_request.hours
+- dbpcm_warehouse.time_off_request.earn_code
+- dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.total_earning.employee_code
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.earning_category.earn_code
+- dbpcm_warehouse.earning_category.category_name

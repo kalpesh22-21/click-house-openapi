@@ -1,0 +1,41 @@
+id: bp-card-vs-personal-split
+intent: Corporate card versus personal expense split for a payment period
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT expense_type AS "Expense Type",
+         round(toFloat64(SUM(amount_approved)), 2) AS "Approved Amount"
+  FROM dbpcm_warehouse.expense
+  WHERE expense_type IN ('Personal',
+                         'Corporate Card')
+    AND expense_status IN ('Approved',
+                           'Paid',
+                           'Marked as Paid')
+    AND expense_paid_date = {period}
+  GROUP BY expense_type
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Approved Amount"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Approved Amount"
+                     END ASC
+slots:
+- name: period
+  type: period
+  required: true
+  binds_to: dbpcm_warehouse.expense.expense_paid_date
+  temporal_type: date
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, order_direction
+uses:
+- dbpcm_warehouse.expense.expense_type
+- dbpcm_warehouse.expense.amount_approved
+- dbpcm_warehouse.expense.expense_status
+- dbpcm_warehouse.expense.expense_paid_date

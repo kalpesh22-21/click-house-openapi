@@ -33,11 +33,6 @@ def mysql_source(entry: dict, shard: str, identity: tuple[str, str, str], settin
         schema = validate_identifier(settings.trino_mysql_schema)
         directory = Path(settings.trino_mysql_sources_dir)
         path = directory / f"{table}.txt"
-        # Public renames do not require replacing deployed private templates.
-        if not path.is_file():
-            from app.table_names import physical_table_name
-
-            path = directory / f"{physical_table_name(table)}.txt"
         # Catalog spelling is labor_allocation; the supplied private file uses labour.
         if table == "labor_allocation" and not path.is_file():
             path = directory / "labour_allocation.txt"
@@ -102,9 +97,7 @@ def clickhouse_sql(entry: dict, settings: Settings) -> str:
         key = "`final`" if name == "final" else name
         literal = exp.convert(value).sql(dialect="clickhouse")
         assignments.append(f"{key} = {literal}")
-    from app.table_names import physical_table_name
-
-    database, table = validate_identifier(entry["database"]), validate_identifier(physical_table_name(entry["table"]))
+    database, table = validate_identifier(entry["database"]), validate_identifier(entry["table"])
     return f"SELECT * FROM `{database}`.`{table}` SETTINGS " + ", ".join(assignments)
 
 

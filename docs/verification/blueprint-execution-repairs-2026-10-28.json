@@ -1,0 +1,5968 @@
+{
+  "date": "2026-10-28",
+  "scope": "Local synthetic fixtures; actual API validation/Trino routing; agent slot renderer and reference expansion; ordered DAG walk with scratch materialization. Not a full conversational agent run or production-data certification.",
+  "blueprints": 188,
+  "archived_unavailable_source_fields": 5,
+  "slot_variants": 810,
+  "node_executions": 824,
+  "all_passed": true,
+  "original_failures_resolved": [
+    "bp-punch-source-audit",
+    "bp-change-velocity-spikes",
+    "bp-supervisor-chain-depth",
+    "bp-break-gap-median",
+    "bp-timeoff-vs-paid-leave-tieout",
+    "bp-payroll-codes-unmapped",
+    "bp-expense-cycle-time",
+    "bp-avg-shift-length",
+    "bp-expense-senders-no-punches",
+    "bp-ot-two-basis-tieout",
+    "bp-category-mom-volatility",
+    "bp-top-codes-in-category",
+    "bp-payroll-line-counts",
+    "bp-regular-vs-premium-hours-ratio",
+    "bp-consecutive-day-streaks",
+    "bp-salary-histogram",
+    "bp-new-hire-90d-attrition",
+    "bp-weekend-work-share",
+    "bp-employee-record-dq-flags",
+    "bp-pending-timeoff-queue",
+    "bp-timecard-vs-register-recon",
+    "bp-workforce-kpi-bundle",
+    "bp-headcount-monthly-trend",
+    "bp-weekly-overtime-hours",
+    "bp-payroll-setup-gap-scorecard",
+    "bp-headcount-growth-rate"
+  ],
+  "native_clickhouse_default_blueprints_passed": 188,
+  "regression_tests_passed": 922,
+  "function_parity_checks": [
+    {
+      "sql": "SELECT dateDiff('second',toDateTime64('2024-02-29 10:59:59.9999999',9),toDateTime64('2024-02-29 11:00:00',9)) AS result",
+      "passed": true,
+      "expected": 1,
+      "actual": 1
+    },
+    {
+      "sql": "SELECT toUInt32(-1) AS result",
+      "passed": true,
+      "expected": 4294967295,
+      "actual": 4294967295
+    },
+    {
+      "sql": "SELECT toUInt32(4294967296) AS result",
+      "passed": true,
+      "expected": 0,
+      "actual": 0
+    },
+    {
+      "sql": "SELECT toUInt32(9223372036854775807) AS result",
+      "passed": true,
+      "expected": 4294967295,
+      "actual": 4294967295
+    },
+    {
+      "sql": "SELECT toUInt32(-9223372036854775808) AS result",
+      "passed": true,
+      "expected": 0,
+      "actual": 0
+    },
+    {
+      "sql": "SELECT toUInt32(CAST(NULL AS Nullable(Int64))) AS result",
+      "passed": true,
+      "expected": null,
+      "actual": null
+    },
+    {
+      "sql": "SELECT dateDiff('hour',toDateTime64('2024-02-29 10:59:59.9',6),toDateTime64('2024-02-29 11:00:00.1',6)) AS result",
+      "passed": true,
+      "expected": 1,
+      "actual": 1
+    },
+    {
+      "sql": "SELECT dateDiff('hour',toDateTime64('2024-02-29 11:00:00.1',6),toDateTime64('2024-02-29 10:59:59.9',6)) AS result",
+      "passed": true,
+      "expected": -1,
+      "actual": -1
+    },
+    {
+      "sql": "SELECT dateDiff('minute',toDateTime64('2024-02-29 10:59:59.9',6),toDateTime64('2024-02-29 11:00:00.1',6)) AS result",
+      "passed": true,
+      "expected": 1,
+      "actual": 1
+    },
+    {
+      "sql": "SELECT dateDiff('minute',toDateTime64('2024-02-29 11:00:00.1',6),toDateTime64('2024-02-29 10:59:59.9',6)) AS result",
+      "passed": true,
+      "expected": -1,
+      "actual": -1
+    },
+    {
+      "sql": "SELECT dateDiff('second',toDateTime64('2024-02-29 10:59:59.9',6),toDateTime64('2024-02-29 11:00:00.1',6)) AS result",
+      "passed": true,
+      "expected": 1,
+      "actual": 1
+    },
+    {
+      "sql": "SELECT dateDiff('second',toDateTime64('2024-02-29 11:00:00.1',6),toDateTime64('2024-02-29 10:59:59.9',6)) AS result",
+      "passed": true,
+      "expected": -1,
+      "actual": -1
+    },
+    {
+      "sql": "SELECT range(0) AS result",
+      "passed": true,
+      "expected": [],
+      "actual": []
+    },
+    {
+      "sql": "SELECT range(3) AS result",
+      "passed": true,
+      "expected": [
+        0,
+        1,
+        2
+      ],
+      "actual": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "sql": "SELECT range(3,3) AS result",
+      "passed": true,
+      "expected": [],
+      "actual": []
+    },
+    {
+      "sql": "SELECT range(5,2) AS result",
+      "passed": true,
+      "expected": [],
+      "actual": []
+    },
+    {
+      "sql": "SELECT range(-3,2) AS result",
+      "passed": true,
+      "expected": [
+        -3,
+        -2,
+        -1,
+        0,
+        1
+      ],
+      "actual": [
+        -3,
+        -2,
+        -1,
+        0,
+        1
+      ]
+    },
+    {
+      "sql": "SELECT range(0,toInt32(5)) AS result",
+      "passed": true,
+      "expected": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "actual": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "sql": "SELECT uniqExact(a,b) AS result FROM (SELECT CAST(1 AS Nullable(Int64)) a, CAST(2 AS Nullable(Int64)) b UNION ALL SELECT 1,2 UNION ALL SELECT 1,NULL UNION ALL SELECT NULL,2 UNION ALL SELECT 3,4)",
+      "passed": true,
+      "expected": 2,
+      "actual": 2
+    },
+    {
+      "sql": "SELECT uniqExact(a,b) AS result FROM (SELECT CAST(1 AS Nullable(Int64)) a, CAST(2 AS Nullable(Int64)) b UNION ALL SELECT 1,2 UNION ALL SELECT 1,NULL UNION ALL SELECT NULL,2 UNION ALL SELECT 3,4) WHERE 0=1",
+      "passed": true,
+      "expected": 0,
+      "actual": 0
+    },
+    {
+      "sql": "SELECT stddevPop(a) AS result FROM (SELECT CAST(1 AS Nullable(Int64)) a, CAST(2 AS Nullable(Int64)) b UNION ALL SELECT 1,2 UNION ALL SELECT 1,NULL UNION ALL SELECT NULL,2 UNION ALL SELECT 3,4)",
+      "passed": true,
+      "expected": 0.8660254037844386,
+      "actual": 0.8660254037844386
+    },
+    {
+      "sql": "SELECT stddevPop(a) AS result FROM (SELECT CAST(1 AS Nullable(Int64)) a, CAST(2 AS Nullable(Int64)) b UNION ALL SELECT 1,2 UNION ALL SELECT 1,NULL UNION ALL SELECT NULL,2 UNION ALL SELECT 3,4) WHERE 0=1",
+      "passed": true,
+      "expected": null,
+      "actual": null
+    },
+    {
+      "sql": "SELECT toDate32('2026-10-28') - toIntervalMonth(5) AS result",
+      "passed": true,
+      "expected": "2026-05-28",
+      "actual": "2026-05-28"
+    },
+    {
+      "sql": "SELECT toDate32('2024-03-31') - toIntervalMonth(1) AS result",
+      "passed": true,
+      "expected": "2024-02-29",
+      "actual": "2024-02-29"
+    },
+    {
+      "sql": "SELECT stddevPop(3) AS result WHERE 0=1",
+      "passed": true,
+      "expected": null,
+      "actual": null
+    }
+  ],
+  "numeric_checks": [
+    {
+      "blueprint": "bp-category-mom-volatility",
+      "rows": [
+        [
+          "Overtime",
+          "240.00",
+          "160.00",
+          "80.00",
+          50.0
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "blueprint": "bp-regular-vs-premium-hours-ratio",
+      "rows": [
+        [
+          "2026-09",
+          "8.000000",
+          "12.000000",
+          40.0
+        ],
+        [
+          "2026-08",
+          "0.000000",
+          "8.000000",
+          0.0
+        ]
+      ],
+      "passed": true
+    }
+  ],
+  "composites": {
+    "populated_paycheck_comparison": {
+      "passed": true,
+      "amount_a": 9,
+      "amount_b": 9,
+      "delta": 0
+    },
+    "empty_paycheck_comparison": {
+      "native": {
+        "passed": true,
+        "node_count": 3,
+        "row_counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      "trino": {
+        "passed": true,
+        "node_count": 3,
+        "row_counts": [
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  },
+  "infrastructure_notes": [
+    "First long local run was terminated by Docker OOM; second run exhausted the Java heap. These connection failures were not counted as SQL failures or successes.",
+    "Completed remaining cases in batches with coordinator restarts; no query-stage limit was raised. This does not certify sustained-load memory stability.",
+    "Nonempty fact checks use correctly keyed synthetic ReplacingMergeTree fixtures; verified both empty and populated date windows."
+  ],
+  "variants": [
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 3.481,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.692,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.813,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.709,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 1.061,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.72,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.711,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.748,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.733,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.755,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.729,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "group_by=department",
+      "nodes": 1,
+      "seconds": 0.713,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "group_by=plan",
+      "nodes": 1,
+      "seconds": 1.069,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.698,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-balance-summary",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.687,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-code-dictionary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.152,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-code-dictionary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.163,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-code-dictionary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.131,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.83,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.857,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.796,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.728,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.739,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.726,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.726,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.707,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.74,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.744,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.74,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "event_status=Approved",
+      "nodes": 1,
+      "seconds": 0.75,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "event_status=Calendar Only",
+      "nodes": 1,
+      "seconds": 0.727,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "event_status=Denied",
+      "nodes": 1,
+      "seconds": 0.758,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "event_status=Removed",
+      "nodes": 1,
+      "seconds": 0.726,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "event_status=Requested",
+      "nodes": 1,
+      "seconds": 0.741,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "group_by=department",
+      "nodes": 1,
+      "seconds": 0.783,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "group_by=department_status",
+      "nodes": 1,
+      "seconds": 0.793,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "group_by=event_type",
+      "nodes": 1,
+      "seconds": 0.756,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "group_by=month",
+      "nodes": 1,
+      "seconds": 0.747,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "group_by=status",
+      "nodes": 1,
+      "seconds": 0.846,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.693,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-accrual-event-summary",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.717,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.652,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.653,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.7,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "employee_status=All",
+      "nodes": 1,
+      "seconds": 0.69,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.671,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.683,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.645,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.659,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.732,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.605,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.665,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.896,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.65,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-active-headcount-by-department",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.672,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-adjustment-line-volume",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.079,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-adjustment-line-volume",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.334,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-adjustment-line-volume",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.072,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-age-band-distribution",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.612,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-age-band-distribution",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.691,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-approved-timeoff-hours",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.032,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-approved-timeoff-hours",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.027,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-approved-timeoff-hours",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.238,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-approved-timeoff-hours",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 1.341,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-approved-timeoff-ranking",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.777,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-approved-timeoff-ranking",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.823,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-approved-timeoff-ranking",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.798,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-annual-salary-by-status",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.59,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-annual-salary-by-status",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.574,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-annual-salary-by-status",
+      "variant": "employee_status=All",
+      "nodes": 1,
+      "seconds": 0.557,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-annual-salary-by-status",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.608,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-annual-salary-by-status",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.571,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-annual-salary-by-status",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.611,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-annual-salary-by-status",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.597,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-annual-salary-by-status",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.588,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-annual-salary-by-status",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.594,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-annual-salary-by-status",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.576,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-annual-salary-by-status",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.558,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-salary-by-department",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.64,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-salary-by-department",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.627,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-salary-by-department",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.673,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-salary-by-department",
+      "variant": "employee_status=All",
+      "nodes": 1,
+      "seconds": 0.619,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-salary-by-department",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.639,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-salary-by-department",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.665,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-salary-by-department",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.665,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-salary-by-department",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.642,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-salary-by-department",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.647,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-salary-by-department",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.65,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-salary-by-department",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.661,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-average-salary-by-department",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.634,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-avg-request-size",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.132,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-avg-request-size",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.143,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-avg-request-size",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.187,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-avg-shift-length",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.722,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-avg-shift-length",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.078,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-avg-shift-length",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.686,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-break-gap-median",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.09,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-break-gap-median",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.101,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-break-gap-median",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.092,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-card-vs-personal-split",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.562,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-card-vs-personal-split",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.576,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-card-vs-personal-split",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.561,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-by-department",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.611,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-by-department",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.657,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-by-department",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.707,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-by-department",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.632,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-earnings-per-employee",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.612,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-earnings-per-employee",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.663,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-earnings-per-employee",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.626,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-hours-monthly",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.078,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-hours-monthly",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.119,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-hours-monthly",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.078,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-mom-volatility",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.11,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-mom-volatility",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.141,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-mom-volatility",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.107,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-spend-over-threshold",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.621,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-spend-over-threshold",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.578,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-category-spend-over-threshold",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.561,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-change-actor-mix",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.131,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-change-actor-mix",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.146,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-change-actor-mix",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.134,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-change-velocity-spikes",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.079,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-change-velocity-spikes",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.071,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-change-velocity-spikes",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.08,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-clock-time-profile",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.626,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-clock-time-profile",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.622,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-clock-time-profile",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.596,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-commission-by-employee",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.572,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-commission-by-employee",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.6,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-commission-by-employee",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.59,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-comp-range-exceptions",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.608,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-comp-range-exceptions",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.593,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-comp-range-exceptions",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.592,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-comp-range-exceptions",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.613,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compare-employee-check-detail-two-periods",
+      "variant": "defaults",
+      "nodes": 3,
+      "seconds": 1.797,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compare-employee-paychecks-two-periods",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.065,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compare-employee-paychecks-two-periods",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.069,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compare-employee-paychecks-two-periods",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.067,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.694,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.663,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.681,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "employee_status=All",
+      "nodes": 1,
+      "seconds": 0.647,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.677,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.638,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.687,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.722,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.678,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.691,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.662,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.646,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.642,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-compensation-ranking",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.644,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-consecutive-day-streaks",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.931,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-consecutive-day-streaks",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.811,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-consecutive-day-streaks",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.003,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-deduction-breakdown",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.063,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-deduction-breakdown",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.055,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-deduction-breakdown",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.065,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-deduction-breakdown",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.072,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-denied-expenses",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.583,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-denied-expenses",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.598,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-denied-expenses",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.631,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-denied-expenses",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.552,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-directory",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.657,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-directory",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.573,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-directory",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.559,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-label-audit",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.57,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-label-audit",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.606,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-label-audit",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.593,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-ot-share",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.241,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-ot-share",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.313,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-ot-share",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.343,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-ot-share",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 1.343,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-scorecard",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.772,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-scorecard",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.841,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-scorecard",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.718,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-scorecard",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.782,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-turnover-rate",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.603,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-turnover-rate",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.658,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-department-turnover-rate",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.635,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-departments-above-company-average-salary",
+      "variant": "all_optional",
+      "nodes": 2,
+      "seconds": 1.264,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-departments-above-company-average-salary",
+      "variant": "defaults",
+      "nodes": 2,
+      "seconds": 1.185,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-departments-above-company-average-salary",
+      "variant": "employee_status=All",
+      "nodes": 2,
+      "seconds": 1.467,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-departments-above-company-average-salary",
+      "variant": "employee_status=Deceased",
+      "nodes": 2,
+      "seconds": 1.266,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-departments-above-company-average-salary",
+      "variant": "employee_status=Inactive",
+      "nodes": 2,
+      "seconds": 1.238,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-departments-above-company-average-salary",
+      "variant": "employee_status=Not Hired",
+      "nodes": 2,
+      "seconds": 1.436,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-departments-above-company-average-salary",
+      "variant": "employee_status=On Leave",
+      "nodes": 2,
+      "seconds": 1.39,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-departments-above-company-average-salary",
+      "variant": "employee_status=Prehire",
+      "nodes": 2,
+      "seconds": 1.397,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-departments-above-company-average-salary",
+      "variant": "employee_status=Retired",
+      "nodes": 2,
+      "seconds": 1.311,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-departments-above-company-average-salary",
+      "variant": "employee_status=Terminated",
+      "nodes": 2,
+      "seconds": 1.273,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-departments-above-company-average-salary",
+      "variant": "employee_status=Unknown",
+      "nodes": 2,
+      "seconds": 1.256,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-dol-status-per-work-location",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.629,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-dol-status-per-work-location",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.784,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-dol-status-per-work-location",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.737,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-dol-status-per-work-location",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.616,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-duplicate-expense-flag-list",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.205,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-duplicate-expense-flag-list",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.248,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-duplicate-expense-flag-list",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.222,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earning-category-dictionary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.036,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earning-category-dictionary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.04,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earning-category-dictionary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.035,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-category",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.106,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-department-via-scratch-join",
+      "variant": "defaults",
+      "nodes": 2,
+      "seconds": 0.758,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-dol-status",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.804,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-dol-status",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.859,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-dol-status",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.856,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-dol-status",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.849,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-pay-basis",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.586,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-pay-basis",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.652,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-pay-basis",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.591,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-pay-basis",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.627,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-work-state",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.657,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-work-state",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.734,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-work-state",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.636,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-by-work-state",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.677,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-category-mix",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.094,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-category-mix",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.107,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-category-mix",
+      "variant": "metric=hours",
+      "nodes": 1,
+      "seconds": 0.092,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-category-mix",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.093,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-category-trend",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.067,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-category-trend",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.106,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-category-trend",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.068,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-monthly-trend",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.098,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-monthly-trend",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.133,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-monthly-trend",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.094,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-monthly-trend",
+      "variant": "register=NETPAYDIST",
+      "nodes": 1,
+      "seconds": 0.122,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-earnings-quarter-to-date",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.056,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-effective-mileage-rate",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.017,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-effective-mileage-rate",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.827,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-effective-mileage-rate",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.847,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-benefits-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.043,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-benefits-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.045,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-benefits-summary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.043,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-benefits-summary",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.043,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-change-timeline",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.037,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-change-timeline",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.039,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-change-timeline",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.037,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-change-volume",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.046,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-change-volume",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.052,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-change-volume",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.046,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-check-detail-for-period",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.579,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-coverage-matrix",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.634,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-coverage-matrix",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.647,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-coverage-matrix",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.664,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.875,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "date_basis=most_recent_hire",
+      "nodes": 1,
+      "seconds": 0.896,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "date_basis=termination",
+      "nodes": 1,
+      "seconds": 0.941,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.838,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 1.011,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.857,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.939,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.969,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.992,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.962,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.96,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.982,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.962,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "group_by=department",
+      "nodes": 1,
+      "seconds": 0.868,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "group_by=month",
+      "nodes": 1,
+      "seconds": 0.845,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "group_by=status",
+      "nodes": 1,
+      "seconds": 0.96,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.921,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-date-summary",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.948,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-day-clock-span",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.639,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-day-clock-span",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.626,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-day-clock-span",
+      "variant": "in_type=IB",
+      "nodes": 1,
+      "seconds": 0.636,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-day-clock-span",
+      "variant": "in_type=ID",
+      "nodes": 1,
+      "seconds": 0.601,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-day-clock-span",
+      "variant": "in_type=IL",
+      "nodes": 1,
+      "seconds": 0.615,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-day-clock-span",
+      "variant": "in_type=IX",
+      "nodes": 1,
+      "seconds": 0.639,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-day-clock-span",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.593,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-day-clock-span",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.624,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-day-clock-span",
+      "variant": "out_type=OB",
+      "nodes": 1,
+      "seconds": 0.624,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-day-clock-span",
+      "variant": "out_type=OD",
+      "nodes": 1,
+      "seconds": 0.607,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-day-clock-span",
+      "variant": "out_type=OL",
+      "nodes": 1,
+      "seconds": 0.613,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-day-clock-span",
+      "variant": "out_type=OX",
+      "nodes": 1,
+      "seconds": 0.618,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-directory",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.338,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-directory",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.621,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-directory",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.654,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-directory",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.576,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-record-dq-flags",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.729,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-record-dq-flags",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.799,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-record-dq-flags",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.714,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-record-dq-flags",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.73,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.673,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.707,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.662,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "employee_status=All",
+      "nodes": 1,
+      "seconds": 0.662,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.703,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.672,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.655,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.666,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.645,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.616,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.654,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.611,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "group_by=department",
+      "nodes": 1,
+      "seconds": 0.661,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "group_by=status",
+      "nodes": 1,
+      "seconds": 0.709,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.635,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-summary",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.617,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tax-withheld",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.053,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tax-withheld",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.05,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tax-withheld",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.042,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tax-withheld",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.043,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.719,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.78,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.637,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "employee_status=All",
+      "nodes": 1,
+      "seconds": 0.626,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.689,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.658,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.655,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.694,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.648,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.654,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.684,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.663,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "group_by=department",
+      "nodes": 1,
+      "seconds": 0.699,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "group_by=status",
+      "nodes": 1,
+      "seconds": 0.75,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "hire_basis=most_recent_hire",
+      "nodes": 1,
+      "seconds": 0.764,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.645,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employee-tenure-summary",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.648,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employees-in-inactive-seats",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.078,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employees-in-inactive-seats",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 2.947,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employees-in-inactive-seats",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.843,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employees-in-inactive-seats",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.895,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employer-tax-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.051,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employer-tax-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.062,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employer-tax-summary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.056,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-employer-tax-summary",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.049,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-approval-backlog",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.582,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-approval-backlog",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.742,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-approval-backlog",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.589,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-approval-trim",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.578,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-approval-trim",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.571,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-approval-trim",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.576,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-by-account-category",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.586,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-by-account-category",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.618,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-by-account-category",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.598,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-by-policy",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.641,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-by-policy",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.596,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-by-policy",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.61,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-concept-spend",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.685,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-concept-spend",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.739,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-concept-spend",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.61,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-cycle-time",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.185,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-cycle-time",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.232,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-cycle-time",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.208,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-line-size-distribution",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.672,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-line-size-distribution",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.813,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-line-size-distribution",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.625,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-monthly-trend",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.11,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-monthly-trend",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.197,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-monthly-trend",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.257,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-payroll-recon",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.724,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-payroll-recon",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.859,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-payroll-recon",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.694,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-payroll-recon",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.669,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-per-capita",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.081,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-per-capita",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.104,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-per-capita",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.145,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-senders-no-punches",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.26,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-senders-no-punches",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.304,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expense-senders-no-punches",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 4.507,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expenses-unreconciled-to-payroll",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.682,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expenses-unreconciled-to-payroll",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.691,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-expenses-unreconciled-to-payroll",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.663,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-fica-medicare-totals",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.047,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-fica-medicare-totals",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.055,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-fica-medicare-totals",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.044,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-fica-medicare-totals",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.044,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-future-dated-position-changes",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.889,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-future-dated-position-changes",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.907,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-future-dated-position-changes",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.903,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-future-hire-roster",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.609,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-future-hire-roster",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.609,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-future-hire-roster",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.574,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-future-termination-roster",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.662,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-future-termination-roster",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.659,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-future-termination-roster",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.634,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-gross-earnings-period-compare",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.576,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-gross-earnings-period-compare",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.597,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-gross-earnings-period-compare",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.613,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-gross-earnings-period-compare",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.583,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-gross-earnings-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.054,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-gross-earnings-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.065,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-gross-wages-date-window",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.061,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-dol-status",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.738,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-dol-status",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.824,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-dol-status",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.879,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-dol-status",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.747,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-hire-era",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.592,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-hire-era",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.625,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-hire-era",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.617,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-pay-frequency",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.625,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-pay-frequency",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.656,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-pay-frequency",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.714,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-pay-frequency",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.585,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-union",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.633,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-union",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.642,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-union",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.63,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-work-city-country",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.926,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-work-city-country",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.095,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-work-city-country",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.823,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-work-city-country",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.828,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-works-in-state",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.614,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-works-in-state",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.631,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-works-in-state",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.607,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-by-works-in-state",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.623,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-growth-rate",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.131,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-growth-rate",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.279,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-growth-rate",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.168,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-monthly-trend",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.297,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-monthly-trend",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.395,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-headcount-monthly-trend",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.237,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-hires-in-range",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.571,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-hires-per-month",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.199,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-hires-projection",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.152,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-holiday-work-audit",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.044,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-holiday-work-audit",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.06,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-holiday-work-audit",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.097,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-inactive-supervisor-audit",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.212,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-inactive-supervisor-audit",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.206,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-inactive-supervisor-audit",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.336,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-inactive-without-leave-start",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.763,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-inactive-without-leave-start",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.841,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-inactive-without-leave-start",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.736,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-inactive-without-leave-start",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.748,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-coverage",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.97,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-coverage",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.25,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-coverage",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.021,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-dictionary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.711,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-dictionary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.7,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-dictionary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.681,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-resolution",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.69,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-resolution",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.694,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-resolution",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.66,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-resolution",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.713,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-rollup",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.76,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-rollup",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.719,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-labor-allocation-rollup",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.703,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.752,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.776,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.791,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "employee_status=All",
+      "nodes": 1,
+      "seconds": 0.726,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.786,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.797,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.868,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.852,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.818,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.757,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.791,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.803,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.773,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-latest-hired-employees",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.809,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-long-shift-days",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.223,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-long-shift-days",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 3.224,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-long-shift-days",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.643,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-longest-tenured-employees",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.789,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-manager-span-of-control",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.609,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-manager-span-of-control",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.739,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-manager-span-of-control",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.661,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-median-annual-salary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.259,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-median-annual-salary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.166,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-median-hourly-rate-by-state-union",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.842,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-median-hourly-rate-by-state-union",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.793,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-median-hourly-rate-by-state-union",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.706,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-median-hourly-rate-by-state-union",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.7,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-median-salary-by-position-level",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.957,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-median-salary-by-position-level",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.97,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-median-salary-by-position-level",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.954,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-mileage-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.652,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-missing-emergency-contacts",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.584,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-missing-emergency-contacts",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.565,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-missing-emergency-contacts",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.576,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-missing-emergency-contacts",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.588,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-missing-receipts",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.495,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-missing-receipts",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.498,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-missing-receipts",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.512,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-missing-supervisor-exceptions",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.585,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-missing-supervisor-exceptions",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.572,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-missing-supervisor-exceptions",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.582,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-missing-supervisor-exceptions",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.572,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-name-identity-audit",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.711,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-name-identity-audit",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.744,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-name-identity-audit",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.686,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-name-identity-audit",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.674,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-negative-paycheck-employees",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.597,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-negative-paycheck-employees",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.626,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-negative-paycheck-employees",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.614,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-negative-pto-balances",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.726,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-net-pay-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.053,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-net-pay-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.061,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-new-hire-90d-attrition",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.893,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-night-shift-share",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.369,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-night-shift-share",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.203,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-night-shift-share",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.323,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-orphan-register-codes",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.685,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-orphan-register-codes",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.746,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-orphan-register-codes",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.691,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-orphan-register-codes",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.744,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-ot-two-basis-tieout",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.72,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-ot-two-basis-tieout",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.867,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-ot-two-basis-tieout",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.738,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-overtime-by-department",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.129,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-overtime-hours-dollars",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.696,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-overtime-hours-dollars",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.688,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-overtime-hours-dollars",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.672,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-paid-hours-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.572,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-paid-hours-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.628,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-pairs-per-day-distribution",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.055,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-pairs-per-day-distribution",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.06,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-pairs-per-day-distribution",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.057,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-pay-timing-exceptions",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.633,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-pay-timing-exceptions",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.576,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-pay-timing-exceptions",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.668,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-pay-timing-exceptions",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.587,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payout-request-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.123,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-codes-unmapped",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.075,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-codes-unmapped",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.065,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-codes-unmapped",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.064,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-codes-unmapped",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.064,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-duplicate-line-audit",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.062,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-duplicate-line-audit",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.082,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-duplicate-line-audit",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.051,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-duplicate-line-audit",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.051,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-line-counts",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.048,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-line-counts",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.171,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-setup-gap-scorecard",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.665,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-setup-gap-scorecard",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.651,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-setup-gap-scorecard",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.626,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-setup-gap-scorecard",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.661,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.736,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.717,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.679,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.696,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.673,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.699,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.71,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.694,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.698,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.721,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.689,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "group_by=department",
+      "nodes": 1,
+      "seconds": 0.688,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "group_by=month",
+      "nodes": 1,
+      "seconds": 0.688,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.687,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.69,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "register_type=DDUCT",
+      "nodes": 1,
+      "seconds": 0.684,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "register_type=EEBEN",
+      "nodes": 1,
+      "seconds": 0.691,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "register_type=EETAX",
+      "nodes": 1,
+      "seconds": 0.665,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "register_type=ERTAX",
+      "nodes": 1,
+      "seconds": 0.678,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-payroll-summary",
+      "variant": "register_type=NETPAYDIST",
+      "nodes": 1,
+      "seconds": 0.646,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-pending-timeoff-queue",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.71,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-pending-timeoff-queue",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.75,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-pending-timeoff-queue",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.755,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-pending-timeoff-queue",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.653,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-placeholder-category-audit",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.122,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-position-change-activity",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.74,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-position-change-activity",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.701,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-position-change-activity",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.672,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-position-change-activity",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.815,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-post-termination-accrual-audit",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.691,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-post-termination-accrual-audit",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.702,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-post-termination-accrual-audit",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.729,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-post-termination-changes",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.86,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-post-termination-changes",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.661,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-post-termination-changes",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.671,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-post-termination-pay-audit",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.676,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-post-termination-pay-audit",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.689,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-post-termination-pay-audit",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.688,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-anomalies",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.225,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-anomalies",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.463,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-anomalies",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.151,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-coverage-gap",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.682,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.064,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.068,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "group_by=day",
+      "nodes": 1,
+      "seconds": 0.077,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "group_by=department",
+      "nodes": 1,
+      "seconds": 0.056,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "group_by=employee",
+      "nodes": 1,
+      "seconds": 0.057,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "group_by=hours_type",
+      "nodes": 1,
+      "seconds": 0.059,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "group_by=month",
+      "nodes": 1,
+      "seconds": 0.07,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "in_type=IB",
+      "nodes": 1,
+      "seconds": 0.055,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "in_type=ID",
+      "nodes": 1,
+      "seconds": 0.057,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "in_type=IL",
+      "nodes": 1,
+      "seconds": 0.056,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "in_type=IX",
+      "nodes": 1,
+      "seconds": 0.057,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.059,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.058,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "out_type=OB",
+      "nodes": 1,
+      "seconds": 0.072,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "out_type=OD",
+      "nodes": 1,
+      "seconds": 0.058,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "out_type=OL",
+      "nodes": 1,
+      "seconds": 0.056,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-pair-summary",
+      "variant": "out_type=OX",
+      "nodes": 1,
+      "seconds": 0.056,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-plus-timeoff-overlap",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.714,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-plus-timeoff-overlap",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.874,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-plus-timeoff-overlap",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.884,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-source-audit",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.044,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-source-audit",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.045,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-source-audit",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.044,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-type-mix",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.043,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-type-mix",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.046,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-punch-type-mix",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.043,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-quarterly-terminations-with-top-reasons",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.64,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-quarterly-terminations-with-top-reasons",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.667,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-quarterly-terminations-with-top-reasons",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.673,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-records-per-status",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.57,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-records-per-status",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.58,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-records-per-status",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.621,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-records-per-status",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.641,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-register-type-breakdown",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.881,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-register-type-breakdown",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.301,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-register-type-breakdown",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.256,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-register-type-breakdown",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.721,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-regular-vs-premium-hours-ratio",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.088,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-regular-vs-premium-hours-ratio",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.087,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-regular-vs-premium-hours-ratio",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.076,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-rehired-employees",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.019,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-rehired-employees",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.905,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-rehired-employees",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.029,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-retroactive-change-share",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.061,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-retroactive-change-share",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.064,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-retroactive-change-share",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.062,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.979,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.864,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.777,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "employee_status=All",
+      "nodes": 1,
+      "seconds": 0.81,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.779,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.899,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.792,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.793,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.811,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.778,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.82,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.817,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.78,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.88,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-distribution",
+      "variant": "salary_population=positive",
+      "nodes": 1,
+      "seconds": 0.86,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.689,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.641,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.622,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "employee_status=All",
+      "nodes": 1,
+      "seconds": 0.657,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.657,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.643,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.633,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.702,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.681,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.713,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.673,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.647,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "group_by=department",
+      "nodes": 1,
+      "seconds": 0.639,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "group_by=status",
+      "nodes": 1,
+      "seconds": 0.676,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.641,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.649,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-exact-median",
+      "variant": "salary_population=positive",
+      "nodes": 1,
+      "seconds": 0.655,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-histogram",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.993,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.831,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "comparison=at_least",
+      "nodes": 1,
+      "seconds": 0.799,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "comparison=below",
+      "nodes": 1,
+      "seconds": 0.819,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "comparison=equal",
+      "nodes": 1,
+      "seconds": 0.856,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.797,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.858,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "employee_status=All",
+      "nodes": 1,
+      "seconds": 0.854,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.815,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.809,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.843,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.808,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.828,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.817,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 0.809,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-count",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.857,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.679,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "comparison=at_least",
+      "nodes": 1,
+      "seconds": 0.74,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "comparison=below",
+      "nodes": 1,
+      "seconds": 0.673,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "comparison=equal",
+      "nodes": 1,
+      "seconds": 0.685,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.674,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 0.67,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "employee_status=All",
+      "nodes": 1,
+      "seconds": 0.81,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 0.671,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.669,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 1.012,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 1.188,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.935,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.685,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 3.072,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 0.93,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.865,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-salary-threshold-directory",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.874,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-shift-differential-spend",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.076,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-supervision-anomalies",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.301,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-supervision-anomalies",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.311,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-supervision-anomalies",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.275,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-supervisor-chain-depth",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.588,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-supervisor-chain-depth",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.584,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-supervisor-chain-depth",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.588,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-tenure-band-distribution",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.798,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-tenure-band-distribution",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.984,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.818,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.629,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "employee_status=Active",
+      "nodes": 1,
+      "seconds": 1.095,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "employee_status=All",
+      "nodes": 1,
+      "seconds": 0.58,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "employee_status=Deceased",
+      "nodes": 1,
+      "seconds": 1.064,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "employee_status=Inactive",
+      "nodes": 1,
+      "seconds": 0.717,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "employee_status=Not Hired",
+      "nodes": 1,
+      "seconds": 0.742,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "employee_status=On Leave",
+      "nodes": 1,
+      "seconds": 0.698,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "employee_status=Prehire",
+      "nodes": 1,
+      "seconds": 0.766,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "employee_status=Retired",
+      "nodes": 1,
+      "seconds": 0.8,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "employee_status=Terminated",
+      "nodes": 1,
+      "seconds": 1.718,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "employee_status=Unknown",
+      "nodes": 1,
+      "seconds": 2.141,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.619,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-termination-family",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.676,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-all-history",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.074,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-all-history",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.104,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-all-history",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.068,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-all-history",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.066,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-summary",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.077,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-summary",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.063,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-summary",
+      "variant": "group_by=day",
+      "nodes": 1,
+      "seconds": 0.058,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-summary",
+      "variant": "group_by=department",
+      "nodes": 1,
+      "seconds": 0.055,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-summary",
+      "variant": "group_by=earning_code",
+      "nodes": 1,
+      "seconds": 0.057,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-summary",
+      "variant": "group_by=employee",
+      "nodes": 1,
+      "seconds": 0.057,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-summary",
+      "variant": "group_by=month",
+      "nodes": 1,
+      "seconds": 0.061,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-summary",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.056,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-earnings-summary",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.065,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-vs-register-recon",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.693,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-vs-register-recon",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.698,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timecard-vs-register-recon",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.679,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-by-leave-type",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.125,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-by-leave-type",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.125,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-by-leave-type",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.131,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-by-leave-type",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.113,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-denial-rate",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.848,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-denial-rate",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.87,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-denial-rate",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.759,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-funnel",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.129,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-funnel",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.103,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-funnel",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.112,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-lead-time",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.118,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-lead-time",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.12,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-lead-time",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.122,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-seasonality",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.145,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-seasonality",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.156,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-seasonality",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.188,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-vs-paid-leave-tieout",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.77,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-vs-paid-leave-tieout",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.7,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-vs-paid-leave-tieout",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.746,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-withdrawal-rate",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.718,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-withdrawal-rate",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.64,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-timeoff-withdrawal-rate",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.29,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-changed-fields",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.04,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-changed-fields",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.046,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-changed-fields",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.04,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-codes-in-category",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.062,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-codes-in-category",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.063,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-codes-in-category",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.082,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-expense-spenders",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 1.183,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-expense-spenders",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.272,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-expense-spenders",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 1.168,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-home-zip-city",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.632,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-home-zip-city",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.625,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-home-zip-city",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.613,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-payroll-codes",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.063,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-payroll-codes",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.259,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-payroll-codes",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.064,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-payroll-codes",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.073,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-payroll-codes",
+      "variant": "register=DDUCT",
+      "nodes": 1,
+      "seconds": 0.064,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-payroll-codes",
+      "variant": "register=EEBEN",
+      "nodes": 1,
+      "seconds": 0.054,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-payroll-codes",
+      "variant": "register=EETAX",
+      "nodes": 1,
+      "seconds": 0.058,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-payroll-codes",
+      "variant": "register=ERTAX",
+      "nodes": 1,
+      "seconds": 0.055,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-payroll-codes",
+      "variant": "register=NETPAYDIST",
+      "nodes": 1,
+      "seconds": 0.058,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-timeoff-users",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.86,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-timeoff-users",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.855,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-top-timeoff-users",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.935,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-total-earnings-by-department",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 1.005,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-unpaid-active-employees",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.7,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-unpaid-active-employees",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.68,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-unpaid-active-employees",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.634,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-unpaid-active-employees",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.64,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-unused-leave-roster",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.748,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-unused-leave-roster",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.76,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-unused-leave-roster",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.716,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-upcoming-anniversaries",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.711,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-upcoming-anniversaries",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.629,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-upcoming-anniversaries",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.659,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-upcoming-timeoff-roster",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.624,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-upcoming-timeoff-roster",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.675,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-weekend-work-share",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.08,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-weekend-work-share",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.086,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-weekend-work-share",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.222,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-weekly-overtime-hours",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.642,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-weekly-overtime-hours",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.663,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-weekly-overtime-hours",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.616,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-worked-hours-daily",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.047,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-worked-hours-daily",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.05,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-worked-hours-daily",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.069,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-composition",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.618,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-composition",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.645,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-composition",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.582,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-composition",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.641,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-diversity-profile",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.813,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-diversity-profile",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.911,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-diversity-profile",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.849,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-diversity-profile",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.839,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-kpi-bundle",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.827,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-movements",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 2.576,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-movements",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 5.116,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-movements",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 2.093,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-workforce-movements",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 2.193,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-ytd-earnings-per-employee",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.64,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-ytd-earnings-per-employee",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.69,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-ytd-earnings-per-employee",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.674,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-ytd-earnings-per-employee",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.7,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-zero-net-pay-employees",
+      "variant": "all_optional",
+      "nodes": 1,
+      "seconds": 0.058,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-zero-net-pay-employees",
+      "variant": "defaults",
+      "nodes": 1,
+      "seconds": 0.142,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-zero-net-pay-employees",
+      "variant": "order_direction=ASC",
+      "nodes": 1,
+      "seconds": 0.091,
+      "passed": true
+    },
+    {
+      "blueprint": "bp-zero-net-pay-employees",
+      "variant": "order_direction=DESC",
+      "nodes": 1,
+      "seconds": 0.072,
+      "passed": true
+    }
+  ],
+  "pre_push_validation": {
+    "api_tests_passed": 956,
+    "optional_private_context_tests_skipped": 4,
+    "agent_tests_passed": 37,
+    "live_repaired_blueprints_passed": 26,
+    "private_context_sql_in_commit": false
+  }
+}

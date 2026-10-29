@@ -1,0 +1,38 @@
+id: bp-timeoff-seasonality
+intent: Approved time-off hours bucketed by month and by day-of-week over a trailing N-month window based on request
+  date
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT formatDateTime(toStartOfMonth(t.request_date), '%Y-%m') AS "Month",
+         round(SUM(t.hours), 2) AS "Approved Hours"
+  FROM dbpcm_warehouse.time_off_request AS t
+  WHERE t.status = 'Approved'
+    AND t.hours IS NOT NULL
+    AND t.request_date >=
+      (SELECT MAX(request_date)
+       FROM dbpcm_warehouse.time_off_request) - INTERVAL {win} MONTH
+  GROUP BY "Month"
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Month"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Month"
+                     END ASC
+slots:
+- name: win
+  type: relative_window
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: win, order_direction
+uses:
+- dbpcm_warehouse.time_off_request.request_date
+- dbpcm_warehouse.time_off_request.hours
+- dbpcm_warehouse.time_off_request.status

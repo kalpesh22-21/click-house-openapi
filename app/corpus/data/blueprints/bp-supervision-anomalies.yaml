@@ -1,0 +1,50 @@
+id: bp-supervision-anomalies
+intent: Self-supervising and missing-primary-supervisor anomaly audit for active employees
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         employee_name AS "Name",
+         department_name AS "Department",
+         primary_supervisor_ee_code AS "Supervisor Code",
+         primary_supervisor_name AS "Supervisor Name",
+         'Self-Supervising' AS "Anomaly Type"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND primary_supervisor_ee_code IS NOT NULL
+    AND primary_supervisor_ee_code != ''
+    AND primary_supervisor_ee_code = employee_code
+  UNION ALL
+  SELECT employee_code AS "Employee Code",
+         employee_name AS "Name",
+         department_name AS "Department",
+         primary_supervisor_ee_code AS "Supervisor Code",
+         primary_supervisor_name AS "Supervisor Name",
+         'Missing Supervisor' AS "Anomaly Type"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND (primary_supervisor_ee_code IS NULL
+         OR primary_supervisor_ee_code = '')
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Anomaly Type"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Anomaly Type"
+                     END ASC, "Employee Code"
+slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.primary_supervisor_ee_code
+- dbpcm_warehouse.employee.primary_supervisor_name
+- dbpcm_warehouse.employee.employee_status

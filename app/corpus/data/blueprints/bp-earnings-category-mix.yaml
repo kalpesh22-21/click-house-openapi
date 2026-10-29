@@ -1,0 +1,69 @@
+id: bp-earnings-category-mix
+intent: Category mix showing percent share of total earnings dollars and paid hours by earning category for a punch
+  date window, preserving uncategorized rows
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  WITH totals AS
+    (SELECT SUM(earn_amount) AS all_dollars,
+            SUM(earn_hours) AS all_hours
+     FROM dbpcm_warehouse.total_earning
+     WHERE punch_date >= toDate({period_start})
+       AND punch_date < toDate({period_end}))
+  SELECT ifNull(ec.category_name, 'Uncategorized') AS `Category`,
+         round(SUM(te.earn_amount), 2) AS `Total Dollars`,
+         round(SUM(te.earn_hours), 2) AS `Total Hours`,
+         round(SUM(te.earn_amount) * 100.0 / nullIf(
+                                                      (SELECT all_dollars
+                                                       FROM totals), 0), 2) AS `Dollar Pct`,
+         round(SUM(te.earn_hours) * 100.0 / nullIf(
+                                                     (SELECT all_hours
+                                                      FROM totals), 0), 2) AS `Hours Pct`
+  FROM
+    (SELECT punch_date,
+            earn_amount,
+            earn_hours,
+            earn_code
+     FROM dbpcm_warehouse.total_earning) AS te
+  LEFT JOIN
+    (SELECT earn_code,
+            category_name
+     FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
+  WHERE te.punch_date >= toDate({period_start})
+    AND te.punch_date < toDate({period_end})
+    AND ({metric} = 'dollars'
+         OR {metric} = 'hours')
+  GROUP BY ifNull(ec.category_name, 'Uncategorized')
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN `Dollar Pct`
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN `Dollar Pct`
+                     END ASC, `Category`
+slots:
+- name: period
+  type: period_range
+  required: true
+  temporal_type: date
+- name: metric
+  type: enum
+  required: true
+  enum_values:
+  - dollars
+  - hours
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, metric, order_direction
+uses:
+- dbpcm_warehouse.total_earning.earn_amount
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.earning_category.earn_code
+- dbpcm_warehouse.earning_category.category_name

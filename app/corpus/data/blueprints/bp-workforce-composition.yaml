@@ -1,0 +1,41 @@
+id: bp-workforce-composition
+intent: Active workforce composition by employment type and DOL status with percent share of active headcount
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employment_type AS "Employment Type",
+         dol_status_description AS "DOL Status",
+         count(DISTINCT employee_code) AS "Headcount",
+         round(100 * count(DISTINCT employee_code) / sum(count(DISTINCT employee_code)) OVER (), 2) AS "Share Pct"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+    AND department_name = {department}
+  GROUP BY employment_type,
+           dol_status_description
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Headcount"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Headcount"
+                     END ASC
+slots:
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: department, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employment_type
+- dbpcm_warehouse.employee.dol_status_description
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status

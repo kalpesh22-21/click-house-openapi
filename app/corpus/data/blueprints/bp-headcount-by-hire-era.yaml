@@ -1,0 +1,35 @@
+id: bp-headcount-by-hire-era
+intent: Active headcount and average tenure split by hire era around a supplied window
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT multiIf(hire_date < {era_window_start}, 'Pre Era', hire_date < {era_window_end}, 'Era', 'Post Era') AS "Hire Era",
+         count(DISTINCT employee_code) AS "Headcount",
+         round(avg(date_diff('day', hire_date, now()) / 365.25), 1) AS "Avg Tenure Years"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Active'
+  GROUP BY "Hire Era"
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Hire Era"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Hire Era"
+                     END ASC
+slots:
+- name: era_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: era_window, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.hire_date
+- dbpcm_warehouse.employee.employee_status

@@ -3,10 +3,10 @@ intent: Top N highest-paid employees separately within Salary and Hourly pay typ
   salary; Hourly uses hourly_salary * 2080 estimated annual compensation (40 hours/week, 52 weeks/year, excludes
   overtime). This is current compensation, not actual payroll earnings. Defaults to Active + On Leave; top_n applies
   to each pay type.
-slots_summary: top_n, employee_status, department
+slots_summary: top_n, employee_status, department, order_direction
 status: validated
 drift_status: clean
-catalog_sha: 0c0c24a9bb5ccc742d3b7f9685607355a6d6a051
+catalog_sha: ''
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name
@@ -46,33 +46,59 @@ slots:
   optional_pattern: 'TRUE'
   description: Resolve department names/abbreviations against the directory; a known department may have no matching
     employees.
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
 result_grain:
 - Pay Type
 - Rank
-sql_template: 'WITH compensation AS (
-
-  SELECT e.employee_code, e.employee_name, e.department_name, e.employee_pay_type, e.hourly_salary,
-
-  CASE WHEN e.employee_pay_type = ''Salary'' THEN e.annual_salary WHEN e.employee_pay_type = ''Hourly'' THEN e.hourly_salary
-  * 2080 ELSE NULL END AS annual_compensation
-
-  FROM dbpcm_warehouse.employee e WHERE (e.employee_status = {employee_status} OR {employee_status} = ''All'') AND
-  e.department_name = {department}
-
-  ), ranked AS (
-
-  SELECT employee_code, employee_name, department_name, employee_pay_type, hourly_salary, annual_compensation, row_number()
-  OVER (PARTITION BY employee_pay_type ORDER BY annual_compensation DESC, employee_code) AS compensation_rank
-
-  FROM compensation WHERE annual_compensation IS NOT NULL
-
-  )
-
-  SELECT employee_pay_type AS `Pay Type`, compensation_rank AS `Rank`, employee_code AS `Employee Code`, employee_name
-  AS `Employee Name`, department_name AS `Department`, annual_compensation AS `Annual Compensation`, hourly_salary
-  AS `Hourly Rate`
-
-  FROM ranked WHERE compensation_rank <= {top_n} ORDER BY employee_pay_type, compensation_rank'
+sql_template: |
+  WITH compensation AS
+    (SELECT e.employee_code,
+            e.employee_name,
+            e.department_name,
+            e.employee_pay_type,
+            e.hourly_salary,
+            CASE
+                WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
+                WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                ELSE NULL
+            END AS annual_compensation
+     FROM dbpcm_warehouse.employee e
+     WHERE (e.employee_status = {employee_status}
+            OR {employee_status} = 'All')
+       AND e.department_name = {department}),
+       ranked AS
+    (SELECT employee_code,
+            employee_name,
+            department_name,
+            employee_pay_type,
+            hourly_salary,
+            annual_compensation,
+            row_number() OVER (PARTITION BY employee_pay_type
+                               ORDER BY CASE
+                                            WHEN {order_direction} = 'DESC' THEN annual_compensation
+                                        END DESC, CASE
+                                                      WHEN {order_direction} = 'ASC' THEN annual_compensation
+                                                  END ASC, employee_code) AS compensation_rank
+     FROM compensation
+     WHERE annual_compensation IS NOT NULL)
+  SELECT employee_pay_type AS `Pay Type`,
+         compensation_rank AS `Rank`,
+         employee_code AS `Employee Code`,
+         employee_name AS `Employee Name`,
+         department_name AS `Department`,
+         annual_compensation AS `Annual Compensation`,
+         hourly_salary AS `Hourly Rate`
+  FROM ranked
+  WHERE compensation_rank <= {top_n}
+  ORDER BY employee_pay_type,
+           compensation_rank
 uses_rules:
 - default_employee_population
 - compensation_by_pay_type

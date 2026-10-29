@@ -1,0 +1,76 @@
+id: bp-timecard-vs-register-recon
+intent: Reconcile total_earning timecard hours against payroll register paid hours per employee for a single pay
+  period, showing variance and percentage difference
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  WITH period_bounds AS
+    (SELECT any(pay_period_start_date) AS start_dt,
+            any(pay_period_end_date) AS end_dt
+     FROM dbpcm_warehouse.payroll
+     WHERE pay_period_end_date = {period}),
+       register_hours AS
+    (SELECT employee_code,
+            SUM(type_hours) AS register_hours
+     FROM dbpcm_warehouse.payroll
+     WHERE register_type = 'EARN'
+       AND pay_period_end_date = {period}
+     GROUP BY employee_code),
+       te_hours AS
+    (SELECT te.employee_code,
+            SUM(te.earn_hours) AS te_hours
+     FROM
+       (SELECT employee_code,
+               punch_date,
+               earn_hours
+        FROM dbpcm_warehouse.total_earning) AS te
+     CROSS JOIN period_bounds pb
+     WHERE te.punch_date BETWEEN pb.start_dt AND pb.end_dt
+     GROUP BY te.employee_code)
+  SELECT COALESCE(r.employee_code, t.employee_code) AS "Employee Code",
+         max(e.employee_name) AS "Employee Name", {period} AS "Pay Period End",
+                                                   round(COALESCE(r.register_hours, 0), 2) AS "Register Hours",
+                                                   round(COALESCE(t.te_hours, 0), 2) AS "Timecard Hours",
+                                                   round(COALESCE(t.te_hours, 0) - COALESCE(r.register_hours, 0), 2) AS "Difference",
+                                                   round(abs(COALESCE(t.te_hours, 0) - COALESCE(r.register_hours, 0)) / nullIf(COALESCE(r.register_hours, 0), 0) * 100, 2) AS "Pct Diff"
+  FROM register_hours r
+  FULL OUTER JOIN te_hours t ON t.employee_code = r.employee_code
+  LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = COALESCE(r.employee_code, t.employee_code)
+  GROUP BY COALESCE(r.employee_code, t.employee_code), {period}, r.register_hours,
+                                                                 t.te_hours
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN abs(COALESCE(t.te_hours, 0) - COALESCE(r.register_hours, 0))
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN abs(COALESCE(t.te_hours, 0) - COALESCE(r.register_hours, 0))
+                     END ASC
+  LIMIT {top_n}
+slots:
+- name: period
+  type: period
+  required: true
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+- name: top_n
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: period, top_n, order_direction
+uses:
+- dbpcm_warehouse.total_earning.employee_code
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.earn_hours
+- dbpcm_warehouse.payroll.employee_code
+- dbpcm_warehouse.payroll.pay_period_start_date
+- dbpcm_warehouse.payroll.pay_period_end_date
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.type_hours
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name

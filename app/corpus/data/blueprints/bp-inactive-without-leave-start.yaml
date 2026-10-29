@@ -1,0 +1,47 @@
+id: bp-inactive-without-leave-start
+intent: Inactive employees missing a valid leave-of-absence start date
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT employee_code AS "Employee Code",
+         employee_name AS "Name",
+         department_name AS "Department",
+         last_worked_date AS "Last Worked",
+         leave_absence_start AS "Leave Absence Start"
+  FROM dbpcm_warehouse.employee
+  WHERE employee_status = 'Inactive'
+    AND NOT (leave_absence_start IS NOT NULL
+             AND toDate32(leave_absence_start) > toDate32('1900-01-01'))
+    AND department_name = {department}
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN employee_code
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN employee_code
+                     END ASC
+  LIMIT {max_rows}
+slots:
+- name: department
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.employee.department_name
+  optional_pattern: 'TRUE'
+- name: max_rows
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: department, max_rows, order_direction
+uses:
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name
+- dbpcm_warehouse.employee.employee_status
+- dbpcm_warehouse.employee.last_worked_date
+- dbpcm_warehouse.employee.leave_absence_start

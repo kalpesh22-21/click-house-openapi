@@ -1,0 +1,46 @@
+id: bp-unused-leave-roster
+intent: Employees holding positive accrual balances who have zero approved time-off requests year-to-date
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT b.employee_code AS "Employee Code",
+         any(e.employee_name) AS "Employee Name",
+         any(e.department_name) AS "Department",
+         round(SUM(b.beginning_balance + b.accrued_amount - b.taken_amount), 2) AS "Balance Hours"
+  FROM dbpcm_warehouse.time_off_balance AS b
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = b.employee_code
+  WHERE b.beginning_balance + b.accrued_amount - b.taken_amount > 0
+    AND b.employee_code NOT IN
+      (SELECT DISTINCT employee_code
+       FROM dbpcm_warehouse.time_off_request
+       WHERE status = 'Approved'
+         AND request_date IS NOT NULL
+         AND toDate32(request_date) >= toStartOfYear(today()))
+  GROUP BY b.employee_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Balance Hours"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Balance Hours"
+                     END ASC
+slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: order_direction
+uses:
+- dbpcm_warehouse.time_off_balance.employee_code
+- dbpcm_warehouse.time_off_balance.beginning_balance
+- dbpcm_warehouse.time_off_balance.accrued_amount
+- dbpcm_warehouse.time_off_balance.taken_amount
+- dbpcm_warehouse.time_off_request.employee_code
+- dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.time_off_request.request_date
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.employee_name
+- dbpcm_warehouse.employee.department_name

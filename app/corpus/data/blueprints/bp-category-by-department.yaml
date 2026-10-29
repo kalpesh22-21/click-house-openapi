@@ -1,0 +1,61 @@
+id: bp-category-by-department
+intent: Earnings dollars by department for a specific earning category or all categories combined, for a punch date
+  window, ranked by department
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT e.department_name AS `Department`,
+         round(SUM(te.earn_amount), 2) AS `Total Dollars`
+  FROM
+    (SELECT employee_code,
+            punch_date,
+            earn_amount,
+            earn_code
+     FROM dbpcm_warehouse.total_earning) AS te
+  JOIN
+    (SELECT earn_code,
+            category_name
+     FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
+  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = te.employee_code
+  WHERE ec.category_name = {concept}
+    AND te.punch_date >= toDate({period_start})
+    AND te.punch_date < toDate({period_end})
+  GROUP BY e.department_name
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN `Total Dollars`
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN `Total Dollars`
+                     END ASC, `Department`
+  LIMIT {top_n}
+slots:
+- name: concept
+  type: string
+  required: false
+  binds_to: dbpcm_warehouse.earning_category.category_name
+  optional_pattern: 'TRUE'
+- name: period
+  type: period_range
+  required: true
+  temporal_type: date
+- name: top_n
+  type: positive_integer
+  required: true
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+slots_summary: concept, period, top_n, order_direction
+uses:
+- dbpcm_warehouse.total_earning.earn_amount
+- dbpcm_warehouse.total_earning.punch_date
+- dbpcm_warehouse.total_earning.employee_code
+- dbpcm_warehouse.total_earning.earn_code
+- dbpcm_warehouse.earning_category.earn_code
+- dbpcm_warehouse.earning_category.category_name
+- dbpcm_warehouse.employee.employee_code
+- dbpcm_warehouse.employee.department_name

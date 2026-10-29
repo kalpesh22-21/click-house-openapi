@@ -1,0 +1,43 @@
+id: bp-payroll-codes-unmapped
+intent: Payroll register earning type codes that have no corresponding mapping in the earning category dimension,
+  flagged as uncategorized for timecard mapping
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT *
+  FROM
+    (SELECT DISTINCT p.type_code AS "Type Code"
+     FROM dbpcm_warehouse.payroll AS p
+     LEFT JOIN
+       (SELECT earn_code
+        FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = p.type_code
+     WHERE p.register_type = 'EARN'
+       AND p.pay_period_end_date = {period}
+       AND ec.earn_code IS NULL) AS results
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Type Code"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Type Code"
+                     END ASC
+slots:
+- name: period
+  type: period
+  required: false
+  binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+  temporal_type: date
+  optional_pattern: 'TRUE'
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: ASC
+  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+slots_summary: period, order_direction
+uses:
+- dbpcm_warehouse.payroll.type_code
+- dbpcm_warehouse.payroll.register_type
+- dbpcm_warehouse.payroll.pay_period_end_date
+- dbpcm_warehouse.earning_category.earn_code
