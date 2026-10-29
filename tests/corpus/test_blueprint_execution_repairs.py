@@ -37,6 +37,7 @@ def test_optional_sort_is_outside_distinct_projection():
         tree = sql(name)
         assert tree.args.get('order')
         assert not tree.args.get('distinct')
+        assert not any(isinstance(item, exp.Star) for item in tree.expressions)
         assert tree.args['from_'].this.this.args.get('distinct')
 
 
@@ -45,3 +46,15 @@ def test_empty_fact_window_does_not_subtract_from_default_epoch():
         tree = sql(name)
         assert any(c.find(exp.Count) and c.find(exp.Null) and c.find(exp.Max)
                    for c in tree.find_all(exp.Case))
+
+
+def test_executable_blueprints_have_explicit_projection_columns():
+    # The agent's hydrator rejects SELECT * even when Trino can execute it.
+    for path in ROOT.glob('*.yaml'):
+        entry = yaml.safe_load(path.read_text())
+        for node in [entry, *entry.get('composes', [])]:
+            if not node.get('sql_template'):
+                continue
+            for select in parse(node['sql_template']).find_all(exp.Select):
+                assert not any(isinstance(item, exp.Star) or isinstance(item, exp.Column) and item.is_star
+                               for item in select.expressions), path.name

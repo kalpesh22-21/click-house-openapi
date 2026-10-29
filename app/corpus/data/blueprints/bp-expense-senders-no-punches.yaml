@@ -5,7 +5,9 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT *
+  SELECT "Employee Code",
+         "Employee Name",
+         "Department"
   FROM
     (SELECT DISTINCT e.employee_code AS "Employee Code",
                      e.employee_name AS "Employee Name",

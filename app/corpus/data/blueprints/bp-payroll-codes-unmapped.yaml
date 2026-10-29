@@ -5,7 +5,7 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT *
+  SELECT "Type Code"
   FROM
     (SELECT DISTINCT p.type_code AS "Type Code"
      FROM dbpcm_warehouse.payroll AS p
