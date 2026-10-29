@@ -435,6 +435,22 @@ check precision, scale, nullability, date ranges and timezone semantics against
 actual source projections. Never fix a disagreement by silently rounding money,
 dropping Nullable, or inventing a type for an unknown expression.
 
+### Truncation validation and fractional literals
+
+`dateTrunc`/`date_trunc` require a quoted constant unit and a known logical
+date/timestamp input. The same pre-dispatch checks apply to typed SQLGlot
+DateTrunc and TimestampTrunc nodes (including `toStartOfMonth` and `toMonday`).
+Unknown units, untyped string inputs and timezone overrides are rejected locally.
+The original unit token is checked before parsing because some SQLGlot versions
+coerce column-like unit arguments into strings.
+
+`toDate` and `toDateTime64` validate timezone-free ISO literals with 1–9 fractional
+digits independently of Python's `fromisoformat` implementation. Calendar
+validation uses a microsecond copy; emitted timestamp SQL preserves the original
+fraction, truncated to the requested scale. This does not extend the separate
+`toDateTime` contract to fractional literals or guarantee every typed SQL function
+has a verified conversion.
+
 ### Calendar parts and Int32
 
 `toHour`, `toMinute`, and `toDayOfYear` now use typed Trino calendar extraction,

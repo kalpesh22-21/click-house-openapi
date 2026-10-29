@@ -78,6 +78,17 @@ def normalize_logical_sql(sql: str) -> str:
     from app.trino_metadata import PUBLIC_DATABASE
 
     try:
+        # Newer SQLGlot versions turn even a column-like truncation unit into
+        # a string literal. Validate the original token before that information
+        # is lost; quoted strings/comments elsewhere are not function calls.
+        from sqlglot.tokens import TokenType
+        tokens = sqlglot.tokenize(sql, read="clickhouse")
+        for i, token in enumerate(tokens[:-2]):
+            if (token.token_type not in {TokenType.STRING, TokenType.IDENTIFIER}
+                    and token.text.lower() in {"datetrunc", "date_trunc"}
+                    and tokens[i + 1].token_type == TokenType.L_PAREN
+                    and tokens[i + 2].token_type != TokenType.STRING):
+                raise QueryValidationError("dateTrunc requires a quoted constant unit.", "TRINO_UNSUPPORTED_SQL")
         statements = sqlglot.parse(sql, read="clickhouse", error_level=ErrorLevel.RAISE)
         if len(statements) != 1 or not isinstance(statements[0], exp.Query):
             return sql  # The normal statement guard rejects unsupported inputs.
@@ -178,9 +189,25 @@ def _to_date32_as_cast_date(func: exp.Func) -> exp.Expression:
     )
 
 
+def _parse_iso_literal(value: str):
+    """Validate 1–9 fractional digits consistently on Python 3.10 and later.
+
+    Only the validation copy loses sub-microsecond digits. The SQL builder keeps
+    the original fraction and truncates it to the requested timestamp scale.
+    """
+    from datetime import datetime
+    match = re.fullmatch(
+        r"(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?)?", value
+    )
+    if match is None:
+        raise ValueError("Expected a timezone-free ISO date/time literal")
+    year, month, day, hour, minute, second, fraction = match.groups()
+    return datetime(int(year), int(month), int(day), int(hour or 0),
+                    int(minute or 0), int(second or 0), int(((fraction or '') + '000000')[:6]))
+
+
 def _to_date_as_cast_date(func: exp.Func) -> exp.Expression:
     """Accept ISO date/datetime strings as well as typed temporal values."""
-    from datetime import datetime
     from app.trino_constructs import unsupported
     from app.trino_semantics import require_type
 
@@ -188,9 +215,7 @@ def _to_date_as_cast_date(func: exp.Func) -> exp.Expression:
     info = require_type(value, "toDate")
     if isinstance(value, exp.Literal) and value.is_string:
         try:
-            parsed = datetime.fromisoformat(value.this)
-            if parsed.tzinfo is not None:
-                raise ValueError
+            parsed = _parse_iso_literal(value.this)
         except ValueError:
             unsupported("toDate requires an ISO date/time string without a timezone override.")
         value = exp.Literal.string(parsed.date().isoformat())
@@ -248,12 +273,11 @@ def _to_datetime64_as_cast_timestamp(func: exp.Func) -> exp.Expression:
     elif info.kind in {"string", "datetime", "null"}:
         # Literal strings are truncated before casting, preserving CH's scale.
         if isinstance(value, exp.Literal) and value.is_string:
-            from datetime import datetime
             import re
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?)?", value.this):
                 unsupported("toDateTime64 requires a timezone-free ISO date/time literal.")
             try:
-                datetime.fromisoformat(value.this)
+                _parse_iso_literal(value.this)
             except ValueError:
                 unsupported("Invalid toDateTime64 ISO date/time literal.")
             whole, _, fraction = value.this.partition(".")
@@ -374,6 +398,9 @@ def _typed_date_add(func: exp.Func, unit: str) -> exp.Expression:
     return exp.DateAdd(this=date_arg, expression=offset, unit=exp.Var(this=unit))
 
 
+_DATE_TRUNC_UNITS = frozenset({"year", "quarter", "month", "week", "day", "hour", "minute", "second"})
+
+
 def _date_trunc(func: exp.Func) -> exp.Expression:
     # SQLGlot renders toStartOfMonth as dateTrunc in logical SQL round trips.
     from app.trino_constructs import unsupported
@@ -382,7 +409,7 @@ def _date_trunc(func: exp.Func) -> exp.Expression:
     unit, value = func.expressions
     info = value_type(value)
     if (not isinstance(unit, exp.Literal) or not unit.is_string
-            or unit.this.lower() not in {"year", "quarter", "month", "week", "day", "hour", "minute", "second"}
+            or unit.this.lower() not in _DATE_TRUNC_UNITS
             or not info or info.kind != "datetime"):
         unsupported("dateTrunc requires a supported constant unit and a known date/timestamp.")
     return exp.TimestampTrunc(this=value, unit=exp.Var(this=unit.this.upper()))
@@ -459,6 +486,22 @@ _CLICKHOUSE_FUNCTION_MAP: dict[str, _FunctionMapping] = {
 }
 
 
+def _check_typed_date_trunc(tree: exp.Query) -> None:
+    """Match anonymous dateTrunc validation for both typed parser shapes."""
+    from app.trino_semantics import value_type
+    from app.trino_constructs import unsupported
+
+    for node in tree.find_all(exp.DateTrunc, exp.TimestampTrunc):
+        unit = node.args.get("unit")
+        constant = (isinstance(unit, exp.Literal) and unit.is_string
+                    or isinstance(node, exp.TimestampTrunc) and isinstance(unit, exp.Var))
+        info = value_type(node.this) if isinstance(node.this, exp.Expression) else None
+        if (not constant or unit.name.lower() not in _DATE_TRUNC_UNITS
+                or node.args.get("zone") is not None
+                or not info or info.kind != "datetime"):
+            unsupported("dateTrunc/toStartOf requires a supported constant unit and a known date/timestamp without a timezone override.")
+
+
 def _map_clickhouse_functions(tree: exp.Query) -> None:
     """Normalize supported constructs, reject known unsafe signatures, then map functions.
 
@@ -488,6 +531,7 @@ def _map_clickhouse_functions(tree: exp.Query) -> None:
             continue
         unsupported(f"Function {name} with {len(func.expressions)} argument(s) has no verified Trino conversion.")
 
+    _check_typed_date_trunc(tree)
     normalize_semantics(tree)
     normalize_constructs(tree)
     if any(f.name.lower() == "tointervalmonth" for f in tree.find_all(exp.Anonymous)):

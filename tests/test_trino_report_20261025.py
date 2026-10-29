@@ -70,3 +70,49 @@ def test_if_numeric_condition_and_empty_null_semantics():
         sql = sqlglot.transpile(convert('SELECT '+expression), read='trino', write='sqlite')[0]
         with sqlite3.connect(':memory:') as connection:
             assert connection.execute(sql).fetchone()[0] == expected
+
+
+@pytest.mark.parametrize('node_type', [sqlglot.exp.DateTrunc, sqlglot.exp.TimestampTrunc])
+@pytest.mark.parametrize('unit,value,zone', [
+    ('bogus', sqlglot.exp.CurrentDate(), None),
+    ('day', sqlglot.exp.Literal.string('not-a-date'), None),
+    ('day', sqlglot.exp.CurrentDate(), sqlglot.exp.Literal.string('UTC')),
+])
+def test_typed_truncation_is_guarded_independently_of_parser_version(node_type, unit, value, zone):
+    tree = sqlglot.exp.select(node_type(this=value.copy(), unit=sqlglot.exp.Literal.string(unit), zone=zone))
+    annotate_input_types(tree, CATALOG)
+    with pytest.raises(QueryValidationError, match='constant unit'):
+        _map_clickhouse_functions(tree)
+
+
+@pytest.mark.parametrize('function', ['toStartOfMonth', 'toStartOfDay', 'toStartOfHour', 'toMonday'])
+def test_calendar_truncation_does_not_admit_untyped_strings(function):
+    with pytest.raises(QueryValidationError):
+        convert(f"SELECT {function}('not-a-date')")
+
+
+@pytest.mark.parametrize('unit', ['day', 'year', 'employee_code'])
+def test_original_truncation_unit_cannot_be_coerced_from_a_column(unit):
+    from app.trino_client import normalize_logical_sql
+    with pytest.raises(QueryValidationError, match='quoted constant'):
+        normalize_logical_sql(f'SELECT dateTrunc({unit}, today())')
+    assert normalize_logical_sql("SELECT 'dateTrunc(day,today())' AS text")
+    assert normalize_logical_sql("SELECT dateTrunc(/*comment*/ 'day',today())")
+
+
+@pytest.mark.parametrize('digits', range(1, 10))
+def test_iso_fraction_validation_and_scale_truncation_are_version_independent(digits):
+    from app.trino_client import _parse_iso_literal
+    fraction = '123456789'[:digits]
+    literal = '2024-02-29 12:34:56.' + fraction
+    assert _parse_iso_literal(literal).microsecond == int((fraction+'000000')[:6])
+    rendered = convert(f"SELECT toDateTime64('{literal}', 3)")
+    assert '2024-02-29 12:34:56.' + fraction[:3] in rendered
+    assert "'2024-02-29'" in convert(f"SELECT toDate('{literal}')")
+
+
+@pytest.mark.parametrize('literal', ['2023-02-29 12:34:56.9', '2024-02-29 25:00:00.9999', '2024-02-29 12:34:56.1234567890', '2024-02-29T12:34:56.9Z'])
+def test_iso_fraction_validation_still_rejects_invalid_dates_and_overloads(literal):
+    for function in [f"toDate('{literal}')", f"toDateTime64('{literal}',3)"]:
+        with pytest.raises(QueryValidationError):
+            convert('SELECT '+function)
