@@ -32,7 +32,9 @@ def mysql_source(entry: dict, shard: str, identity: tuple[str, str, str], settin
         validate_identifier(shard.lower())
         schema = validate_identifier(settings.trino_mysql_schema)
         directory = Path(settings.trino_mysql_sources_dir)
-        path = directory / f"{table}.txt"
+        # Public catalog names do not change private MySQL deployment filenames.
+        template = {"time_off_request": "accrual_events", "time_off_balance": "accrual_balances"}.get(table, table)
+        path = directory / f"{template}.txt"
         # Catalog spelling is labor_allocation; the supplied private file uses labour.
         if table == "labor_allocation" and not path.is_file():
             path = directory / "labour_allocation.txt"

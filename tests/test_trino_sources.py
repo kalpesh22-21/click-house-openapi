@@ -25,7 +25,7 @@ ENTRY = {"database": "dbpcm_warehouse", "table": "time_off_request", "source": "
 
 @pytest.fixture
 def source_settings(tmp_path):
-    (tmp_path / "time_off_request.txt").write_text(MYSQL_SQL)
+    (tmp_path / "accrual_events.txt").write_text(MYSQL_SQL)
     return Settings(_env_file=None, employee_access_enabled=False,
                     trino_mysql_sources_dir=str(tmp_path))
 
@@ -57,7 +57,7 @@ def test_rendering_never_reuses_another_user(source_settings):
     "SELECT * FROM {{UNKNOWN}}.dbonline.actual_events", "SELECT * FROM actual_events",
     "SELECT * FROM TABLE(other.system.query(query => 'SELECT 1'))"])
 def test_invalid_or_missing_sources_do_not_fall_back(source_settings, definition):
-    path = Path(source_settings.trino_mysql_sources_dir) / "time_off_request.txt"
+    path = Path(source_settings.trino_mysql_sources_dir) / "accrual_events.txt"
     if definition is None:
         path.unlink()
     else:
@@ -75,7 +75,7 @@ def test_labor_spelling_uses_supplied_labour_file(source_settings):
 
 
 def test_lowercase_identifier_placeholders(source_settings):
-    path = Path(source_settings.trino_mysql_sources_dir) / "time_off_request.txt"
+    path = Path(source_settings.trino_mysql_sources_dir) / "accrual_events.txt"
     path.write_text("SELECT * FROM {{shard}}.{{database}}.actual_events WHERE clientcode = {{CLIENT_CODE}}")
     sql = mysql_source(ENTRY, "shard_a", ("pc", "A", "alice"), source_settings).sql(dialect="trino")
     assert '"shard_a"."dbonline".actual_events' in sql and "'A'" in sql
@@ -120,8 +120,10 @@ def test_unsupported_mysql_catalog_entries_are_archived():
     assert not (catalog.keys() & archived.keys())
 
 
-def test_timeoff_requires_canonical_private_template_filename(source_settings):
+@pytest.mark.parametrize("table,filename", [("time_off_request", "accrual_events.txt"), ("time_off_balance", "accrual_balances.txt")])
+def test_timeoff_preserves_private_template_filenames(source_settings, table, filename):
     directory = Path(source_settings.trino_mysql_sources_dir)
-    (directory / 'time_off_request.txt').rename(directory / 'accrual_events.txt')
-    with pytest.raises(QueryValidationError, match='Source SQL definition'):
-        mysql_source(ENTRY, 'shard_a', ('pc', 'A', 'alice'), source_settings)
+    (directory / filename).write_text(MYSQL_SQL)
+    result = mysql_source({**ENTRY, "table": table}, 'shard_a', ('pc', 'A', 'alice'), source_settings)
+    assert 'shard_a' in result.sql(dialect='trino')
+    assert not (directory / (table + '.txt')).exists()

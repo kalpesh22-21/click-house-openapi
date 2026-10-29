@@ -165,8 +165,9 @@ SQL, grant lists or business rows. Validate template authorization and deploymen
 MySQL logical tables expand into private Trino SELECT templates loaded from
 `TRINO_MYSQL_SOURCES_DIR` (default `app/semantic_catalog/mysql_views`). Each template is named
 `<logical_table>.txt`; `labor_allocation` also accepts `labour_allocation.txt`.
-When deploying the time-off rename, rename the private templates to
-`time_off_request.txt` and `time_off_balance.txt`; these files are not shipped in Git.
+The public names `time_off_request` and `time_off_balance` load the existing
+private files `accrual_events.txt` and `accrual_balances.txt`, respectively. Do not
+rename these MySQL templates; they are not shipped in Git.
 The six supported tables are time_off_request, time_off_balance, employee,
 department, expense and labor_allocation. The six catalog entries without
 source definitions are retained under `app/semantic_catalog/archive`, outside
