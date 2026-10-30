@@ -46,3 +46,12 @@ uses:
 - dbpcm_warehouse.time_off_request.hours
 - dbpcm_warehouse.time_off_request.status
 - dbpcm_warehouse.time_off_request.request_date
+column_formats:
+  Earn Description:
+    kind: text
+  Earn Code:
+    kind: identifier
+  Approved Hours:
+    kind: number
+    unit: hours
+    precision: 2

@@ -72,3 +72,30 @@ composes:
     AND a.type_code = b.type_code
     ORDER BY coalesce(a.register_type, b.register_type),
              coalesce(a.type_code, b.type_code)
+column_formats:
+  register_type:
+    kind: text
+  type_code:
+    kind: identifier
+  type_code_description:
+    kind: text
+  amount_a:
+    kind: currency
+    currency: USD
+    precision: 2
+  amount_b:
+    kind: currency
+    currency: USD
+    precision: 2
+  amount_delta:
+    kind: currency
+    currency: USD
+    precision: 2
+  hours_a:
+    kind: number
+    unit: hours
+    precision: 2
+  hours_b:
+    kind: number
+    unit: hours
+    precision: 2

@@ -37,3 +37,8 @@ uses:
 - dbpcm_warehouse.payroll.employee_code
 - dbpcm_warehouse.payroll.pay_period_end_date
 - dbpcm_warehouse.employee.employee_code
+column_formats:
+  Employee Code:
+    kind: identifier
+  Register Lines:
+    kind: integer

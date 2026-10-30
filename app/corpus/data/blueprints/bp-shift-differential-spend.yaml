@@ -34,3 +34,11 @@ uses:
 - dbpcm_warehouse.payroll.pay_period_end_date
 - dbpcm_warehouse.earning_category.earn_code
 - dbpcm_warehouse.earning_category.category_name
+column_formats:
+  Shift Differential Dollars:
+    kind: currency
+    currency: USD
+  Shift Differential Hours:
+    kind: number
+    unit: hours
+    precision: 2

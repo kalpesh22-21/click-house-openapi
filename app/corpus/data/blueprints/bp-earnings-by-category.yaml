@@ -37,3 +37,12 @@ uses:
 - dbpcm_warehouse.total_earning.earn_code
 - dbpcm_warehouse.earning_category.earn_code
 - dbpcm_warehouse.earning_category.category_name
+column_formats:
+  Total Earnings:
+    kind: currency
+    currency: USD
+    precision: 2
+  Total Hours:
+    kind: number
+    unit: hours
+    precision: 2

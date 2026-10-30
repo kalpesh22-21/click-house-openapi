@@ -228,6 +228,7 @@ _COLUMN_OVERLAY_FIELDS = (
     "description",
     "synonyms",
     "unit",
+    "format",
     "values",
     "observed_values",
 )
@@ -892,4 +893,8 @@ def build_table_schema_response(
         response["notes"] = notes
     if columns_not_found is not None:
         response["columns_not_found"] = columns_not_found
+        response["column_check"] = {
+            "coverage": "complete_authorized_table_schema",
+            "matching": "exact_names",
+        }
     return response

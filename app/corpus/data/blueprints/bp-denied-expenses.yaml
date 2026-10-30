@@ -46,3 +46,16 @@ uses:
 - dbpcm_warehouse.expense.amount_approved
 - dbpcm_warehouse.expense.department_description
 - dbpcm_warehouse.expense.expense_paid_date
+column_formats:
+  Department:
+    kind: text
+  Denied Count:
+    kind: integer
+  Denied Amount:
+    kind: currency
+    currency: USD
+    precision: 2
+  Denial Rate:
+    kind: percent
+    scale: ratio
+    precision: 2

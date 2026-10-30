@@ -40,3 +40,12 @@ uses:
 - dbpcm_warehouse.employee.work_location_state
 - dbpcm_warehouse.employee.work_location_city
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Country:
+    kind: text
+  State:
+    kind: text
+  City:
+    kind: text
+  Headcount:
+    kind: integer

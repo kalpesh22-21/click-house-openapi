@@ -341,3 +341,23 @@ def test_foreign_session_cannot_rebuild_stored_sql(env):
     with caller(session='foreign'), pytest.raises(SnapshotNotFoundError):
         svc.rebuild_snapshot(first, env[0], store=env[1])
     assert len(env[2]) == 1
+
+
+def test_formats_survive_create_page_replay_and_refresh(env, monkeypatch):
+    settings, store, _ = env
+    def execute(sql, *a, **kw):
+        return _FakeChStream(['ZIP','Pay'], ['String','Decimal(18,2)'], [['02108', '1234.50']])
+    monkeypatch.setattr(svc, 'execute_query_rows_stream', execute)
+    formats={'ZIP':{'kind':'identifier'}, 'Pay':{'kind':'currency','currency':'USD'}}
+    with caller():
+        first=svc.create_snapshot('SELECT ZIP, Pay FROM t',settings,store=store,column_formats=formats)
+        assert first['column_formats']==formats
+        assert svc.create_snapshot('SELECT ZIP, Pay FROM t',settings,store=store,column_formats=formats)==first
+        page=svc.page_snapshot(first['snapshot_id'],0,100,settings,store=store)
+        assert page['column_formats']==formats
+        assert page['rows']==[['02108','1234.50']]
+        fresh=svc.rebuild_snapshot(first['snapshot_id'], settings,store=store)
+        assert fresh['snapshot_id']!=first['snapshot_id']
+        assert fresh['column_formats']==formats
+    csv=[value.decode() for key,value in store.objects.items() if key.endswith('.csv')][0]
+    assert csv.splitlines()==['ZIP,Pay (USD)','02108,1234.50']

@@ -74,3 +74,26 @@ uses:
 - dbpcm_warehouse.payroll.type_hours
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Pay Period End:
+    kind: date
+  Register Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Timecard Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Difference:
+    kind: number
+    unit: hours
+    precision: 2
+  Pct Diff:
+    kind: percent
+    scale: percent
+    precision: 2

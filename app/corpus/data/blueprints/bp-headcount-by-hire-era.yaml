@@ -33,3 +33,12 @@ uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.hire_date
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Hire Era:
+    kind: text
+  Headcount:
+    kind: integer
+  Avg Tenure Years:
+    kind: number
+    unit: years
+    precision: 2

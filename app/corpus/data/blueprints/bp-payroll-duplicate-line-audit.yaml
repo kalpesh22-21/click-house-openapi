@@ -46,3 +46,18 @@ uses:
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.register_type
 - dbpcm_warehouse.payroll.pay_period_end_date
+column_formats:
+  Employee Code:
+    kind: identifier
+  Pay Period End:
+    kind: date
+  Register Type:
+    kind: text
+  Type Code:
+    kind: identifier
+  Amount:
+    kind: currency
+    currency: USD
+    precision: 2
+  Duplicate Count:
+    kind: integer

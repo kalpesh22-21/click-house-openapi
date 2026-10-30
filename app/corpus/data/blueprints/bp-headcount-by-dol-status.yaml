@@ -35,3 +35,8 @@ uses:
 - dbpcm_warehouse.employee.dol_status_description
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  DOL Status:
+    kind: text
+  Headcount:
+    kind: integer

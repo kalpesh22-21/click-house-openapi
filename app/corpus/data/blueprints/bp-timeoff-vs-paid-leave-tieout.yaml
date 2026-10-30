@@ -91,3 +91,26 @@ uses:
 - dbpcm_warehouse.employee.employee_name
 - dbpcm_warehouse.earning_category.earn_code
 - dbpcm_warehouse.earning_category.category_name
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Month:
+    kind: text
+  Approved Timeoff Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Paid Leave Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Difference:
+    kind: number
+    unit: hours
+    precision: 2
+  Pct Diff:
+    kind: percent
+    scale: percent
+    precision: 2

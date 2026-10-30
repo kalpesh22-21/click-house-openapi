@@ -32,3 +32,8 @@ slots_summary: department, order_direction
 uses:
 - dbpcm_warehouse.employee.employee_status
 - dbpcm_warehouse.employee.department_name
+column_formats:
+  Employee Status:
+    kind: text
+  Records:
+    kind: integer

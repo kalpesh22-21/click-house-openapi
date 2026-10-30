@@ -58,3 +58,22 @@ uses:
 - dbpcm_warehouse.labor_allocation.join_key
 - dbpcm_warehouse.labor_allocation.code
 - dbpcm_warehouse.labor_allocation.description
+column_formats:
+  Employee Code:
+    kind: identifier
+  Department:
+    kind: text
+  Allocation 1 Code:
+    kind: identifier
+  Allocation 1 Description:
+    kind: text
+  Allocation 2 Code:
+    kind: identifier
+  Allocation 2 Description:
+    kind: text
+  Allocation 3 Code:
+    kind: identifier
+  Allocation 3 Description:
+    kind: text
+  Unallocated:
+    kind: integer

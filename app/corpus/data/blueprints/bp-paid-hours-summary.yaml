@@ -30,3 +30,8 @@ uses:
 - dbpcm_warehouse.payroll.pay_period_end_date
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
+column_formats:
+  Total Paid Hours:
+    kind: number
+    unit: hours
+    precision: 2

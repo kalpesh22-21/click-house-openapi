@@ -41,3 +41,10 @@ uses:
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.pay_period_end_date
 - dbpcm_warehouse.payroll.register_type
+column_formats:
+  Month:
+    kind: text
+  Total Earnings:
+    kind: currency
+    currency: USD
+    precision: 2

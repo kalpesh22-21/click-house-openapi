@@ -58,3 +58,16 @@ uses:
 - dbpcm_warehouse.employee.termination_date
 - dbpcm_warehouse.employee.most_recent_hire_date
 - dbpcm_warehouse.employee.last_check_date
+column_formats:
+  Employee Code:
+    kind: identifier
+  Department:
+    kind: text
+  Status:
+    kind: text
+  Termination Date:
+    kind: date
+  Last Check Date:
+    kind: datetime
+  Exception Type:
+    kind: text

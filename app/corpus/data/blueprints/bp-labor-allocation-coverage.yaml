@@ -36,3 +36,8 @@ uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_status
 - dbpcm_warehouse.employee.labor_allocation_key_1
+column_formats:
+  Mapping Status:
+    kind: text
+  Headcount:
+    kind: integer

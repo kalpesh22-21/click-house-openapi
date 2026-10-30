@@ -44,3 +44,14 @@ uses:
 - dbpcm_warehouse.time_off_request.earn_code
 - dbpcm_warehouse.time_off_request.earn_description
 - dbpcm_warehouse.time_off_request.status
+column_formats:
+  Leave Type:
+    kind: text
+  Earn Code:
+    kind: identifier
+  Median Lead Days:
+    kind: number
+    unit: days
+    precision: 2
+  Request Rows:
+    kind: integer

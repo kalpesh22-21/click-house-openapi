@@ -69,3 +69,18 @@ sql_template: |
   ORDER BY r.hours_rank,
            r.employee_code
 uses_rules: []
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Department:
+    kind: text
+  Approved Time-Off Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Requested Days:
+    kind: integer
+  Rank:
+    kind: integer

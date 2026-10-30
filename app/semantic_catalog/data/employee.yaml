@@ -80,6 +80,8 @@ join_keys:
     join_key to resolve its code/description.
 columns:
   employee_code:
+    format:
+      kind: identifier
     type: String
     description: The unique primary identifier associated with the employee across Paycom
   clock_sequence:
@@ -87,9 +89,13 @@ columns:
     description: An optional employee identifier used for imports and reporting. This is an alphanumeric field that
       can be up to 15 characters.
   employee_gl_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: The unique primary identifier associated with General Ledger reporting
   badge_number:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: Badge numbers are the numbers that an employee will use when logging in to a kiosk or hardware
       clock. Badge numbers must be unique. Employees without badge numbers may not be able to interact with kiosks
@@ -186,6 +192,8 @@ columns:
     type: Nullable(DateTime64(6))
     description: This is the date that the employee worked last
   department_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: Employee home Department code. This is the code assigned to the department within company maintenance
       and is related to labor allocations.
@@ -212,6 +220,8 @@ columns:
     type: Nullable(DateTime64(6))
     description: This is the date of birth for the employee
   marital_status_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: This is the marital status code for the employee, values could be S - Single, M - Married, D -
       Divorced, W - Widowed, or P - Domestic Partner
@@ -252,11 +262,15 @@ columns:
     description: Display description of the employee's ethnic background. Distinct from the raw ethnic_background
       code; an unmapped code produces an empty string.
   country_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: The 2-digit ISO country code associated with the employee's country of residence
     values:
     - US
   primary_country_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: Country code of the selected primary address. Distinct from country_code on the employee record;
       may be NULL when no eligible primary address exists.
@@ -273,6 +287,8 @@ columns:
     type: Nullable(String)
     description: The state is the state the employee enters for their home address.
   zip_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: This is the zip code the employee enters as their home address.
   work_email:
@@ -286,6 +302,8 @@ columns:
     type: Nullable(String)
     description: This is another email address that can be used for email correspondence with the employee
   primary_phone:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: The employee's Primary phone number to be reached
   primary_phone_type:
@@ -297,6 +315,8 @@ columns:
     - Other
     - Work
   secondary_phone:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: This refers to an employees second phone number
   secondary_phone_type:
@@ -308,24 +328,38 @@ columns:
     - Other
     - Work
   primary_emergency_contact_phone:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: This is the phone number for the employees first emergency contact in case of an emergency
   secondary_emergency_contact_phone:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: This is the phone number for the employees second emergency contact in case of an emergency
   tertiary_emergency_contact_phone:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: This is the phone number for the employees third emergency contact in case of an emergency
   primary_supervisor_ee_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: This is the employee code the employee will report to as their primary supervisor.
   secondary_supervisor_ee_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: This is the employee code the employee will report to as their secondary supervisor.
   tertiary_supervisor_ee_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: This is the employee code the employee will report to as their tertiary supervisor
   quaternary_supervisor_ee_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: This is the employee code the employee will report to as their quaternary supervisor
   primary_supervisor_name:
@@ -353,6 +387,8 @@ columns:
     type: Nullable(String)
     description: The email address of the Quaternary Supervisor assigned to the employee's position seat
   manager_level_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: The Manager Level code is a hierarchical classification indicating a user's managerial authority
       tier for routing approval workflows, security permissions, and escalation chains.
@@ -362,6 +398,8 @@ columns:
     type: Nullable(String)
     description: 'Displays the description of the manager level, e.g. EXEC : C-Level'
   position_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: A unique alphanumeric code that refers to Position within Position Management
     client_defined: true
@@ -410,6 +448,8 @@ columns:
     - D
     - I
   union_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: The Union code is a unique identifier used to reference which union the employee is apart of, if
       applicable
@@ -431,6 +471,8 @@ columns:
     type: Nullable(String)
     description: This is the work location state of the employee's assigned position.
   work_location_zip:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: This is the work location zip code of the employee's assigned position.
   work_location_country:
@@ -507,6 +549,8 @@ columns:
     - Salary
     - None
   paycode_profile_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: A unique 3 digit alphanumeric code provided by the user that is set when creating a Benefit Eligibility
       Profile.
@@ -644,13 +688,13 @@ columns:
 rules:
 - id: active_employee
   predicate: employee_status = 'Active'
-  applies_when: User asks for active/current active employees.
-  description: Restrict to active employees.
+  applies_when: User asks for active employees, including current active employees; no explicit exclusion of On Leave is needed.
+  description: Active means status Active only. Do not include On Leave or substitute the current-workforce default.
 - id: default_employee_population
   predicate: employee_status IN ('Active', 'On Leave')
   applies_when: 'Employee lists, headcounts, current-workforce attribute metrics (tenure, age, compensation), snapshots,
     and cross-module employee details, including grouping by department. Does not apply to payroll, accrual, expense,
-    or time fact aggregates, even by employee or department; use all accessible records for those. Explicit historical
+    or time fact aggregates, even by employee or department; use all accessible records for those. Unqualified headcounts and current employees use this default. Explicit active employees means Active only; historical
     or other population scope overrides this default.
 
     '

@@ -56,3 +56,34 @@ uses:
 - dbpcm_warehouse.payroll.type_code_description
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.type_hours
+column_formats:
+  Pay Category:
+    kind: text
+  Pay Code:
+    kind: identifier
+  Description:
+    kind: text
+  Recent Amount:
+    kind: currency
+    currency: USD
+    precision: 2
+  Recent Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Prior Amount:
+    kind: currency
+    currency: USD
+    precision: 2
+  Prior Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Amount Change:
+    kind: currency
+    currency: USD
+    precision: 2
+  Hours Change:
+    kind: number
+    unit: hours
+    precision: 2

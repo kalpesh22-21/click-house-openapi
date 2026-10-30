@@ -45,3 +45,10 @@ uses:
 - dbpcm_warehouse.time_off_request.request_date
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
+column_formats:
+  Department:
+    kind: text
+  Approved Hours:
+    kind: number
+    unit: hours
+    precision: 2

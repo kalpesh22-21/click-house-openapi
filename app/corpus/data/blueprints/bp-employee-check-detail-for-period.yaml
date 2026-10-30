@@ -44,3 +44,22 @@ sql_template: |
            p.type_code,
            e.employee_name,
            e.department_name
+column_formats:
+  register_type:
+    kind: text
+  type_code:
+    kind: identifier
+  type_code_description:
+    kind: text
+  employee_name:
+    kind: text
+  department_name:
+    kind: text
+  amount:
+    kind: currency
+    currency: USD
+    precision: 2
+  hours:
+    kind: number
+    unit: hours
+    precision: 2

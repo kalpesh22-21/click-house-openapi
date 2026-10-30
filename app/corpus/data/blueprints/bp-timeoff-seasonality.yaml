@@ -36,3 +36,10 @@ uses:
 - dbpcm_warehouse.time_off_request.request_date
 - dbpcm_warehouse.time_off_request.hours
 - dbpcm_warehouse.time_off_request.status
+column_formats:
+  Month:
+    kind: text
+  Approved Hours:
+    kind: number
+    unit: hours
+    precision: 2

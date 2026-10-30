@@ -40,3 +40,14 @@ uses:
 - dbpcm_warehouse.expense.expense_rule
 - dbpcm_warehouse.expense.expense_rule_description
 - dbpcm_warehouse.expense.expense_paid_date
+column_formats:
+  Expense Rule:
+    kind: text
+  Rule Description:
+    kind: text
+  Missing Receipts:
+    kind: integer
+  Missing Share:
+    kind: percent
+    scale: ratio
+    precision: 2

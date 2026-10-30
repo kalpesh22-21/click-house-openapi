@@ -140,6 +140,8 @@ async def create_snapshot(
         )
     try:
         options = {"refresh_of": body.refresh_of} if body.refresh_of is not None else {}
+        if body.column_formats:
+            options["column_formats"] = body.column_formats
         result = await anyio.to_thread.run_sync(partial(svc_create_snapshot, body.sql, settings, **options))
     except Exception as exc:
         raise _map_export_error(exc) from exc

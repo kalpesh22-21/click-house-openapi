@@ -56,6 +56,8 @@ join_keys:
 
 columns:
   employee_code:
+    format:
+      kind: identifier
     type: FixedString(4)
     description: Employee identifier; canonical join key to employee.
     synonyms:
@@ -84,6 +86,8 @@ columns:
       - PayPeriodEndDate (legacy CamelCase alias, not a physical column reference)
 
   earn_code:
+    format:
+      kind: identifier
     type: LowCardinality(String)
     client_defined: true
     description_col: earn_code_description
@@ -127,12 +131,16 @@ columns:
       - EarnRate (legacy CamelCase alias, not a physical column reference)
 
   pay_class_code:
+    format:
+      kind: identifier
     type: FixedString(3)
     description: Pay class code governing overtime, rounding, and break rules.
     synonyms:
       - PayClassCode (legacy CamelCase alias, not a physical column reference)
 
   department_code:
+    format:
+      kind: identifier
     type: String
     description: Department code for labor allocation.
     synonyms:

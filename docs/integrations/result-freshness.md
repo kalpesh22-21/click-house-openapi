@@ -19,7 +19,7 @@
 Existing columns, rows, row_count, truncated, and MCP provenance are unchanged. The timestamps above are examples.
 
 - MySQL-backed sources in the server's semantic catalog are live when federation is enabled. Live-only results omit `data_as_of`; display “Live data · retrieved at …”. “Live” describes the source access, not a guarantee of zero replication lag or transaction consistency across sources.
-- ClickHouse-backed warehouse sources use `dbpcm_warehouse.etl_product_refresh_status FINAL`. The fixed read-only query binds the authenticated principal's `proc_center` and `clientcode`, and the selected product names. It reads each product's maximum `last_sync_date` and converts to UTC.
+- When refresh receipts are provisioned and explicitly enabled, ClickHouse-backed warehouse sources use `dbpcm_warehouse.etl_product_refresh_status FINAL`. The fixed read-only query binds the authenticated principal's `proc_center` and `clientcode`, and the selected product names. It reads each product's maximum `last_sync_date` and converts to UTC.
 - Mixed results use the oldest ingested source timestamp, ignoring live sources when taking that minimum. Example: “Employee data is live; payroll updated through …”. Never label the employee source with payroll's timestamp.
 - Every ingested source must have a valid receipt before a top-level `data_as_of` is emitted. Missing receipts, unknown sources, scratch dependencies, unsupported source expressions, or lookup failures produce `freshness.mode: "unknown"` and omit the overall date. Known per-source dates remain available without claiming complete coverage.
 - With federation disabled, execution goes directly to ClickHouse; a MySQL catalog declaration alone does not make those results live.
@@ -28,3 +28,20 @@ Existing columns, rows, row_count, truncated, and MCP provenance are unchanged. 
 `DATA_AS_OF_ENABLED` defaults to `true`. Set it to `false` to omit freshness metadata entirely. `DATA_AS_OF_TIMEOUT_SECONDS` defaults to 2. The metadata lookup uses the existing ClickHouse host, port, TLS, and credentials; the account needs SELECT on the refresh-status table. No metadata migration or synthetic refresh timestamps are introduced. Unknown metadata never fails the data query. EXPLAIN remains a query plan and has no data freshness.
 
 Lane5 integration: Lane5 consumes the API's `freshness`, `retrieved_at`, and optional `data_as_of` as one receipt. Its independent table-name-based lookup has been removed. The receipt is retained in agent context, judge evidence, blueprint checkpoints, scoped history, and the approved answer document. Snapshot creation/rebuild and document refresh are separate operations; do not relabel saved results with a new retrieval timestamp.
+
+## Decision: ingestion receipts are not provisioned (2026-10-30)
+
+The ClickHouse refresh-status table and ingestion timestamp recording do not exist
+in the current deployment. `DATA_AS_OF_RECEIPTS_ENABLED` therefore defaults to
+`false`: no receipt lookup is attempted. Keep `DATA_AS_OF_ENABLED=true` so source
+classification and retrieval timestamps remain available. ClickHouse sources have
+unknown freshness; Trino-routed MySQL sources remain live. A mixed answer identifies
+the live sources and the ingested sources whose freshness is unknown, and has no
+overall data-as-of date. Display “Retrieved at” separately, never as “Data as of”.
+
+Do not substitute query time or the maximum business/event date. Do not create an
+empty receipts table or expose it in the semantic catalog as a workaround. Enabling
+receipts is deferred until ingestion owns and populates verified per-tenant,
+per-dataset successful-load timestamps under an agreed contract. The existing
+receipt adapter remains opt-in for that future integration; provisioning or
+populating ingestion tracking is not implemented by this change.

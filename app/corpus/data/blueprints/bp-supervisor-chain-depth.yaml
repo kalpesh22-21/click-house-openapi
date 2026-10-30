@@ -39,3 +39,12 @@ uses:
 - dbpcm_warehouse.employee.tertiary_supervisor_ee_code
 - dbpcm_warehouse.employee.quaternary_supervisor_ee_code
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Chain Depth:
+    kind: integer
+  Headcount:
+    kind: integer
+  Share Pct:
+    kind: percent
+    scale: percent
+    precision: 2

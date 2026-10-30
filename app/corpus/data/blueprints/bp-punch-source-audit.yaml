@@ -36,3 +36,10 @@ slots_summary: win, order_direction
 uses:
 - dbpcm_warehouse.punch_pair.table_source
 - dbpcm_warehouse.punch_pair.punch_date
+column_formats:
+  Month:
+    kind: text
+  Table Source:
+    kind: text
+  Pair Count:
+    kind: integer

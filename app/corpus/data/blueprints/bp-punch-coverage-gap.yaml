@@ -25,3 +25,14 @@ uses:
 - dbpcm_warehouse.punch_pair.punch_date
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Active Employees:
+    kind: integer
+  Employees With Punches:
+    kind: integer
+  Employees Without Punches:
+    kind: integer
+  Coverage Pct:
+    kind: percent
+    scale: percent
+    precision: 2

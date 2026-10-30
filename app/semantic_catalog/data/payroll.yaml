@@ -26,9 +26,12 @@ temporal:
     - name: pay_event
       role: event
       date_col: pay_date
-  default_pin: pay_period
-  note: Constrain at least one payroll time dimension before broad aggregation. Use pay_date for issued/paid timing; use pay_period_start_date
-    and pay_period_end_date for the period covered.
+  default_pin: pay_event
+  note: Constrain at least one payroll time dimension before broad aggregation. Unqualified payroll or gross earnings for a year,
+    month, or date range use pay_date (check/payment date), including payments for work in an earlier period. Disclose the basis
+    as "Based on pay dates in the requested period." Explicit work-performed or pay-period-coverage requests use pay_period_start_date
+    and pay_period_end_date instead. If a boundary-crossing pay period requires a choice of inclusion or proration, clarify that
+    choice; do not invent an allocation or silently substitute pay_date. Ingestion freshness is not a payroll date basis.
 join_keys:
   - column: employee_code
     joins: employee.employee_code
@@ -47,6 +50,8 @@ join_keys:
     cardinality: N:1
 columns:
   employee_code:
+    format:
+      kind: identifier
     type: FixedString(4)
     description: Employee identifier; canonical join key to employee.
   register_type:
@@ -69,6 +74,8 @@ columns:
     description: Hours associated with the payroll type code when applicable. Negative values can occur for reversals or adjustments.
     unit: hours
   type_code:
+    format:
+      kind: identifier
     type: FixedString(3)
     description: Payroll code within the register type.
     client_defined: true
@@ -78,13 +85,19 @@ columns:
     description: Human-readable description for type_code.
     client_defined: true
   profile_code:
+    format:
+      kind: identifier
     type: FixedString(5)
     description: Payroll profile or benefit eligibility profile code when applicable.
     client_defined: true
   distributed_job_cost_code:
+    format:
+      kind: identifier
     type: String
     description: This is a key formed by concatenating all labor allocation keys.
   department_code:
+    format:
+      kind: identifier
     type: String
     description: Department code on the payroll row.
     client_defined: true
@@ -94,7 +107,8 @@ columns:
     unit: USD_per_hour
   pay_date:
     type: Date32
-    description: Check/payment date; use when the question is about when payroll was issued.
+    description: Check/payment date. Default date basis for unqualified payroll or gross earnings by year, month, or date range;
+      also use for explicitly issued/paid payroll. A January payment for December work belongs to the January payment year.
   pay_period_start_date:
     type: Date32
     description: Start date of the pay period covered by the line item.
@@ -102,6 +116,8 @@ columns:
     type: Date32
     description: End date of the pay period covered by the line item.
   transaction_number:
+    format:
+      kind: identifier
     type: FixedString(9)
     description: Payroll transaction reference number. Not unique by itself.
   check_number:
@@ -295,8 +311,10 @@ ambiguities:
   resolves_to:
   - pay_date
   - pay_period_start_date / pay_period_end_date
-  default: pay_period_coverage
-  clarify_if: Timing is ambiguous between check/payment date and work period covered.
+  default: pay_date
+  clarify_if: The user explicitly requests work-performed or pay-period coverage and treatment of boundary-crossing periods is
+    unresolved. Do not clarify solely because an unqualified payroll or gross-earnings date range omits a date basis; use pay_date
+    and disclose it. Explicit coverage requests override the payment-date default.
 - term: payroll
   resolves_to:
   - line items across all register_type values

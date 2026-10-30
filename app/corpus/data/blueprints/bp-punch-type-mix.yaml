@@ -40,3 +40,10 @@ uses:
 - dbpcm_warehouse.punch_pair.in_punch_type
 - dbpcm_warehouse.punch_pair.out_punch_type
 - dbpcm_warehouse.punch_pair.punch_date
+column_formats:
+  In Punch Type:
+    kind: text
+  Out Punch Type:
+    kind: text
+  Pair Count:
+    kind: integer

@@ -145,3 +145,33 @@ sql_template: |
                      END ASC
 uses_rules:
 - compensation_by_pay_type
+column_formats:
+  Pay Type:
+    kind: text
+  Compensation Basis:
+    kind: text
+  Group:
+    kind: text
+  Known Compensation Count:
+    kind: integer
+  Exact Median Annual Compensation:
+    kind: currency
+    currency: USD
+    precision: 2
+  Average Annual Compensation:
+    kind: currency
+    currency: USD
+    precision: 2
+  Minimum Annual Compensation:
+    kind: currency
+    currency: USD
+    precision: 2
+  Maximum Annual Compensation:
+    kind: currency
+    currency: USD
+    precision: 2
+  Average Hourly Rate:
+    kind: currency
+    currency: USD
+    precision: 2
+    unit: per hour

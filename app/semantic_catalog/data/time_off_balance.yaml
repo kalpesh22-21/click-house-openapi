@@ -20,18 +20,24 @@ mcp_projection:
   hidden_columns: [client_code, proc_center, employee_code_num, client_code_key]
 columns:
   client_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: Client/company code.
   proc_center:
     type: String
     description: Processing center.
   employee_code:
+    format:
+      kind: identifier
     type: String
     description: Employee identifier; join to employee within tenant scope.
   accrual_status:
     type: Nullable(String)
     description: Accrual plan status.
   accrual_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: Client-defined accrual plan code; interpret with accrual_description.
   accrual_description:

@@ -45,3 +45,20 @@ uses:
 - dbpcm_warehouse.expense.expense_rule_description
 - dbpcm_warehouse.expense.expense_status
 - dbpcm_warehouse.expense.expense_paid_date
+column_formats:
+  Expense Rule:
+    kind: text
+  Approved Total:
+    kind: currency
+    currency: USD
+    precision: 2
+  Submitted Total:
+    kind: currency
+    currency: USD
+    precision: 2
+  Trimmed Total:
+    kind: currency
+    currency: USD
+    precision: 2
+  Line Count:
+    kind: integer

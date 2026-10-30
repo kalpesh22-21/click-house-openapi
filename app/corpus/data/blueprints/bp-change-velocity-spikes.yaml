@@ -48,3 +48,12 @@ slots:
 slots_summary: win, max_rows, order_direction
 uses:
 - dbpcm_warehouse.employee_change.change_time_added
+column_formats:
+  Day:
+    kind: date
+  Change Events:
+    kind: integer
+  Daily Mean:
+    kind: number
+  Daily Std Dev:
+    kind: number

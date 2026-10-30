@@ -109,7 +109,7 @@ class TestHappyPaths:
             resp = client.post("/query/snapshots", headers=AUTH, json={"sql": "SELECT 1"})
         assert resp.status_code == 201, resp.text
         body = resp.json()
-        assert body == _CREATE_BODY
+        assert body == {**_CREATE_BODY, "column_formats": {}}
         # Timestamps are ISO UTC 'Z' strings as serialized.
         assert body["created_at"].endswith("Z")
         assert svc.call_args.kwargs.get("settings") is not None or svc.call_args.args[1] is not None
@@ -119,7 +119,7 @@ class TestHappyPaths:
         with patch.object(export_router, "svc_page_snapshot", return_value=dict(_PAGE_BODY)) as svc:
             resp = client.get(f"/query/snapshots/{sid}/page?offset=100&limit=500", headers=AUTH)
         assert resp.status_code == 200
-        assert resp.json() == _PAGE_BODY
+        assert resp.json() == {**_PAGE_BODY, "column_formats": {}}
         # Query params flow to the service as (snapshot_id, offset, limit, settings).
         args = svc.call_args
         assert args.args[0] == sid

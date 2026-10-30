@@ -42,3 +42,12 @@ uses:
 - dbpcm_warehouse.expense.amount_approved
 - dbpcm_warehouse.expense.expense_status
 - dbpcm_warehouse.expense.expense_paid_date
+column_formats:
+  Policy:
+    kind: text
+  Approved Spend:
+    kind: currency
+    currency: USD
+    precision: 2
+  Line Count:
+    kind: integer

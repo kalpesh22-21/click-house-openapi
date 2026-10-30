@@ -42,3 +42,14 @@ uses:
 - dbpcm_warehouse.total_earning.earn_hours
 - dbpcm_warehouse.total_earning.punch_date
 - dbpcm_warehouse.total_earning.employee_code
+column_formats:
+  Earn Code:
+    kind: identifier
+  Total Earnings:
+    kind: currency
+    currency: USD
+    precision: 2
+  Total Hours:
+    kind: number
+    unit: hours
+    precision: 2

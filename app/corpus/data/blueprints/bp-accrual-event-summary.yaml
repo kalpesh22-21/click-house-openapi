@@ -152,3 +152,16 @@ sql_template: |
            END DESC, CASE
                          WHEN {order_direction} = 'ASC' THEN "Group"
                      END ASC, "Event Status"
+column_formats:
+  Group:
+    kind: text
+  Event Status:
+    kind: text
+  Event Day Rows:
+    kind: integer
+  Event Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Employee Count:
+    kind: integer

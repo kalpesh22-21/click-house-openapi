@@ -39,3 +39,9 @@ uses:
 - dbpcm_warehouse.payroll.pay_period_end_date
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.dol_status_description
+column_formats:
+  DOL Status:
+    kind: text
+  Gross Earnings:
+    kind: currency
+    currency: USD

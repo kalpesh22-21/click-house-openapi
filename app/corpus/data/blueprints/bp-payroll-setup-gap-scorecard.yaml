@@ -76,3 +76,26 @@ uses:
 - dbpcm_warehouse.employee.pay_frequency
 - dbpcm_warehouse.employee.schedule_group
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Employee Code:
+    kind: identifier
+  Name:
+    kind: text
+  Department:
+    kind: text
+  No Badge:
+    kind: integer
+  No GL Code:
+    kind: identifier
+  No Paycode Profile:
+    kind: integer
+  No Earning Profile:
+    kind: integer
+  No Pay Class:
+    kind: integer
+  No Pay Frequency:
+    kind: integer
+  No Schedule Group:
+    kind: integer
+  Gap Count:
+    kind: integer

@@ -42,3 +42,14 @@ uses:
 - dbpcm_warehouse.time_off_request.employee_code
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
+column_formats:
+  Department:
+    kind: text
+  Total Requests:
+    kind: integer
+  Removed Requests:
+    kind: integer
+  Withdrawal Rate Pct:
+    kind: percent
+    scale: percent
+    precision: 2

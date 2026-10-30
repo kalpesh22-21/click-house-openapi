@@ -318,3 +318,13 @@ class TestAdversarialHiddenProjection:
         serialized = repr(result)
         for hidden_name in ("client_code", "proc_center", "version"):
             assert hidden_name not in serialized
+
+
+def test_targeted_check_certifies_complete_authorized_exact_names():
+    result = _employee(columns_filter=["EmployeeCode", "ssn"])
+    assert result["column_check"] == {
+        "coverage": "complete_authorized_table_schema", "matching": "exact_names",
+    }
+    assert result["columns_not_found"] == ["ssn"]
+    assert [c["name"] for c in result["columns"]] == ["EmployeeCode"]
+    assert "column_check" not in _employee()

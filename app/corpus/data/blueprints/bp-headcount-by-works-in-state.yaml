@@ -38,3 +38,10 @@ uses:
 - dbpcm_warehouse.employee.works_in_state
 - dbpcm_warehouse.employee.lives_in_state
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Works In State:
+    kind: text
+  Headcount:
+    kind: integer
+  Lives Elsewhere:
+    kind: integer

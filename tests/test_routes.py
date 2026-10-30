@@ -207,7 +207,7 @@ class TestQueryRouteAcceptance:
         resp = client.post("/query", headers=AUTH, json={"sql": "SELECT id, name FROM t LIMIT 1"})
         assert resp.status_code == 200
         body = resp.json()
-        assert set(body.keys()) == {"columns", "rows", "row_count", "truncated", "retrieved_at", "freshness"}
+        assert set(body.keys()) == {"columns", "rows", "row_count", "truncated", "retrieved_at", "freshness", "column_formats"}
 
     def test_response_columns_match_returned_columns(self, client, mock_query_execute):
         mock_query_execute.return_value = (["user_id", "email"], [["42", "alice@example.com"]])
@@ -663,7 +663,7 @@ class TestSampleRowsRoute:
             params={"database": "default", "table": "t"},
         )
         body = resp.json()
-        assert set(body.keys()) == {"columns", "rows", "row_count", "truncated", "retrieved_at", "freshness"}
+        assert set(body.keys()) == {"columns", "rows", "row_count", "truncated", "retrieved_at", "freshness", "column_formats"}
         assert body["truncated"] is False  # sample never truncates
 
     def test_sample_default_limit_is_5(self, client, mock_schema_execute):

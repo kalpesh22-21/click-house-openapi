@@ -52,3 +52,14 @@ uses:
 - dbpcm_warehouse.total_earning.earn_code
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name
+column_formats:
+  Punch Date:
+    kind: date
+  Employees:
+    kind: integer
+  Total Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Line Count:
+    kind: integer

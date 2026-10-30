@@ -114,3 +114,20 @@ sql_template: |
            END DESC, CASE
                          WHEN {order_direction} = 'ASC' THEN `Group`
                      END ASC
+column_formats:
+  Group:
+    kind: text
+  Valid Hire Date Count:
+    kind: integer
+  Average Elapsed Years:
+    kind: number
+    unit: years
+    precision: 2
+  Minimum Elapsed Years:
+    kind: number
+    unit: years
+    precision: 2
+  Maximum Elapsed Years:
+    kind: number
+    unit: years
+    precision: 2

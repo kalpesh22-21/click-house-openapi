@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DatabaseInfo(BaseModel):
@@ -76,6 +76,7 @@ class QueryResponse(BaseModel):
     data_as_of: str | None = None
     freshness: ResultFreshness | None = None
 
+    column_formats: dict[str, dict[str, Any]] = Field(default_factory=dict)
     columns: list[str] = Field(..., description="Ordered list of column names")
     rows: list[list[Any]] = Field(..., description="Row data as a list of lists")
     row_count: int = Field(..., description="Number of rows in this response")
@@ -111,6 +112,14 @@ class HealthResponse(BaseModel):
 class SnapshotCreateRequest(BaseModel):
     """Request body for createAnswerSnapshot."""
 
+    column_formats: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("column_formats")
+    @classmethod
+    def validate_column_formats(cls, value):
+        from app.result_formats import validate_formats
+        return validate_formats(value)
+
     sql: str = Field(
         ...,
         description=(
@@ -129,6 +138,7 @@ class SnapshotCreateResponse(BaseModel):
     """Response for createAnswerSnapshot (HTTP 201)."""
 
     snapshot_id: str = Field(..., description="Server-minted snapshot UUID")
+    column_formats: dict[str, dict[str, Any]] = Field(default_factory=dict)
     columns: list[str] = Field(..., description="Ordered column names (compact shape)")
     row_count: int = Field(..., description="Exact total rows in the snapshot")
     created_at: str = Field(..., description="Mint time, ISO 8601 UTC (Z)")
@@ -138,6 +148,7 @@ class SnapshotCreateResponse(BaseModel):
 class SnapshotPageResponse(BaseModel):
     """Response for pageAnswerSnapshot."""
 
+    column_formats: dict[str, dict[str, Any]] = Field(default_factory=dict)
     columns: list[str] = Field(..., description="Ordered column names")
     rows: list[list[Any]] = Field(..., description="Row data as a list of lists")
     limit: int = Field(..., description="Page size applied")

@@ -51,3 +51,12 @@ uses:
 - dbpcm_warehouse.punch_pair.punch_date
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
+column_formats:
+  Department:
+    kind: text
+  Avg Shift Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Pair Count:
+    kind: integer

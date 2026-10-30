@@ -55,3 +55,10 @@ uses:
 - dbpcm_warehouse.employee_change.change_time_added
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
+column_formats:
+  Department:
+    kind: text
+  Changed Field:
+    kind: text
+  Change Events:
+    kind: integer

@@ -109,3 +109,23 @@ sql_template: |
            END DESC, CASE
                          WHEN {order_direction} = 'ASC' THEN `Group`
                      END ASC
+column_formats:
+  Group:
+    kind: text
+  Timecard Earning Amount:
+    kind: currency
+    currency: USD
+  Paid Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Entry Count:
+    kind: integer
+  Employee Count:
+    kind: integer
+  Observed Days:
+    kind: integer
+  First Observed Date:
+    kind: date
+  Last Observed Date:
+    kind: date

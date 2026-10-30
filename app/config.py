@@ -74,7 +74,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    session_scope_ttl_seconds: int = Field(3600, ge=60, le=86400)
+    session_scope_ttl_seconds: int = Field(28800, ge=60, le=86400)
 
     # Per-column context is complete-or-error, never silently truncated.
     catalog_context_max_rows: int = Field(1000, ge=1)
@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     # Experimental federation. Logical SQL/column permissions remain unchanged;
     # physical names are resolved only after the service guardrails run.
     data_as_of_enabled: bool = Field(True, description="Attach source-aware freshness to successful query and sample results.")
+    data_as_of_receipts_enabled: bool = Field(False, description="Enable only after ingestion publishes verified per-dataset refresh receipts. Disabled while the receipts table is unavailable.")
     data_as_of_timeout_seconds: float = Field(2.0, gt=0, allow_inf_nan=False)
 
     trino_enabled: bool = False

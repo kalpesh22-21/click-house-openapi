@@ -13,6 +13,7 @@ _QUERY_CATEGORIES = {
     'QUERY_RESOURCE_LIMIT': ('EXCEEDED_LOCAL_MEMORY_LIMIT', 'EXCEEDED_GLOBAL_MEMORY_LIMIT', 'EXCEEDED_TIME_LIMIT', 'GENERIC_INSUFFICIENT_RESOURCES', 'TRINO_RESULT_LIMIT'),
 }
 _MESSAGES = {
+    'SOURCE_UNAVAILABLE': 'A required data source is unavailable. This is not an empty result or an access denial.',
     'CATALOG_CONTEXT_UNAVAILABLE': 'Column context could not be loaded.',
     'SQL_TYPE_MISMATCH': 'Some operands have incompatible types or values outside the supported conversion range.',
     'SQL_SYNTAX_ERROR': 'The submitted query has unsupported or invalid syntax.',
@@ -40,7 +41,11 @@ def model_error_payload(exc):
     text = feedback.get('reason', getattr(exc, 'message', ''))
     retry = 'after_query_change'
     guidance = 'Write ClickHouse SQL using logical catalog tables. Inspect getTableSchema and correct the submitted query before retrying; explainQuery applies the same validation.'
-    if code == 'TRINO_IDENTITY_REQUIRED':
+    if getattr(exc, 'unavailable_source', None):
+        public = 'SOURCE_UNAVAILABLE'
+        retry = 'after_source_recovery'
+        guidance = 'Do not retry queries requiring this source during this turn. Use independent available sources or deliver verified portions with an explicit limitation.'
+    elif code == 'TRINO_IDENTITY_REQUIRED':
         public = 'EXECUTION_IDENTITY_REQUIRED'
         retry = 'after_access_change'
         guidance = 'Restore a valid authenticated session. Do not rewrite SQL to bypass access checks.'
@@ -75,6 +80,9 @@ def model_error_payload(exc):
         return None  # Existing scope/argument contracts are backend-neutral.
     payload = dict(version=1, code=public, message=_MESSAGES[public],
                    input_dialect='clickhouse', guidance=guidance, retry=retry)
+    if public == 'SOURCE_UNAVAILABLE':
+        payload['source'] = exc.unavailable_source
+        payload['retryable'] = False
     if retry == 'after_query_change':
         if feedback.get('excerpt'):
             payload['candidate_expression'] = _neutral(feedback['excerpt'])[:350]

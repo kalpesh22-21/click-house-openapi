@@ -33,6 +33,7 @@ def setup(monkeypatch):
         trino_enabled=True,
         trino_host="localhost",
         data_as_of_enabled=True,
+        data_as_of_receipts_enabled=True,
     )
     return settings, receipts
 
@@ -205,3 +206,28 @@ def test_service_mcp_and_rest_preserve_mixed_metadata(setup, monkeypatch):
     rest = QueryResponse(**result).model_dump(exclude_none=True)
     assert rest["freshness"] == result["freshness"]
     assert rest["retrieved_at"] == result["retrieved_at"]
+
+
+@pytest.mark.parametrize("sql, kinds", [
+    ("SELECT * FROM payroll", ["ingested"]),
+    ("SELECT * FROM employee e JOIN payroll p ON e.id=p.id", ["live", "ingested"]),
+])
+def test_unprovisioned_receipts_keep_unknown_without_lookup(sql, kinds, setup):
+    settings, receipts = setup
+    assert Settings.model_fields["data_as_of_receipts_enabled"].default is False
+    settings.data_as_of_receipts_enabled = False
+    result = module.result_freshness(sql, settings, NOW)
+    receipts.assert_not_called()
+    assert result["freshness"]["mode"] == "unknown"
+    assert [s["kind"] for s in result["freshness"]["sources"]] == kinds
+    assert "data_as_of" not in result
+    assert all("data_as_of" not in s for s in result["freshness"]["sources"])
+    assert result["retrieved_at"] == NOW
+
+
+def test_unprovisioned_receipts_do_not_disable_live_source_classification(setup):
+    settings, receipts = setup
+    settings.data_as_of_receipts_enabled = False
+    result = module.result_freshness("SELECT * FROM employee", settings, NOW)
+    assert result["freshness"]["mode"] == "live"
+    receipts.assert_not_called()

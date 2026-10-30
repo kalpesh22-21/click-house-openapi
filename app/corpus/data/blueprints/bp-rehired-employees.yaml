@@ -47,3 +47,18 @@ uses:
 - dbpcm_warehouse.employee.old_termination_date
 - dbpcm_warehouse.employee.rehire_date
 - dbpcm_warehouse.employee.most_recent_hire_date
+column_formats:
+  Employee Code:
+    kind: identifier
+  Name:
+    kind: text
+  Department:
+    kind: text
+  Old Termination Date:
+    kind: datetime
+  Rehire Date:
+    kind: datetime
+  Days Between:
+    kind: number
+    unit: days
+    precision: 2

@@ -156,7 +156,8 @@ def rebuild_snapshot(snapshot_id: str, settings: Settings, *, store: Any = None)
     if not isinstance(sql, str) or not sql:
         raise SnapshotNotFoundError("Snapshot cannot be recreated.", "SNAPSHOT_NOT_FOUND")
     # create_snapshot re-runs all current authorization and SQL guardrails.
-    return create_snapshot(sql, settings, store=store, refresh_of=snapshot_id)
+    return create_snapshot(sql, settings, store=store, refresh_of=snapshot_id,
+                           column_formats=meta.get("column_formats", {}))
 
 
 def _snapshot_prefix(settings: Settings, tenant_hash: str, snapshot_id: str) -> str:
@@ -443,11 +444,11 @@ def _resolve_store(settings: Settings, store: Any) -> Any:
 
 
 def create_snapshot(sql: str, settings: Settings | None = None, *, store: Any = None,
-                    refresh_of: str | None = None) -> dict[str, Any]:
+                    refresh_of: str | None = None, column_formats=None) -> dict[str, Any]:
     """Reuse a snapshot for the same verified caller, session, scope and SQL."""
     from app.snapshot_idempotency import create_idempotent
     settings = settings or get_settings()
-    return create_idempotent(sql, settings, _resolve_store(settings, store), refresh_of=refresh_of)
+    return create_idempotent(sql, settings, _resolve_store(settings, store), refresh_of=refresh_of, column_formats=column_formats)
 
 
 def _create_snapshot(
@@ -457,6 +458,7 @@ def _create_snapshot(
     store: Any = None,
     snapshot_id: str | None = None,
     expires_at: float | None = None,
+    column_formats=None,
 ) -> dict[str, Any]:
     """Mint an answer snapshot: run *sql* to completion and persist it.
 
@@ -521,6 +523,10 @@ def _create_snapshot(
             stream = execute_query_rows_stream(native_sql, settings, caps=caps)
         with stream as rows:
             columns = rows.column_names
+            from app.result_formats import query_formats, validate_formats, export_headers
+            formats = query_formats(clean_sql, columns)
+            overrides = validate_formats(column_formats or {})
+            formats.update({k: v for k, v in overrides.items() if k in columns})
             column_types = rows.column_type_names
             if store_mode == "couchbase":
                 def rows_writer_factory(tmpdir: str) -> Any:
@@ -529,7 +535,7 @@ def _create_snapshot(
                     )
             else:
                 rows_writer_factory = _JsonlGzRowsWriter
-            with _Staging(settings, columns, rows_writer_factory) as staging:
+            with _Staging(settings, export_headers(columns, formats), rows_writer_factory) as staging:
                 for row in rows:
                     staging.write_row(_wire_row(row))
                 staging.finish()
@@ -559,6 +565,7 @@ def _create_snapshot(
                     "tenant_hash": thash,
                     "access_hash": _tenant_hash(_snapshot_identity(settings)),
                     "source_sql": sql,
+                    "column_formats": formats,
                     "columns": [
                         {"name": name, "type": ctype}
                         for name, ctype in zip(columns, column_types)
@@ -614,6 +621,7 @@ def _create_snapshot(
     return {
         "snapshot_id": snapshot_id,
         "columns": columns,
+        "column_formats": formats,
         "row_count": staging.total_rows,
         "created_at": _iso_z(created_at),
         "expires_at": _iso_z(expires_at),
@@ -791,6 +799,7 @@ def page_snapshot(
 
     return {
         "columns": columns,
+        "column_formats": meta.get("column_formats", {}),
         "rows": rows,
         "limit": limit,
         "offset": offset,

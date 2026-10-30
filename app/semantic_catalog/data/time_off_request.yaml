@@ -35,10 +35,14 @@ join_keys:
 
 columns:
   client_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: Client/company code.
 
   employee_code:
+    format:
+      kind: identifier
     type: String
     description: Employee identifier; canonical join key to employee.
 
@@ -55,6 +59,8 @@ columns:
     description: Hours attached to the accrual event. Filter status and event_type for approved request hours; treat approved time-off requests as assumed taken, disclose the assumption, and distinguish payroll-paid hours and posted balances.
 
   earn_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     client_defined: true
     description_col: earn_description
@@ -65,6 +71,39 @@ columns:
       and descriptions from active accrual assignments across the whole client, using the
       latest non-deleted definition effective now. It is not limited to the caller's accessible
       employees and does not establish historical event values or classify every code as vacation.
+    context_sql: |
+      WITH ranked_definitions AS (
+        SELECT
+          clientcode,
+          base_id,
+          effid,
+          ROW_NUMBER() OVER (
+            PARTITION BY clientcode, base_id
+            ORDER BY effdate DESC, effid DESC
+          ) AS definition_rank
+        FROM acrl_effdt_acrl_definition
+        WHERE clientcode = :clientcode
+          AND effdate <= CURRENT_TIMESTAMP
+          AND TRY_CAST(is_deleted AS INTEGER) = 0
+      )
+      SELECT DISTINCT
+        'active_accrual_earnings' AS context_key,
+        ce.earncode AS earn_code,
+        ce.earndesc AS earn_description
+      FROM acrl_ee_acrl AS aea
+      INNER JOIN ranked_definitions AS definition
+        ON aea.clientcode = definition.clientcode
+        AND aea.accrual_baseid = definition.base_id
+        AND definition.definition_rank = 1
+      INNER JOIN acrl_definition_accrual_earnings AS adae
+        ON definition.effid = adae.effid
+      INNER JOIN cl_earn AS ce
+        ON aea.clientcode = ce.clientcode
+        AND adae.earncode = ce.earncode
+      WHERE aea.clientcode = :clientcode
+        AND TRY_CAST(aea.status AS INTEGER) = 1
+      ORDER BY earn_code, earn_description
+
   earn_description:
     type: Nullable(String)
     client_defined: true
@@ -106,6 +145,8 @@ columns:
     description: Workflow or supervisor context field. Do not treat as a canonical policy label without inspection.
 
   accrual_event_department_code:
+    format:
+      kind: identifier
     type: Nullable(String)
     description: Department or labor-allocation code selected for the accrual event when present.
 

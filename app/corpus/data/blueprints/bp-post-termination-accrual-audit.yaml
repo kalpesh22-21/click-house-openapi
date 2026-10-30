@@ -59,3 +59,16 @@ uses:
 - dbpcm_warehouse.employee.employee_name
 - dbpcm_warehouse.employee.termination_date
 - dbpcm_warehouse.employee.most_recent_hire_date
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Accrual Code:
+    kind: identifier
+  Accrual Date:
+    kind: datetime
+  Termination Date:
+    kind: date
+  Accrual Amount:
+    kind: number

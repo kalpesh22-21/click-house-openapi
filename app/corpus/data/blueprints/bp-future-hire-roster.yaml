@@ -33,3 +33,14 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.position_title_position_info
 - dbpcm_warehouse.employee.hire_date
+column_formats:
+  Employee Code:
+    kind: identifier
+  Name:
+    kind: text
+  Department:
+    kind: text
+  Title:
+    kind: text
+  Hire Date:
+    kind: datetime

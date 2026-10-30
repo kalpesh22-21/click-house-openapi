@@ -50,3 +50,24 @@ uses:
 - dbpcm_warehouse.employee.salary_mid
 - dbpcm_warehouse.employee.salary_max
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Employee Code:
+    kind: identifier
+  Department:
+    kind: text
+  Annual Salary:
+    kind: currency
+    currency: USD
+    precision: 2
+  Range Min:
+    kind: currency
+    currency: USD
+  Range Mid:
+    kind: currency
+    currency: USD
+  Range Max:
+    kind: currency
+    currency: USD
+  Compa Ratio:
+    kind: number
+    precision: 3

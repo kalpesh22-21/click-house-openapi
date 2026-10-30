@@ -60,3 +60,24 @@ uses:
 - dbpcm_warehouse.payroll.pay_period_end_date
 - dbpcm_warehouse.total_earning.employee_code
 - dbpcm_warehouse.total_earning.punch_date
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Department:
+    kind: text
+  Employee Status:
+    kind: text
+  Has Roster:
+    kind: integer
+  Has Punches:
+    kind: integer
+  Has Payroll:
+    kind: integer
+  Has Earnings:
+    kind: integer
+  Coverage Score:
+    kind: integer
+  Gap Count:
+    kind: integer

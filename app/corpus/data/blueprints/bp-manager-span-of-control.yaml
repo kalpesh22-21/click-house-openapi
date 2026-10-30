@@ -36,3 +36,10 @@ uses:
 - dbpcm_warehouse.employee.primary_supervisor_ee_code
 - dbpcm_warehouse.employee.primary_supervisor_name
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Manager Code:
+    kind: identifier
+  Manager:
+    kind: text
+  Direct Reports:
+    kind: integer

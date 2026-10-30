@@ -90,3 +90,19 @@ slots:
   optional_pattern: employee_status IN ('Active', 'On Leave')
 uses_rules:
 - compensation_by_pay_type
+column_formats:
+  Department:
+    kind: text
+  Pay Type:
+    kind: text
+  Compensation Basis:
+    kind: text
+  Department Average Annual Compensation:
+    kind: currency
+    currency: USD
+    precision: 2
+  Average Hourly Rate:
+    kind: currency
+    currency: USD
+    precision: 2
+    unit: per hour

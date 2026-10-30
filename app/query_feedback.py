@@ -146,6 +146,46 @@ def type_error_guidance(sql, message):
         return ""
 
 
+def unavailable_source(exc, sql):
+    """Identify only a confirmed missing table named in both error and logical SQL."""
+    if not isinstance(exc, ClickHouseQueryError):
+        return None
+    message = exc.message.split("Submitted ClickHouse excerpt", 1)[0]
+    if not re.search(r"\b(?:UNKNOWN_TABLE|TABLE_NOT_FOUND)\b", exc.code + " " + message):
+        return None
+    # ClickHouse's public message deliberately strips the table name. Inspect
+    # the local cause chain only to match a caller-owned catalog source; never
+    # forward a raw cause, physical identifier or SQL excerpt.
+    match = None
+    cause = exc
+    for _ in range(4):
+        if cause is None:
+            break
+        match = re.search(
+            r"(?:Unknown table expression identifier|Table)\s+['`\"]([A-Za-z_][A-Za-z_0-9.]*)['`\"]",
+            str(cause), re.I,
+        ) or re.search(r"Table\s+([A-Za-z_][A-Za-z_0-9.]*)\s+does not exist", str(cause), re.I)
+        if match:
+            break
+        cause = cause.__cause__
+    if not match:
+        return None
+    try:
+        from app.semantic_catalog.loader import get_semantic_catalog
+        from sqlglot.optimizer.scope import traverse_scope
+        tree = sqlglot.parse_one(sql, read="clickhouse")
+        tables = {f"{source.db}.{source.name}" for scope in traverse_scope(tree)
+                  for source in scope.sources.values() if isinstance(source, exp.Table)}
+        missing = match[1]
+        # Do not guess a logical source from a rewritten physical table name.
+        catalog = get_semantic_catalog()
+        candidates = [t for t in tables if t in catalog
+                      and (t == missing or ("." not in missing and t.rsplit(".", 1)[-1] == missing))]
+        return candidates[0] if len(candidates) == 1 else None
+    except Exception:
+        return None
+
+
 def enrich_query_error(exc, sql):
     if getattr(exc, '_query_feedback_added', False):
         return
@@ -154,6 +194,12 @@ def enrich_query_error(exc, sql):
             or exc.code in {'TRINO_IDENTITY_REQUIRED', 'TRINO_SECURITY_NOT_CONFIGURED', 'TABLE_NOT_ALLOWED'}):
         # Authorization/infrastructure errors already contain an operator action.
         # Never encourage SQL changes to bypass a policy or resolve an outage.
+        return
+    source = unavailable_source(exc, sql)
+    if source:
+        exc.unavailable_source = source
+        exc.query_feedback = {"reason": message}
+        exc._query_feedback_added = True
         return
     advice = function_error_guidance(sql, message, exc.code)
     if exc.code == 'TRINO_UNSUPPORTED_SQL' and not advice:

@@ -22,3 +22,8 @@ uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.annual_salary
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Salary Band:
+    kind: text
+  Headcount:
+    kind: integer

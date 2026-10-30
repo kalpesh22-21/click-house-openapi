@@ -49,3 +49,12 @@ uses:
 - dbpcm_warehouse.employee_change.effective_date
 - dbpcm_warehouse.employee_change.change_time_added
 - dbpcm_warehouse.employee_change.changed_field
+column_formats:
+  Changed Field:
+    kind: text
+  Retroactive Changes:
+    kind: integer
+  Share Pct:
+    kind: percent
+    scale: percent
+    precision: 2

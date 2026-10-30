@@ -52,3 +52,16 @@ uses:
 - dbpcm_warehouse.punch_pair.punch_date
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
+column_formats:
+  Department:
+    kind: text
+  Median Clock-In Min:
+    kind: number
+    unit: minutes after midnight
+    precision: 2
+  Median Clock-Out Min:
+    kind: number
+    unit: minutes after midnight
+    precision: 2
+  Pair Count:
+    kind: integer

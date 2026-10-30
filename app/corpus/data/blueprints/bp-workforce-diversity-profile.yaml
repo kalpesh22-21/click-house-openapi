@@ -48,3 +48,20 @@ uses:
 - dbpcm_warehouse.employee.eeo1_category
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Gender:
+    kind: text
+  Marital Status:
+    kind: text
+  Age Band:
+    kind: text
+  EEO-1 Category:
+    kind: text
+  Leadership Cohort:
+    kind: text
+  Headcount:
+    kind: integer
+  Share Pct:
+    kind: percent
+    scale: percent
+    precision: 2

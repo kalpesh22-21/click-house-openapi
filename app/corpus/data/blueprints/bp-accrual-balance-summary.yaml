@@ -108,3 +108,18 @@ sql_template: |
            END DESC, CASE
                          WHEN {order_direction} = 'ASC' THEN "Group"
                      END ASC
+column_formats:
+  Group:
+    kind: text
+  Beginning Balance:
+    kind: number
+  Accrued Amount:
+    kind: number
+  Awarded Amount:
+    kind: number
+  Taken Amount:
+    kind: number
+  Source Balance Rows:
+    kind: integer
+  Employee Count:
+    kind: integer

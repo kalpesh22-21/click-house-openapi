@@ -58,3 +58,12 @@ uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.termination_date
 - dbpcm_warehouse.employee.employee_name
+column_formats:
+  Employee Code:
+    kind: identifier
+  Name:
+    kind: text
+  Changed Field:
+    kind: text
+  Post-Termination Changes:
+    kind: integer

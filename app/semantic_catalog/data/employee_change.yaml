@@ -45,6 +45,8 @@ columns:
       collapse duplicate versions and retrieve the latest record per (proc_center, client_code, id).
 
   employee_code:
+    format:
+      kind: identifier
     type: FixedString(4)
     description: Unique employee identifier in Paycom. Canonical join key to employee table.
 

@@ -107,7 +107,7 @@ def result_freshness(sql, settings, retrieved_at):
             if value["kind"] == "ingested"
         )
         stamps = {}
-        if ingested:
+        if ingested and settings.data_as_of_receipts_enabled:
             try:
                 stamps = _receipts(ingested, settings)
             except Exception:  # noqa: BLE001 — optional metadata must never fail the data result

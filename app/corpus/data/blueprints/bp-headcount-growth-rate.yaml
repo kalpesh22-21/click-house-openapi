@@ -56,3 +56,12 @@ slots_summary: win, order_direction
 uses:
 - dbpcm_warehouse.employee.most_recent_hire_date
 - dbpcm_warehouse.employee.termination_date
+column_formats:
+  Month:
+    kind: text
+  Hires:
+    kind: integer
+  Terms:
+    kind: integer
+  Net Delta:
+    kind: integer

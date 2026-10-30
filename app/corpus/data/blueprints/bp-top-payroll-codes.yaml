@@ -50,3 +50,10 @@ uses:
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.register_type
 - dbpcm_warehouse.payroll.pay_period_end_date
+column_formats:
+  Type Code:
+    kind: identifier
+  Total Amount:
+    kind: currency
+    currency: USD
+    precision: 2

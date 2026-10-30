@@ -44,3 +44,12 @@ uses:
 - dbpcm_warehouse.employee.primary_phone
 - dbpcm_warehouse.employee.primary_emergency_contact_phone
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Employee Code:
+    kind: identifier
+  Name:
+    kind: text
+  Department:
+    kind: text
+  Primary Phone:
+    kind: identifier

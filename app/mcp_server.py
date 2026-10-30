@@ -343,6 +343,11 @@ def list_tables(
         "primary key) are always returned in full — 'columns' narrows the column list only. "
         "Omit 'columns' (or pass an empty list) to get every column. Requested names that are "
         "not available to you are omitted and echoed back under 'columns_not_found'. "
+        "Check missing requested fields with this narrowed lookup instead of speculative SQL. "
+        "'column_check' confirms these exact names were checked against the complete authorized "
+        "table schema before response trimming. This is not a permission-denial or global-absence "
+        "claim. Report the limitation rather than querying missing names; use another source only "
+        "when its documentation establishes a relevant alternative. "
         + _SCHEMA_GUIDANCE
     ),
 )

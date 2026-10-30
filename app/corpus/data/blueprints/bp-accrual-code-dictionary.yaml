@@ -30,3 +30,10 @@ uses:
 - dbpcm_warehouse.time_off_balance.accrual_code
 - dbpcm_warehouse.time_off_balance.accrual_description
 - dbpcm_warehouse.time_off_balance.employee_code
+column_formats:
+  Accrual Code:
+    kind: identifier
+  Accrual Description:
+    kind: text
+  Holder Count:
+    kind: integer

@@ -87,3 +87,10 @@ uses:
 - dbpcm_warehouse.labor_allocation.join_key
 - dbpcm_warehouse.labor_allocation.code
 - dbpcm_warehouse.labor_allocation.description
+column_formats:
+  Allocation Code:
+    kind: identifier
+  Allocation Description:
+    kind: text
+  Usage Count:
+    kind: integer

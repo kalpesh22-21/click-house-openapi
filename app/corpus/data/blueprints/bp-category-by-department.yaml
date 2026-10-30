@@ -59,3 +59,9 @@ uses:
 - dbpcm_warehouse.earning_category.category_name
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
+column_formats:
+  Department:
+    kind: text
+  Total Dollars:
+    kind: currency
+    currency: USD

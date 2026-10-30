@@ -43,3 +43,12 @@ uses:
 - dbpcm_warehouse.expense.expense_account_description
 - dbpcm_warehouse.expense.expense_status
 - dbpcm_warehouse.expense.expense_paid_date
+column_formats:
+  Account Code:
+    kind: identifier
+  Account Description:
+    kind: text
+  Approved Spend:
+    kind: currency
+    currency: USD
+    precision: 2

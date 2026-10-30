@@ -45,3 +45,12 @@ uses:
 - dbpcm_warehouse.employee.most_recent_hire_date
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Department:
+    kind: text
+  Terms:
+    kind: integer
+  Turnover Rate Pct:
+    kind: percent
+    scale: percent
+    precision: 2

@@ -38,3 +38,12 @@ uses:
 - dbpcm_warehouse.employee.city
 - dbpcm_warehouse.employee.state
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Zip Code:
+    kind: identifier
+  City:
+    kind: text
+  State:
+    kind: text
+  Headcount:
+    kind: integer

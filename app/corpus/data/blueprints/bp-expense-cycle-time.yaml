@@ -50,3 +50,16 @@ uses:
 - dbpcm_warehouse.expense.approved_date
 - dbpcm_warehouse.expense.expense_paid_date
 - dbpcm_warehouse.expense.expense_status
+column_formats:
+  Month:
+    kind: text
+  Line Count:
+    kind: integer
+  Median Submission To Approval:
+    kind: number
+    unit: days
+    precision: 2
+  Median Approval To Payment:
+    kind: number
+    unit: days
+    precision: 2

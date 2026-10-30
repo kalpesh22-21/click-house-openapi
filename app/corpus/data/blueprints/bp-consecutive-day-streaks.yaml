@@ -57,3 +57,14 @@ uses:
 - dbpcm_warehouse.punch_pair.punch_date
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Streak Start:
+    kind: date
+  Streak End:
+    kind: date
+  Streak Length:
+    kind: integer

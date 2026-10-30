@@ -55,3 +55,15 @@ uses:
 - dbpcm_warehouse.total_earning.punch_date
 - dbpcm_warehouse.earning_category.earn_code
 - dbpcm_warehouse.earning_category.category_name
+column_formats:
+  Earn Code:
+    kind: identifier
+  Description:
+    kind: text
+  Total Dollars:
+    kind: currency
+    currency: USD
+  Total Hours:
+    kind: number
+    unit: hours
+    precision: 2

@@ -46,3 +46,9 @@ uses:
 - dbpcm_warehouse.payroll.pay_period_end_date
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.works_in_state
+column_formats:
+  Work State:
+    kind: text
+  Gross Earnings:
+    kind: currency
+    currency: USD

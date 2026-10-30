@@ -40,3 +40,11 @@ uses:
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.register_type
 - dbpcm_warehouse.payroll.pay_period_end_date
+column_formats:
+  Tax Code:
+    kind: identifier
+  Tax Side:
+    kind: text
+  Total Tax:
+    kind: currency
+    currency: USD

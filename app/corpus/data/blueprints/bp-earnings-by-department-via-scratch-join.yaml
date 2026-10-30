@@ -43,3 +43,10 @@ composes:
     JOIN dbpcm_warehouse.employee AS e ON e.employee_code = x.employee_code
     WHERE e.department_name = {department}
     GROUP BY e.department_name
+column_formats:
+  department:
+    kind: text
+  total_earnings:
+    kind: currency
+    currency: USD
+    precision: 2

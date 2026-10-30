@@ -54,3 +54,11 @@ uses:
 - dbpcm_warehouse.earning_category.category_name
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Total Commission:
+    kind: currency
+    currency: USD

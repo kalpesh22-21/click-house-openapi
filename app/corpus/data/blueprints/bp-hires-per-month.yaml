@@ -30,3 +30,8 @@ sql_template: |
     AND (employee_status != 'N'
          OR employee_status IS NULL)
   GROUP BY toStartOfMonth(hire_date)
+column_formats:
+  month:
+    kind: date
+  hires:
+    kind: integer

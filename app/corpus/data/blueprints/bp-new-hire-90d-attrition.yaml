@@ -37,3 +37,12 @@ uses:
 - dbpcm_warehouse.employee.hire_date
 - dbpcm_warehouse.employee.termination_date
 - dbpcm_warehouse.employee.most_recent_hire_date
+column_formats:
+  Hires In Window:
+    kind: integer
+  Terms Within 90 Days:
+    kind: integer
+  90-Day Attrition Pct:
+    kind: percent
+    scale: percent
+    precision: 2

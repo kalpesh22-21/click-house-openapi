@@ -116,3 +116,22 @@ sql_template: |
                      END ASC
 uses_rules:
 - compensation_by_pay_type
+column_formats:
+  Pay Type:
+    kind: text
+  Compensation Basis:
+    kind: text
+  Lower Bound:
+    kind: currency
+    currency: USD
+    precision: 2
+  Upper Bound Exclusive:
+    kind: currency
+    currency: USD
+    precision: 2
+  Employee Count:
+    kind: integer
+  Percent Within Pay Type:
+    kind: percent
+    scale: percent
+    precision: 2

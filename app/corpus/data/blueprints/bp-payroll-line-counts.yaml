@@ -20,3 +20,8 @@ uses:
 - dbpcm_warehouse.payroll.register_type
 - dbpcm_warehouse.payroll.employee_code
 - dbpcm_warehouse.payroll.pay_period_end_date
+column_formats:
+  Register Lines:
+    kind: integer
+  Distinct Checks:
+    kind: integer

@@ -33,3 +33,13 @@ uses:
 - dbpcm_warehouse.total_earning.earn_code
 - dbpcm_warehouse.earning_category.earn_code
 - dbpcm_warehouse.earning_category.category_name
+column_formats:
+  Distinct Earn Codes:
+    kind: integer
+  Total Dollars:
+    kind: currency
+    currency: USD
+  Total Hours:
+    kind: number
+    unit: hours
+    precision: 2

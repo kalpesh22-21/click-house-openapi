@@ -41,3 +41,10 @@ slots_summary: win, max_rows, order_direction
 uses:
 - dbpcm_warehouse.employee_change.changed_field
 - dbpcm_warehouse.employee_change.change_time_added
+column_formats:
+  Month:
+    kind: text
+  Changed Field:
+    kind: text
+  Change Events:
+    kind: integer

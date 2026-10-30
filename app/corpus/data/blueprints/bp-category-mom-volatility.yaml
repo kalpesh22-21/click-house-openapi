@@ -56,3 +56,19 @@ uses:
 - dbpcm_warehouse.total_earning.earn_code
 - dbpcm_warehouse.earning_category.earn_code
 - dbpcm_warehouse.earning_category.category_name
+column_formats:
+  Category:
+    kind: text
+  Current Month Dollars:
+    kind: currency
+    currency: USD
+  Prior Month Dollars:
+    kind: currency
+    currency: USD
+  Dollar Change:
+    kind: currency
+    currency: USD
+  Pct Change:
+    kind: percent
+    scale: percent
+    precision: 2

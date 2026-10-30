@@ -53,3 +53,8 @@ slots_summary: window, order_direction
 uses:
 - dbpcm_warehouse.punch_pair.employee_code
 - dbpcm_warehouse.punch_pair.punch_date
+column_formats:
+  Pairs Per Day:
+    kind: integer
+  Employee-Days:
+    kind: integer

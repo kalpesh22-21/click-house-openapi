@@ -74,3 +74,14 @@ sql_template: |
 uses_rules:
 - default_employee_population
 - missing_date_sentinel
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Department:
+    kind: text
+  Status:
+    kind: text
+  Most Recent Hire Date:
+    kind: datetime

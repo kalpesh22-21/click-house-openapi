@@ -35,3 +35,8 @@ uses:
 - dbpcm_warehouse.employee.pay_frequency
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Pay Frequency:
+    kind: text
+  Headcount:
+    kind: integer

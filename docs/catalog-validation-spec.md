@@ -34,7 +34,7 @@ The verified principal is bound while the adapters run, then restored. The final
 scope is frozen into explicit grants in a signed scope token, alongside a trimmed
 catalog snapshot. The agent persists both in its existing Couchbase
 `session::<session_id>` document. `MCP_SERVICE_KEY` signs and verifies the token;
-no separate signing key is required. `SESSION_SCOPE_TTL_SECONDS` defaults to 3600.
+no separate signing key is required. `SESSION_SCOPE_TTL_SECONDS` defaults to 28800 (8 hours).
 Every live request verifies the user JWT and `X-Catalog-Scope`, including owner,
 session, expiry, signature, and authored-catalog version, without running permission
 adapters. Missing, stale, expired, or invalid scopes fail closed. Refresh replaces

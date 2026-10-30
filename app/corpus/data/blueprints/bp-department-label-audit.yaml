@@ -32,3 +32,8 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.department.department_name
+column_formats:
+  Department Name:
+    kind: text
+  Affected Employees:
+    kind: integer

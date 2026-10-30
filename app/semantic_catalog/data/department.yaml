@@ -27,6 +27,8 @@ join_keys:
   - proc_center
 columns:
   department_code:
+    format:
+      kind: identifier
     type: String
     description: Department code.
     description_col: department_name

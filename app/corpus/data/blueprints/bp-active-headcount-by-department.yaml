@@ -18,7 +18,7 @@ slots:
   binds_to: dbpcm_warehouse.department.department_name
   optional_pattern: 'TRUE'
 - name: employee_status
-  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
+  description: Select Active for active employees. Omit for current employees (Active + On Leave); All removes the status filter.
   type: enum
   binds_to: dbpcm_warehouse.employee.employee_status
   required: false
@@ -65,3 +65,10 @@ sql_template: |
                          WHEN {order_direction} = 'ASC' THEN headcount
                      END ASC, department,
                               department_code
+column_formats:
+  department_code:
+    kind: identifier
+  department:
+    kind: text
+  headcount:
+    kind: integer

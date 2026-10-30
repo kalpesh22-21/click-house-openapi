@@ -21,3 +21,10 @@ uses:
 - dbpcm_warehouse.payroll.register_type
 - dbpcm_warehouse.payroll.pay_period_start_date
 - dbpcm_warehouse.payroll.pay_period_end_date
+column_formats:
+  Gross Earnings:
+    kind: currency
+    currency: USD
+  Net Pay:
+    kind: currency
+    currency: USD

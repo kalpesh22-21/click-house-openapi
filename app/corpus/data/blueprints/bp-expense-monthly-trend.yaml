@@ -42,3 +42,10 @@ uses:
 - dbpcm_warehouse.expense.expense_status
 - dbpcm_warehouse.expense.expense_paid_date
 - dbpcm_warehouse.expense.expense_account_description
+column_formats:
+  Month:
+    kind: text
+  Total Approved Spend:
+    kind: currency
+    currency: USD
+    precision: 2

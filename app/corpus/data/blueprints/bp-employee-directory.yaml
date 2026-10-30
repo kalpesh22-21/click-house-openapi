@@ -69,3 +69,22 @@ uses:
 - dbpcm_warehouse.employee.employment_type
 - dbpcm_warehouse.employee.primary_supervisor_name
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Employee Code:
+    kind: identifier
+  Name:
+    kind: text
+  Work Email:
+    kind: text
+  Title:
+    kind: text
+  Department:
+    kind: text
+  Badge:
+    kind: identifier
+  Pay Basis:
+    kind: text
+  Employment Type:
+    kind: text
+  Supervisor:
+    kind: text

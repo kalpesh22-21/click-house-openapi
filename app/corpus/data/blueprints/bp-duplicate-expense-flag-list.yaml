@@ -40,3 +40,12 @@ uses:
 - dbpcm_warehouse.expense.amount_approved
 - dbpcm_warehouse.expense.employee_code
 - dbpcm_warehouse.expense.expense_paid_date
+column_formats:
+  Employee Code:
+    kind: identifier
+  Flagged Amount:
+    kind: currency
+    currency: USD
+    precision: 2
+  Flagged Lines:
+    kind: integer

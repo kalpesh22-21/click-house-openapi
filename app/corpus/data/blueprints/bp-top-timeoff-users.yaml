@@ -60,3 +60,17 @@ uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name
 - dbpcm_warehouse.employee.department_name
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Department:
+    kind: text
+  Approved Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Current Balance Hours:
+    kind: number
+    precision: 2

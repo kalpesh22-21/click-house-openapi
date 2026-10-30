@@ -47,3 +47,19 @@ uses:
 - dbpcm_warehouse.expense.expense_status
 - dbpcm_warehouse.expense.expense_paid_date
 - dbpcm_warehouse.expense.submitted_miles
+column_formats:
+  Expense Rule:
+    kind: text
+  Total Approved:
+    kind: currency
+    currency: USD
+    precision: 2
+  Total Miles:
+    kind: number
+    unit: miles
+    precision: 2
+  Effective Rate:
+    kind: currency
+    currency: USD
+    unit: per mile
+    precision: 4

@@ -47,3 +47,16 @@ uses:
 - dbpcm_warehouse.employee.position_seat_number
 - dbpcm_warehouse.employee.status_position_seat
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Employee Code:
+    kind: identifier
+  Name:
+    kind: text
+  Department:
+    kind: text
+  Position Code:
+    kind: identifier
+  Seat Number:
+    kind: identifier
+  Seat Status:
+    kind: text

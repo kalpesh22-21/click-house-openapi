@@ -93,3 +93,18 @@ uses:
 - dbpcm_warehouse.employee.most_recent_hire_date
 - dbpcm_warehouse.employee.old_termination_date
 - dbpcm_warehouse.employee.full_time_to_part_time_date
+column_formats:
+  Employee Code:
+    kind: identifier
+  Name:
+    kind: text
+  Department:
+    kind: text
+  Movement Type:
+    kind: text
+  Movement Date:
+    kind: date
+  Gap Days:
+    kind: number
+    unit: days
+    precision: 2

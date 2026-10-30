@@ -57,3 +57,22 @@ uses:
 - dbpcm_warehouse.payroll.register_type
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.pay_period_end_date
+column_formats:
+  Transaction Number:
+    kind: identifier
+  Expense Amount:
+    kind: currency
+    currency: USD
+    precision: 2
+  Payroll Amount:
+    kind: currency
+    currency: USD
+    precision: 2
+  Difference:
+    kind: currency
+    currency: USD
+    precision: 2
+  Pct Diff:
+    kind: percent
+    scale: percent
+    precision: 2

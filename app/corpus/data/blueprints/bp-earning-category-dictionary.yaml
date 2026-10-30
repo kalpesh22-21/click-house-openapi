@@ -26,3 +26,8 @@ slots_summary: order_direction
 uses:
 - dbpcm_warehouse.earning_category.earn_code
 - dbpcm_warehouse.earning_category.category_name
+column_formats:
+  Earn Code:
+    kind: identifier
+  Category:
+    kind: text

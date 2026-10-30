@@ -31,3 +31,8 @@ slots_summary: window, order_direction
 uses:
 - dbpcm_warehouse.time_off_request.status
 - dbpcm_warehouse.time_off_request.request_date
+column_formats:
+  Status:
+    kind: text
+  Request Count:
+    kind: integer

@@ -27,7 +27,7 @@ def _digest(value) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def create_idempotent(sql, settings, store, *, refresh_of=None):
+def create_idempotent(sql, settings, store, *, refresh_of=None, column_formats=None):
     from app import export_service as service
 
     principal = get_current_principal()
@@ -36,10 +36,10 @@ def create_idempotent(sql, settings, store, *, refresh_of=None):
                                    "SNAPSHOT_IDENTITY_REQUIRED")
     owner = _digest({"identity": service._snapshot_identity(settings), "subject": principal.subject})
     scope = principal.catalog_scope
-    # SQL is the entire current request body. Keep exact text: normalizing SQL
+    # Keep exact SQL and display metadata in the identity: normalizing SQL
     # could change literal semantics. Include both schema and column grants.
     fingerprint = _digest({
-        "version": 3, "sql": sql, "session": get_current_session_id(),
+        "version": 4, "column_formats": column_formats or {}, "sql": sql, "session": get_current_session_id(),
         "refresh_of": refresh_of,
         "schemas": sorted(scope.schemas) if scope and scope.schemas is not None else None,
         "columns": sorted(scope.columns) if scope and scope.columns is not None else None,
@@ -64,6 +64,7 @@ def create_idempotent(sql, settings, store, *, refresh_of=None):
                 service._check_expiry(meta)
                 return {"snapshot_id": meta["snapshot_id"],
                         "columns": [c["name"] for c in meta["columns"]],
+                        "column_formats": meta.get("column_formats", {}),
                         "row_count": meta["row_count"], "created_at": meta["created_at"],
                         "expires_at": meta["expires_at"]}
             if record["status"] == "completed":
@@ -92,7 +93,8 @@ def create_idempotent(sql, settings, store, *, refresh_of=None):
     try:
         response = service._create_snapshot(sql, settings, store=store,
                                             snapshot_id=claim["snapshot_id"],
-                                            expires_at=claim["expires_at"])
+                                            expires_at=claim["expires_at"],
+                                            **({"column_formats": column_formats} if column_formats else {}))
     except Exception:
         _finish(store, record_key, claim, owned_version, "failed")
         raise

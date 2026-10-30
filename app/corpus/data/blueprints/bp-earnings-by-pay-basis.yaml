@@ -39,3 +39,9 @@ uses:
 - dbpcm_warehouse.payroll.pay_period_end_date
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.pay_basis
+column_formats:
+  Pay Basis:
+    kind: text
+  Gross Earnings:
+    kind: currency
+    currency: USD

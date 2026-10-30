@@ -49,3 +49,9 @@ uses:
 - dbpcm_warehouse.payroll.employee_code
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
+column_formats:
+  Period:
+    kind: date
+  Gross Earnings:
+    kind: currency
+    currency: USD

@@ -22,3 +22,10 @@ uses:
 - dbpcm_warehouse.employee.annual_salary
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Median Annual Salary:
+    kind: currency
+    currency: USD
+    precision: 2
+  Headcount:
+    kind: integer

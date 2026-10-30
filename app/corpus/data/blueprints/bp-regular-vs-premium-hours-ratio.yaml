@@ -50,3 +50,18 @@ uses:
 - dbpcm_warehouse.total_earning.earn_code
 - dbpcm_warehouse.earning_category.earn_code
 - dbpcm_warehouse.earning_category.category_name
+column_formats:
+  Month:
+    kind: text
+  Regular Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Premium Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Regular Pct:
+    kind: percent
+    scale: percent
+    precision: 2

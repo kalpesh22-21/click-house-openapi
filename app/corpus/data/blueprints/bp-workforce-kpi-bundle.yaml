@@ -104,3 +104,40 @@ uses:
 - dbpcm_warehouse.employee.termination_date
 - dbpcm_warehouse.employee.most_recent_hire_date
 - dbpcm_warehouse.employee.primary_emergency_contact_phone
+column_formats:
+  Active Headcount:
+    kind: integer
+  Total Records:
+    kind: integer
+  W2 Share Pct:
+    kind: percent
+    scale: percent
+    precision: 2
+  Median Annual Salary:
+    kind: currency
+    currency: USD
+    precision: 2
+  Avg Tenure Years:
+    kind: number
+    unit: years
+    precision: 2
+  Pct Full Time:
+    kind: percent
+    scale: percent
+    precision: 2
+  Pct Direct Deposit:
+    kind: percent
+    scale: percent
+    precision: 2
+  Hires In Window:
+    kind: integer
+  Terms In Window:
+    kind: integer
+  Turnover Rate In Window:
+    kind: percent
+    scale: ratio
+    precision: 2
+  On Leave:
+    kind: integer
+  Missing Emergency Contacts:
+    kind: integer

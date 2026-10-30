@@ -69,3 +69,21 @@ sql_template: |
            department_name
 uses_rules:
 - compensation_by_pay_type
+column_formats:
+  Pay Type:
+    kind: text
+  Compensation Basis:
+    kind: text
+  department:
+    kind: text
+  average_annual_compensation:
+    kind: currency
+    currency: USD
+    precision: 2
+  headcount:
+    kind: integer
+  Average Hourly Rate:
+    kind: currency
+    currency: USD
+    precision: 2
+    unit: per hour

@@ -33,3 +33,10 @@ sql_template: |
   WHERE p.register_type IN {earn_codes}
     AND e.department_name = {department}
   GROUP BY e.department_name
+column_formats:
+  department:
+    kind: text
+  total_earnings:
+    kind: currency
+    currency: USD
+    precision: 2

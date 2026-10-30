@@ -50,3 +50,10 @@ uses:
 - dbpcm_warehouse.employee.hire_date
 - dbpcm_warehouse.employee.termination_date
 - dbpcm_warehouse.employee.most_recent_hire_date
+column_formats:
+  Month:
+    kind: text
+  Active Headcount:
+    kind: integer
+  Terms In Month:
+    kind: integer

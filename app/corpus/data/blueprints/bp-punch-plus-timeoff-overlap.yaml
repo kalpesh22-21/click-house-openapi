@@ -62,3 +62,12 @@ uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name
 - dbpcm_warehouse.employee.department_name
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Department:
+    kind: text
+  Overlap Days:
+    kind: integer

@@ -27,3 +27,16 @@ uses:
 - dbpcm_warehouse.expense.amount_approved
 - dbpcm_warehouse.expense.expense_status
 - dbpcm_warehouse.expense.expense_paid_date
+column_formats:
+  Approved Amount:
+    kind: currency
+    currency: USD
+    precision: 2
+  Approved Miles:
+    kind: number
+    unit: miles
+    precision: 2
+  Submitted Miles:
+    kind: number
+    unit: miles
+    precision: 2

@@ -58,3 +58,12 @@ uses:
 - dbpcm_warehouse.employee.termination_date
 - dbpcm_warehouse.employee.most_recent_hire_date
 - dbpcm_warehouse.employee.term_reason
+column_formats:
+  Quarter:
+    kind: date
+  Term Reason:
+    kind: text
+  Terms:
+    kind: integer
+  Quarter Total:
+    kind: integer

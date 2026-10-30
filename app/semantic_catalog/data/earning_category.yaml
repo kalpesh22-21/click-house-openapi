@@ -27,12 +27,16 @@ columns:
     type: LowCardinality(FixedString(3))
     description: Processing center, enforced by row policy.
   client_code:
+    format:
+      kind: identifier
     type: FixedString(5)
     description: Client/company, enforced by row policy.
   __version:
     type: DateTime64(9)
     description: Internal ReplacingMergeTree version; never query directly.
   earn_code:
+    format:
+      kind: identifier
     type: String
     description_col: category_name
     description: Client-defined earning code. Interpret using category_name; do not hardcode.

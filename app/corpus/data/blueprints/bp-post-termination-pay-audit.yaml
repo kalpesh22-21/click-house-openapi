@@ -55,3 +55,18 @@ uses:
 - dbpcm_warehouse.employee.employee_name
 - dbpcm_warehouse.employee.termination_date
 - dbpcm_warehouse.employee.most_recent_hire_date
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Register Lines:
+    kind: integer
+  Total Earnings:
+    kind: currency
+    currency: USD
+    precision: 2
+  Termination Date:
+    kind: date
+  Last Pay Date:
+    kind: date

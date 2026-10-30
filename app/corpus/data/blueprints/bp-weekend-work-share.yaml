@@ -37,3 +37,22 @@ slots_summary: win, order_direction
 uses:
 - dbpcm_warehouse.total_earning.punch_date
 - dbpcm_warehouse.total_earning.earn_hours
+column_formats:
+  Month:
+    kind: text
+  Total Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Weekend Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Weekday Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Weekend Share Pct:
+    kind: percent
+    scale: percent
+    precision: 2

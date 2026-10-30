@@ -76,9 +76,13 @@ join_keys:
   - proc_center
 columns:
   expense_id:
+    format:
+      kind: identifier
     type: UInt64
     description: Unique row-level identifier for the individual expense line item within tenant scope.
   employee_code:
+    format:
+      kind: identifier
     type: Nullable(FixedString(4))
     description: Employee identifier associated with the expense line item. Join to employee.employee_code using tenant scope.
   comment:
@@ -101,6 +105,8 @@ columns:
     type: Nullable(FixedString(255))
     description: Human-readable description of the expense policy.
   expense_account_code:
+    format:
+      kind: identifier
     type: Nullable(FixedString(50))
     description: Expense account code.
     client_defined: true
@@ -166,6 +172,8 @@ columns:
     type: Nullable(FixedString(100))
     description: Source display value combining the number of units and rate.
   department_code:
+    format:
+      kind: identifier
     type: Nullable(FixedString(50))
     description: Department code associated with the expense.
     client_defined: true
@@ -217,6 +225,8 @@ columns:
     - Corporate Card
     client_defined: true
   expense_deduction_code:
+    format:
+      kind: identifier
     type: Nullable(FixedString(50))
     description: Expense deduction code used to associate the expense with payroll deductions.
     client_defined: true

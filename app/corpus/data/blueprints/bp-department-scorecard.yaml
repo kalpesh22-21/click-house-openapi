@@ -51,3 +51,28 @@ uses:
 - dbpcm_warehouse.employee.direct_deposit
 - dbpcm_warehouse.employee.leave_absence_start
 - dbpcm_warehouse.employee.leave_absence_end
+column_formats:
+  Department:
+    kind: text
+  Active Headcount:
+    kind: integer
+  Avg Salary (Active):
+    kind: currency
+    currency: USD
+    precision: 2
+  Avg Tenure Years (Active):
+    kind: number
+    unit: years
+    precision: 2
+  Pct Female (Active):
+    kind: percent
+    scale: percent
+    precision: 2
+  Pct Direct Deposit (Active):
+    kind: percent
+    scale: percent
+    precision: 2
+  On Leave:
+    kind: integer
+  On Leave Over 1 Year No End:
+    kind: integer

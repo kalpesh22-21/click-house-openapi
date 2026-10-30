@@ -104,3 +104,8 @@ sql_template: |
            END DESC, CASE
                          WHEN {order_direction} = 'ASC' THEN `Group`
                      END ASC
+column_formats:
+  Group:
+    kind: text
+  Employee Count:
+    kind: integer

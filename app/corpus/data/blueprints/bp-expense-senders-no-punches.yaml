@@ -1,6 +1,6 @@
 id: bp-expense-senders-no-punches
 intent: Employees who submitted expense activity but have zero punched timecard records over the trailing N months
-  — a cross-check audit of expense submitters with no timecards
+  — based on expense submission time, not payment time; includes unpaid submissions
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -14,7 +14,7 @@ sql_template: |
                      e.department_name AS "Department"
      FROM dbpcm_warehouse.expense AS ex
      JOIN dbpcm_warehouse.employee AS e ON e.employee_code = ex.employee_code
-     WHERE ex.expense_paid_date >= addMonths(today(), -{win})
+     WHERE toDate(ex.date_time_submitted) >= addMonths(today(), -{win})
        AND ex.employee_code NOT IN
          (SELECT DISTINCT employee_code
           FROM dbpcm_warehouse.punch_pair
@@ -39,9 +39,16 @@ slots:
 slots_summary: win, order_direction
 uses:
 - dbpcm_warehouse.expense.employee_code
-- dbpcm_warehouse.expense.expense_paid_date
+- dbpcm_warehouse.expense.date_time_submitted
 - dbpcm_warehouse.punch_pair.employee_code
 - dbpcm_warehouse.punch_pair.punch_date
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name
 - dbpcm_warehouse.employee.department_name
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Department:
+    kind: text

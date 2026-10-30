@@ -41,3 +41,6 @@ uses:
 - dbpcm_warehouse.payroll.register_type
 - dbpcm_warehouse.payroll.pay_period_end_date
 - dbpcm_warehouse.earning_category.earn_code
+column_formats:
+  Type Code:
+    kind: identifier

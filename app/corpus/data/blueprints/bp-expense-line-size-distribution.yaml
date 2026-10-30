@@ -42,3 +42,12 @@ uses:
 - dbpcm_warehouse.expense.expense_account_description
 - dbpcm_warehouse.expense.expense_status
 - dbpcm_warehouse.expense.expense_paid_date
+column_formats:
+  Account Description:
+    kind: text
+  Band Start:
+    kind: currency
+    currency: USD
+    precision: 2
+  Line Count:
+    kind: integer

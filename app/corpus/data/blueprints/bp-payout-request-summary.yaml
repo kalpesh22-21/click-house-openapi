@@ -24,3 +24,12 @@ uses:
 - dbpcm_warehouse.time_off_request.status
 - dbpcm_warehouse.time_off_request.request_date
 - dbpcm_warehouse.time_off_request.employee_code
+column_formats:
+  Payout Requests:
+    kind: integer
+  Total Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Employees:
+    kind: integer

@@ -41,3 +41,15 @@ uses:
 - dbpcm_warehouse.employee.union_code
 - dbpcm_warehouse.employee.rate_1
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Works In State:
+    kind: text
+  Union Flag:
+    kind: text
+  Median Hourly Rate:
+    kind: currency
+    currency: USD
+    precision: 2
+    unit: per hour
+  Headcount:
+    kind: integer

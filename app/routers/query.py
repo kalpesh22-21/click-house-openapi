@@ -82,6 +82,7 @@ def run_query(
         retrieved_at=result.get("retrieved_at"),
         data_as_of=result.get("data_as_of"),
         freshness=result.get("freshness"),
+        column_formats=result.get("column_formats", {}),
     )
 
 
@@ -121,4 +122,5 @@ def explain_query(
         retrieved_at=result.get("retrieved_at"),
         data_as_of=result.get("data_as_of"),
         freshness=result.get("freshness"),
+        column_formats=result.get("column_formats", {}),
     )

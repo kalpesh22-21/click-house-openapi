@@ -73,3 +73,50 @@ def test_missing_live_metadata_is_not_a_sql_repair():
     assert p['retry'] == 'after_service_recovery'
     assert 'catalog configuration' in p['guidance']
     assert 'private source' not in str(p)
+
+
+@pytest.mark.parametrize('message', [
+    "UNKNOWN_TABLE: Unknown table expression identifier 'dbpcm_warehouse.expense' in scope SELECT secret",
+    "UNKNOWN_TABLE: Table dbpcm_warehouse.expense does not exist",
+    "TABLE_NOT_FOUND: Table 'dbpcm_warehouse.expense' does not exist",
+])
+def test_missing_catalog_source_has_safe_non_retryable_contract(message):
+    exc = ClickHouseQueryError(message, "CLICKHOUSE_QUERY_ERROR")
+    enrich_query_error(exc, "SELECT employee_code FROM dbpcm_warehouse.expense WHERE employee_code = 'secret'")
+    payload = model_error_payload(exc)
+    assert payload["code"] == "SOURCE_UNAVAILABLE"
+    assert payload["source"] == "dbpcm_warehouse.expense"
+    assert payload["retryable"] is False
+    assert payload["retry"] == "after_source_recovery"
+    assert "secret" not in json.dumps(payload)
+    assert "candidate_expression" not in payload
+
+
+@pytest.mark.parametrize('message,sql', [
+    ("UNKNOWN_TABLE: Table other.expense does not exist", "SELECT * FROM dbpcm_warehouse.expense"),
+    ("UNKNOWN_TABLE: Table dbpcm_warehouse.expense does not exist", "SELECT * FROM dbpcm_warehouse.employee"),
+    ("UNKNOWN_TABLE: Table dbpcm_warehouse.not_catalogued does not exist", "SELECT * FROM dbpcm_warehouse.not_catalogued"),
+    ("UNKNOWN_IDENTIFIER: expense", "SELECT * FROM dbpcm_warehouse.expense"),
+    ("Request timed out", "SELECT * FROM dbpcm_warehouse.expense"),
+    ("UNKNOWN_TABLE: unknown cause", "SELECT * FROM dbpcm_warehouse.expense"),
+])
+def test_unconfirmed_missing_sources_do_not_open_circuit(message, sql):
+    exc = ClickHouseQueryError(message, "CLICKHOUSE_QUERY_ERROR")
+    enrich_query_error(exc, sql)
+    assert model_error_payload(exc)["code"] != "SOURCE_UNAVAILABLE"
+
+
+def test_missing_source_survives_sanitized_database_exception_chain():
+    from fastapi import HTTPException
+    from clickhouse_connect.driver.exceptions import DatabaseError
+
+    raw = DatabaseError("Code: 60. DB::Exception: Unknown table expression identifier 'dbpcm_warehouse.expense' in scope SELECT private_value (UNKNOWN_TABLE)")
+    http = HTTPException(400, detail={"error": "ClickHouse query error: UNKNOWN_TABLE."})
+    http.__cause__ = raw
+    exc = ClickHouseQueryError("ClickHouse query error: UNKNOWN_TABLE.", "CLICKHOUSE_QUERY_ERROR")
+    exc.__cause__ = http
+    enrich_query_error(exc, "SELECT employee_code FROM dbpcm_warehouse.expense")
+    payload = model_error_payload(exc)
+    assert payload["code"] == "SOURCE_UNAVAILABLE"
+    assert payload["source"] == "dbpcm_warehouse.expense"
+    assert "private_value" not in json.dumps(payload)

@@ -62,3 +62,14 @@ uses:
 - dbpcm_warehouse.punch_pair.punch_date
 - dbpcm_warehouse.punch_pair.in_punch_time
 - dbpcm_warehouse.punch_pair.out_punch_time
+column_formats:
+  Employee Code:
+    kind: identifier
+  Punch Date:
+    kind: date
+  Median Break Gap Hours:
+    kind: number
+    unit: hours
+    precision: 2
+  Gap Count:
+    kind: integer

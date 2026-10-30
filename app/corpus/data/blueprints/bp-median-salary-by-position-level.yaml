@@ -31,3 +31,12 @@ uses:
 - dbpcm_warehouse.employee.position_level
 - dbpcm_warehouse.employee.annual_salary
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Position Level:
+    kind: identifier
+  Median Annual Salary:
+    kind: currency
+    currency: USD
+    precision: 2
+  Headcount:
+    kind: integer

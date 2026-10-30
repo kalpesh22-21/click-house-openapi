@@ -43,3 +43,16 @@ uses:
 - dbpcm_warehouse.employee.effective_date_position_info
 - dbpcm_warehouse.employee.effective_date_position_seat
 - dbpcm_warehouse.employee.employee_status
+column_formats:
+  Employee Code:
+    kind: identifier
+  Name:
+    kind: text
+  Position Code:
+    kind: identifier
+  Seat Number:
+    kind: identifier
+  Position Effective:
+    kind: datetime
+  Seat Effective:
+    kind: datetime

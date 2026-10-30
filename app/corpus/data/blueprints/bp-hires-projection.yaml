@@ -34,3 +34,10 @@ sql_template: |
                                     OR employee_status IS NULL), 1) - INTERVAL {window_months} MONTH
     AND (employee_status != 'N'
          OR employee_status IS NULL)
+column_formats:
+  hires_in_window:
+    kind: integer
+  avg_monthly_hires:
+    kind: number
+  projected_next_n_hires:
+    kind: number

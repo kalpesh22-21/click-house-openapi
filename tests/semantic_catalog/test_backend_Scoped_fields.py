@@ -272,6 +272,7 @@ class TestGetTableSchemaScopedValues:
                 "description",
                 "synonyms",
                 "unit",
+                "format",
                 "values",
                 "observed_values",
                 "client_defined",

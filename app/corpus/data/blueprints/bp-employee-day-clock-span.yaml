@@ -116,3 +116,22 @@ sql_template: |
            END DESC, CASE
                          WHEN {order_direction} = 'ASC' THEN p.employee_code
                      END ASC, p.punch_date
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Department:
+    kind: text
+  Punch Date:
+    kind: date
+  First Recorded In:
+    kind: datetime
+  Last Recorded Out:
+    kind: datetime
+  Pair Count:
+    kind: integer
+  Paid Hours:
+    kind: number
+    unit: hours
+    precision: 2

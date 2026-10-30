@@ -41,3 +41,16 @@ uses:
 - dbpcm_warehouse.expense.date_time_submitted
 - dbpcm_warehouse.expense.amount_approved
 - dbpcm_warehouse.expense.employee_code
+column_formats:
+  Employee Code:
+    kind: identifier
+  Pending Lines:
+    kind: integer
+  Pending Amount:
+    kind: currency
+    currency: USD
+    precision: 2
+  Avg Days Pending:
+    kind: number
+    unit: days
+    precision: 2

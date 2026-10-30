@@ -75,3 +75,12 @@ uses:
 - dbpcm_warehouse.punch_pair.out_punch_time
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name
+column_formats:
+  Employee Code:
+    kind: identifier
+  Employee Name:
+    kind: text
+  Punch Date:
+    kind: date
+  Anomaly Type:
+    kind: text
