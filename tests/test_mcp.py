@@ -209,7 +209,7 @@ class TestServiceSampleRows:
     def test_returns_compact_shape(self, mock_execute):
         mock_execute.return_value = (["id", "name"], [["1", "Alice"]])
         result = service.sample_rows("default", "users")
-        assert set(result.keys()) == {"columns", "rows", "row_count", "truncated"}
+        assert set(result.keys()) == {"columns", "rows", "row_count", "truncated", "retrieved_at", "freshness"}
         assert result["truncated"] is False  # sample never reports truncated
 
     def test_caps_limit_at_50(self, mock_execute):

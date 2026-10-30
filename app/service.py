@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -45,6 +46,7 @@ from app.errors import (
 )
 from app.principal import get_current_scope, get_current_session_id
 from app.query_feedback import with_query_feedback
+from app.result_freshness import result_freshness
 from app.security import statement_supports_provenance, validate_and_sanitize
 from app.semantic_catalog import (
     build_table_schema_response,
@@ -904,7 +906,9 @@ def sample_rows(
 
     columns, rows = _execute(sql, settings)
 
+    retrieved_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     result = _compact_result(columns, rows, settings.max_response_rows, truncated_override=False)
+    result.update(result_freshness(sql, settings, retrieved_at))
     return _with_provenance(result, uses) if include_provenance else result
 
 
@@ -1194,7 +1198,9 @@ def run_query(
 
     columns, rows = _execute(clean_sql, settings)
 
+    retrieved_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     result = _compact_result(columns, rows, settings.max_response_rows)
+    result.update(result_freshness(clean_sql, settings, retrieved_at))
     return _with_provenance(result, uses) if include_provenance else result
 
 

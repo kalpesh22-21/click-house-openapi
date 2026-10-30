@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     # --- Execution backend ---
     # Experimental federation. Logical SQL/column permissions remain unchanged;
     # physical names are resolved only after the service guardrails run.
+    data_as_of_enabled: bool = Field(True, description="Attach source-aware freshness to successful query and sample results.")
+    data_as_of_timeout_seconds: float = Field(2.0, gt=0, allow_inf_nan=False)
+
     trino_enabled: bool = False
     trino_diagnostics_dir: str = ".trino-diagnostics"
     trino_host: str = ""

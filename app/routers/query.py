@@ -49,6 +49,7 @@ def _map_query_error(exc: Exception) -> HTTPException:
 @router.post(
     "/query",
     response_model=QueryResponse,
+    response_model_exclude_none=True,
     operation_id="runQuery",
     summary="Execute a read-only SQL query",
     description=(
@@ -78,12 +79,16 @@ def run_query(
         rows=result["rows"],
         row_count=result["row_count"],
         truncated=result["truncated"],
+        retrieved_at=result.get("retrieved_at"),
+        data_as_of=result.get("data_as_of"),
+        freshness=result.get("freshness"),
     )
 
 
 @router.post(
     "/query/explain",
     response_model=QueryResponse,
+    response_model_exclude_none=True,
     operation_id="explainQuery",
     summary="EXPLAIN a query without executing it",
     description=(
@@ -113,4 +118,7 @@ def explain_query(
         rows=result["rows"],
         row_count=result["row_count"],
         truncated=result["truncated"],
+        retrieved_at=result.get("retrieved_at"),
+        data_as_of=result.get("data_as_of"),
+        freshness=result.get("freshness"),
     )

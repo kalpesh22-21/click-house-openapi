@@ -122,6 +122,7 @@ def get_table_schema(
 @router.get(
     "/tables/sample",
     response_model=QueryResponse,
+    response_model_exclude_none=True,
     operation_id="sampleRows",
     summary="Return a sample of rows from a table",
     description=(
@@ -152,4 +153,7 @@ def sample_rows(
         rows=result["rows"],
         row_count=result["row_count"],
         truncated=result["truncated"],
+        retrieved_at=result.get("retrieved_at"),
+        data_as_of=result.get("data_as_of"),
+        freshness=result.get("freshness"),
     )

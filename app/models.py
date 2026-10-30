@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -58,8 +58,23 @@ class ExplainRequest(BaseModel):
     sql: str = Field(..., description="SQL statement to pass through EXPLAIN")
 
 
+class SourceFreshness(BaseModel):
+    table: str
+    kind: Literal["live", "ingested", "unknown"]
+    data_as_of: str | None = None
+
+
+class ResultFreshness(BaseModel):
+    mode: Literal["live", "ingested", "mixed", "unknown"]
+    sources: list[SourceFreshness]
+
+
 class QueryResponse(BaseModel):
     """Compact query result — column-oriented to minimise token usage."""
+
+    retrieved_at: str | None = None
+    data_as_of: str | None = None
+    freshness: ResultFreshness | None = None
 
     columns: list[str] = Field(..., description="Ordered list of column names")
     rows: list[list[Any]] = Field(..., description="Row data as a list of lists")
