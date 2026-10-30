@@ -73,14 +73,14 @@ slots:
 result_grain:
 - Group
 sql_template: |
-  SELECT CASE {group_by}
-             WHEN 'month' THEN substring(toString(CASE {date_basis}
-                                                      WHEN 'most_recent_hire' THEN e.most_recent_hire_date
-                                                      WHEN 'termination' THEN e.termination_date
+  SELECT CASE
+             WHEN {group_by} = 'month' THEN substring(toString(CASE
+                                                      WHEN {date_basis} = 'most_recent_hire' THEN e.most_recent_hire_date
+                                                      WHEN {date_basis} = 'termination' THEN e.termination_date
                                                       ELSE e.hire_date
                                                   END), 1, 7)
-             WHEN 'department' THEN e.department_name
-             WHEN 'status' THEN e.employee_status
+             WHEN {group_by} = 'department' THEN e.department_name
+             WHEN {group_by} = 'status' THEN e.employee_status
              ELSE 'Company'
          END AS `Group`,
          uniqExact(e.employee_code) AS `Employee Count`
@@ -88,14 +88,14 @@ sql_template: |
   WHERE e.employee_status = {employee_status}
     AND e.department_name = {department}
     AND e.employee_code = {employee}
-    AND (CASE {date_basis}
-             WHEN 'most_recent_hire' THEN e.most_recent_hire_date
-             WHEN 'termination' THEN e.termination_date
+    AND (CASE
+             WHEN {date_basis} = 'most_recent_hire' THEN e.most_recent_hire_date
+             WHEN {date_basis} = 'termination' THEN e.termination_date
              ELSE e.hire_date
          END) >= toDate({period_start})
-    AND (CASE {date_basis}
-             WHEN 'most_recent_hire' THEN e.most_recent_hire_date
-             WHEN 'termination' THEN e.termination_date
+    AND (CASE
+             WHEN {date_basis} = 'most_recent_hire' THEN e.most_recent_hire_date
+             WHEN {date_basis} = 'termination' THEN e.termination_date
              ELSE e.hire_date
          END) < toDate({period_end})
   GROUP BY `Group`

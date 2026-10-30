@@ -58,3 +58,19 @@ def test_executable_blueprints_have_explicit_projection_columns():
             for select in parse(node['sql_template']).find_all(exp.Select):
                 assert not any(isinstance(item, exp.Star) or isinstance(item, exp.Column) and item.is_star
                                for item in select.expressions), path.name
+
+
+def test_employee_date_selectors_use_searched_case_for_row_values():
+    # ClickHouse 24.8 lowers simple CASE to transform(), which rejects the
+    # row-dependent date/department branches. This includes nested date selectors.
+    tree = sql('employee-date-summary')
+    cases = list(tree.find_all(exp.Case))
+    assert cases
+    assert all(case.this is None for case in cases)
+
+
+def test_payroll_group_selectors_use_searched_case_for_row_values():
+    # Simple CASE lowers to transform() on ClickHouse and rejects row branches.
+    cases = list(sql("payroll-summary").find_all(exp.Case))
+    assert cases
+    assert all(case.this is None for case in cases)

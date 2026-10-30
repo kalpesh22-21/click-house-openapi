@@ -97,9 +97,9 @@ sql_template: |
        AND toDate(pay_date) < toDate({period_end})
      GROUP BY employee_code,
               substring(toString(pay_date), 1, 7))
-  SELECT CASE {group_by}
-             WHEN 'department' THEN e.department_name
-             WHEN 'month' THEN toString(p.month)
+  SELECT CASE
+             WHEN {group_by} = 'department' THEN e.department_name
+             WHEN {group_by} = 'month' THEN toString(p.month)
              ELSE 'Company'
          END AS `Group`,
          sum(CAST(p.amount AS Nullable(Decimal(38, 2)))) AS `Payroll Amount`,
@@ -110,9 +110,9 @@ sql_template: |
   WHERE e.employee_status = {employee_status}
     AND e.department_name = {department}
     AND e.employee_code = {employee}
-  GROUP BY CASE {group_by}
-               WHEN 'department' THEN e.department_name
-               WHEN 'month' THEN toString(p.month)
+  GROUP BY CASE
+               WHEN {group_by} = 'department' THEN e.department_name
+               WHEN {group_by} = 'month' THEN toString(p.month)
                ELSE 'Company'
            END
   ORDER BY CASE
