@@ -3,7 +3,7 @@ intent: Average annual compensation and headcount by department and pay type. Av
   headcount includes it. Salary uses annual_salary; Hourly uses hourly_salary and estimated annual compensation
   = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes overtime). Keep pay types separate. Defaults to
   Active + On Leave; employee_status overrides or All removes the filter.
-slots_summary: department, employee_status
+slots_summary: department, employee_status, order_direction
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -16,6 +16,14 @@ uses:
 - dbpcm_warehouse.employee.hourly_salary
 - dbpcm_warehouse.department.department_name
 slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort by average annual compensation; defaults to highest first. Departments are ranked within each pay type.
 - name: department
   type: string
   required: false
@@ -67,6 +75,9 @@ sql_template: |
          OR {employee_status} = 'All')
   GROUP BY employee_pay_type,
            department_name
+  ORDER BY `Pay Type` ASC, CASE WHEN {order_direction} = 'DESC' THEN average_annual_compensation END DESC NULLS LAST,
+           CASE WHEN {order_direction} = 'ASC' THEN average_annual_compensation END ASC NULLS LAST,
+           department ASC
 uses_rules:
 - compensation_by_pay_type
 column_formats:

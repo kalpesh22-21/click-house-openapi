@@ -1,6 +1,6 @@
 id: bp-overtime-by-department
 intent: Earnings by department for a given pay period, filtered to a specific pay type (type_code) such as overtime
-slots_summary: department, pay_period, type_code
+slots_summary: department, pay_period, type_code, order_direction
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -14,6 +14,14 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.department.department_name
 slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort by earnings; defaults to highest first.
 - name: department
   type: string
   required: true
@@ -43,6 +51,9 @@ sql_template: |
     AND e.department_name = {department}
     AND p.pay_period_end_date = {pay_period}
   GROUP BY e.department_name
+  ORDER BY CASE WHEN {order_direction} = 'DESC' THEN earnings END DESC NULLS LAST,
+           CASE WHEN {order_direction} = 'ASC' THEN earnings END ASC NULLS LAST,
+           department ASC
 column_formats:
   department:
     kind: text

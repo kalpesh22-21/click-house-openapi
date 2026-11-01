@@ -1,7 +1,8 @@
 id: bp-active-headcount-by-department
-intent: Employee headcount by department, including departments with no matching employees. Defaults to Active +
-  On Leave; employee_status selects another status or All to remove the filter.
-slots_summary: department, employee_status, order_direction
+intent: Employee headcount by department, highest first and excluding departments with zero matching employees by default.
+  Defaults to Active + On Leave; employee_status selects another status or All to remove the status filter.
+  zero_headcount selects Include to also show departments with no matching employees.
+slots_summary: department, employee_status, order_direction, zero_headcount
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -40,8 +41,16 @@ slots:
   enum_values:
   - DESC
   - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+  default: DESC
+  description: Sort direction for headcount. Defaults to DESC (highest headcount first).
+- name: zero_headcount
+  type: enum
+  required: false
+  enum_values:
+  - Exclude
+  - Include
+  default: Exclude
+  description: Exclude departments with zero employees matching the selected status by default. Select Include to show all departments, including unstaffed departments.
 uses_rules:
 - default_employee_population
 result_grain:
@@ -59,6 +68,7 @@ sql_template: |
             OR {employee_status} = 'All')
      GROUP BY department_code) AS e ON d.department_code = e.department_code
   WHERE d.department_name = {department}
+    AND ({zero_headcount} = 'Include' OR coalesce(e.active_count, 0) > 0)
   ORDER BY CASE
                WHEN {order_direction} = 'DESC' THEN headcount
            END DESC, CASE

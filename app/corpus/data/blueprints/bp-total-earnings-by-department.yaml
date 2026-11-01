@@ -1,6 +1,6 @@
 id: bp-total-earnings-by-department
 intent: Total earnings for a department, resolving the earnings register codes dynamically
-slots_summary: department
+slots_summary: department, order_direction
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -12,6 +12,14 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.department.department_name
 slots:
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort by total earnings; defaults to highest first.
 - name: department
   type: string
   required: true
@@ -33,6 +41,9 @@ sql_template: |
   WHERE p.register_type IN {earn_codes}
     AND e.department_name = {department}
   GROUP BY e.department_name
+  ORDER BY CASE WHEN {order_direction} = 'DESC' THEN total_earnings END DESC NULLS LAST,
+           CASE WHEN {order_direction} = 'ASC' THEN total_earnings END ASC NULLS LAST,
+           department ASC
 column_formats:
   department:
     kind: text
