@@ -470,7 +470,7 @@ intent is a calendar-day difference; do not substitute an invented epoch.
 
 ### Imported blueprint execution coverage
 
-The imported corpus has 188 executable blueprints; five definitions that require
+The corpus has 189 executable blueprints; five definitions that require
 unavailable source columns remain archived. The local repair matrix covers 810
 slot variants (824 node executions), including ASC/DESC, optional filters and
 composite scratch steps. See

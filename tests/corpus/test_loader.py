@@ -29,6 +29,8 @@ def _reset_cache():
 # runtime-shaped `bp::sha256:` id and slugified filename, since normalized to the seed
 # `bp-<slug>` convention and registered here.
 _BLUEPRINT_IDS = {
+    "bp-gross-earnings-for-pay-period",
+    "bp-gross-earnings-summary",
     "bp-approved-timeoff-ranking",
         "bp-latest-hired-employees", "bp-termination-family", "bp-compensation-ranking",
     "bp-employee-summary",
@@ -59,6 +61,7 @@ _BLUEPRINT_IDS = {
     "bp-average-annual-salary-by-status",
 }
 _KNOWLEDGE_IDS = {
+    "kn-earnings-source-selection",
     "kn-department-lookup",
     "kn-age-calculation",
     "kn-overtime-multiplier",
@@ -75,7 +78,7 @@ class TestLoadBlueprints:
     def test_loads_all_migrated_ids(self):
         blueprints = loader.load_blueprints()
         assert _BLUEPRINT_IDS <= set(blueprints.keys())
-        assert len(blueprints) == 188
+        assert len(blueprints) == 189
 
     def test_entry_carries_authored_fields_verbatim(self):
         bp = loader.load_blueprints()["bp-overtime-by-department"]

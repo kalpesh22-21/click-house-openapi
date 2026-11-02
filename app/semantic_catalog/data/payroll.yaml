@@ -266,6 +266,16 @@ measures:
     defined_over: Hours-bearing rows, usually narrowed by register_type and type_code depending on whether the user wants
       worked, paid, PTO, overtime, or all hours.
 rules:
+- id: earnings_source_selection
+  predicate: "payroll.amount WHERE register_type = 'EARN'; date basis pay_date"
+  applies_when: unqualified gross earnings for a year, month or date range
+  description: >
+    Use payroll register earnings and pay_date for this default, across all authorized
+    fact records unless explicitly scoped. Timecard or in-progress earnings are a
+    separate measure from total_earning, using its documented date basis. Missing
+    recent payroll rows do not authorize substituting total_earning or prove a period
+    is open or unpaid. Combining sources requires a verified finalization boundary
+    and overlap handling. Explicit timecard and work-period requests override defaults.
 - id: payroll_employee_detail_population
   predicate: employee.employee_status IN ('Active', 'On Leave')
   applies_when: >

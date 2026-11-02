@@ -1,0 +1,20 @@
+id: kn-earnings-source-selection
+title: Payroll earnings versus timecard earnings
+doc_id: hr-policy-payroll
+status: validated
+text: >
+  Unqualified gross earnings for a year, month or date range means payroll register
+  earnings: SUM(payroll.amount) with register_type = 'EARN', filtered by pay_date
+  using a half-open [start,end) range. Include all authorized fact records; do not
+  add an employee-status restriction unless requested. Explicit pay-period coverage
+  uses payroll pay-period dates instead; clarify boundary inclusion only if unresolved.
+  Timecard earnings, labor earned by work date, and in-progress earnings use
+  total_earning.earn_amount with FINAL and its documented punch_date default;
+  explicit period coverage uses its pay-period dates. These are different measures,
+  not interchangeable sources for the same total. Missing recent payroll rows do
+  not prove that a period is open, incomplete or unpaid, and do not authorize a
+  switch to timecard earnings. Combining both stages requires a verified finalization
+  boundary and overlap handling; without that evidence report them separately or
+  explain the limitation. A matching blueprint should execute; equivalent custom SQL
+  must preserve the resolved source, measure, date basis and population. A disclaimer
+  cannot authorize a different measure. Explicit user instructions override defaults.
