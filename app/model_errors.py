@@ -3,6 +3,7 @@ import json
 import re
 
 from app.errors import ClickHouseQueryError, ClickHouseUnavailableError
+from app.trino_errors import ERROR_POLICIES as TRINO_ERROR_POLICIES, _HINTS as TRINO_HINTS
 
 _QUERY_CATEGORIES = {
     'SQL_TYPE_MISMATCH': ('TYPE_MISMATCH', 'NO_COMMON_TYPE', 'ILLEGAL_TYPE_OF_ARGUMENT', 'OPERATOR_NOT_FOUND', 'INVALID_CAST_ARGUMENT'),
@@ -13,6 +14,8 @@ _QUERY_CATEGORIES = {
     'QUERY_RESOURCE_LIMIT': ('EXCEEDED_LOCAL_MEMORY_LIMIT', 'EXCEEDED_GLOBAL_MEMORY_LIMIT', 'EXCEEDED_TIME_LIMIT', 'GENERIC_INSUFFICIENT_RESOURCES', 'TRINO_RESULT_LIMIT'),
 }
 _MESSAGES = {
+    'EXECUTION_ACCESS_DENIED': 'The effective execution identity was denied access.',
+    'EXECUTION_CANCELLED': 'Execution was canceled or stopped.',
     'SOURCE_UNAVAILABLE': 'A required data source is unavailable. This is not an empty result or an access denial.',
     'CATALOG_CONTEXT_UNAVAILABLE': 'Column context could not be loaded.',
     'SQL_TYPE_MISMATCH': 'Some operands have incompatible types or values outside the supported conversion range.',
@@ -39,12 +42,29 @@ def model_error_payload(exc):
     code = getattr(exc, 'code', '')
     feedback = getattr(exc, 'query_feedback', {})
     text = feedback.get('reason', getattr(exc, 'message', ''))
+    # Match only an authored public label (or a bare legacy enum), never a name
+    # found inside coordinator prose, SQL, literals, or a hint sentence.
+    trino_label = re.fullmatch(r"([A-Z][A-Z0-9_]+)(?:\. Hint:.*)?", text, re.S) if code == 'TRINO_QUERY_ERROR' else None
+    trino_cause = trino_label[1] if trino_label and trino_label[1] in TRINO_ERROR_POLICIES else None
     retry = 'after_query_change'
     guidance = 'Write ClickHouse SQL using logical catalog tables. Inspect getTableSchema and correct the submitted query before retrying; explainQuery applies the same validation.'
     if getattr(exc, 'unavailable_source', None):
         public = 'SOURCE_UNAVAILABLE'
         retry = 'after_source_recovery'
         guidance = 'Do not retry queries requiring this source during this turn. Use independent available sources or deliver verified portions with an explicit limitation.'
+    elif trino_cause:
+        public, retry = TRINO_ERROR_POLICIES[trino_cause]
+        hint = _neutral(TRINO_HINTS[trino_cause])
+        if public == 'QUERY_RESOURCE_LIMIT':
+            guidance = 'Reduce scanned data or aggregate earlier only if that preserves the requested answer, or ask the operator to increase capacity. Do not retry unchanged.'
+        elif public == 'EXECUTION_ACCESS_DENIED':
+            guidance = 'The effective execution identity lacks access. Do not bypass this denial with another source, identity, or SQL rewrite. Ask the operator to resolve access; complete independent permitted work.'
+        elif public == 'EXECUTION_CONFIGURATION_ERROR':
+            guidance = hint + ' Do not rewrite business SQL or bypass authorization to work around this configuration failure.'
+        elif public in {'EXECUTION_SERVICE_UNAVAILABLE', 'EXECUTION_CANCELLED'}:
+            guidance = hint + ' Do not retry automatically or change the requested SQL merely to work around this failure.'
+        else:
+            guidance += ' ' + hint
     elif code == 'TRINO_IDENTITY_REQUIRED':
         public = 'EXECUTION_IDENTITY_REQUIRED'
         retry = 'after_access_change'
@@ -83,7 +103,10 @@ def model_error_payload(exc):
     # Only the sanitized public label is eligible; never parse raw DB bodies.
     from app.ch_errors import _HINTS, PUBLIC_ERROR_CODES
     label = re.match(r"^(?:ClickHouse query error: )?([A-Z][A-Z0-9_]+)(?: \(code (\d+)\))?\. Hint:", text)
-    if label and label[1] in _HINTS:
+    if trino_cause:
+        payload['cause'] = trino_cause
+        payload['message'] = _MESSAGES[public] + ' Cause: ' + trino_cause + '.'
+    elif label and label[1] in _HINTS:
         payload['cause'] = label[1]
         if label[2] and PUBLIC_ERROR_CODES.get(label[1]) == int(label[2]):
             payload['code_num'] = int(label[2])

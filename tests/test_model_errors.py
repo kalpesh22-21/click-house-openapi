@@ -153,3 +153,63 @@ def test_public_syntax_hint_does_not_refer_to_an_unmapped_server_position():
     assert 'reported position' not in safe
     assert '987' not in safe and 'private SQL' not in safe
     assert 'trailing comma' in safe
+
+
+@pytest.mark.parametrize('name,category,retry', [
+    ('NOT_SUPPORTED', 'SQL_UNSUPPORTED_CONSTRUCT', 'after_query_change'),
+    ('FUNCTION_NOT_FOUND', 'SQL_UNSUPPORTED_FUNCTION', 'after_query_change'),
+    ('EXPRESSION_NOT_AGGREGATE', 'SQL_AGGREGATION_ERROR', 'after_query_change'),
+    ('QUERY_TIMEOUT', 'QUERY_RESOURCE_LIMIT', 'after_scope_or_capacity_change'),
+    ('EXCEEDED_CPU_LIMIT', 'QUERY_RESOURCE_LIMIT', 'after_scope_or_capacity_change'),
+    ('PERMISSION_DENIED', 'EXECUTION_ACCESS_DENIED', 'after_access_change'),
+    ('VIEW_IS_STALE', 'EXECUTION_CONFIGURATION_ERROR', 'after_operator_action'),
+    ('INVALID_ROW_FILTER', 'EXECUTION_CONFIGURATION_ERROR', 'after_operator_action'),
+    ('CATALOG_UNAVAILABLE', 'EXECUTION_SERVICE_UNAVAILABLE', 'after_service_recovery'),
+    ('QUERY_QUEUE_FULL', 'EXECUTION_SERVICE_UNAVAILABLE', 'after_service_recovery'),
+    ('USER_CANCELED', 'EXECUTION_CANCELLED', 'after_user_request'),
+    ('ADMINISTRATIVELY_KILLED', 'EXECUTION_CANCELLED', 'after_operator_action'),
+])
+def test_trino_recovery_category_and_cause(name, category, retry):
+    from types import SimpleNamespace
+    from app.trino_errors import rewrite_trino_error
+    exc = ClickHouseQueryError(rewrite_trino_error(SimpleNamespace(error_name=name)), 'TRINO_QUERY_ERROR')
+    enrich_query_error(exc, "SELECT amount FROM payroll WHERE employee_code = 'secret'")
+    p = model_error_payload(exc)
+    assert (p['code'], p['retry'], p['cause']) == (category, retry, name)
+    assert 'code_num' not in p  # Never assign a ClickHouse numeric code to Trino.
+    assert 'secret' not in str(p)
+    if retry != 'after_query_change':
+        assert 'candidate_expression' not in p
+        assert 'Inspect getTableSchema and correct' not in p['guidance']
+    if category == 'QUERY_RESOURCE_LIMIT':
+        assert 'preserves the requested answer' in p['guidance']
+
+
+def test_trino_hint_registry_has_no_unclassified_names():
+    from app.trino_errors import _HINTS, ERROR_POLICIES
+    assert set(_HINTS) == set(ERROR_POLICIES)
+    for name, (category, retry) in ERROR_POLICIES.items():
+        p = model_error_payload(ClickHouseQueryError(name + '. Hint: unused', 'TRINO_QUERY_ERROR'))
+        assert (p['code'], p['retry'], p['cause']) == (category, retry, name)
+
+
+@pytest.mark.parametrize('error_type', ['USER_ERROR', 'EXTERNAL'])
+def test_trino_exception_to_model_preserves_known_operational_cause(error_type):
+    from trino.exceptions import TrinoUserError, TrinoQueryError
+    from app.trino_client import _raise_execution_error
+    cls = TrinoUserError if error_type == 'USER_ERROR' else TrinoQueryError
+    exc = cls({'errorType': error_type, 'errorName': 'VIEW_IS_STALE',
+               'message': "private_view secret-literal", 'errorCode': 1,
+               'errorLocation': {'lineNumber': 12, 'columnNumber': 34}}, 'test-query-id')
+    with pytest.raises(ClickHouseQueryError) as caught:
+        _raise_execution_error(exc)
+    p = model_error_payload(caught.value)
+    assert p['code'] == 'EXECUTION_CONFIGURATION_ERROR'
+    assert p['cause'] == 'VIEW_IS_STALE'
+    assert all(secret not in str(p) for secret in ('private_view', 'secret-literal', 'lineNumber', 'test-query-id'))
+
+
+def test_trino_names_inside_error_body_do_not_create_a_cause_or_permission_denial():
+    p = model_error_payload(ClickHouseQueryError('Unclassified message contains PERMISSION_DENIED and VIEW_IS_STALE', 'TRINO_QUERY_ERROR'))
+    assert p['code'] == 'SQL_EXECUTION_ERROR'
+    assert 'cause' not in p

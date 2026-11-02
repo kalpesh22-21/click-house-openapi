@@ -133,6 +133,30 @@ for _name in (
 ):
     _HINTS[_name] = _HINTS["EXCEEDED_LOCAL_MEMORY_LIMIT"]
 
+# Every public coordinator name has an explicit category and recovery condition.
+# Keep this registry aligned with _HINTS; tests reject additions to only one side.
+ERROR_POLICIES = {}
+
+def _policy(names, category, retry):
+    for name in names.split():
+        ERROR_POLICIES[name] = (category, retry)
+
+_policy("FUNCTION_NOT_FOUND", "SQL_UNSUPPORTED_FUNCTION", "after_query_change")
+_policy("COLUMN_NOT_FOUND AMBIGUOUS_COLUMN AMBIGUOUS_COLUMN_NAME AMBIGUOUS_NAME", "SQL_UNKNOWN_COLUMN", "after_query_change")
+_policy("SYNTAX_ERROR", "SQL_SYNTAX_ERROR", "after_query_change")
+_policy("EXPRESSION_NOT_IN_GROUP_BY NOT_AN_AGGREGATE EXPRESSION_NOT_AGGREGATE", "SQL_AGGREGATION_ERROR", "after_query_change")
+_policy("TYPE_MISMATCH INVALID_CAST_ARGUMENT OPERATOR_NOT_FOUND INVALID_LITERAL NUMERIC_VALUE_OUT_OF_RANGE", "SQL_TYPE_MISMATCH", "after_query_change")
+_policy("NOT_SUPPORTED", "SQL_UNSUPPORTED_CONSTRUCT", "after_query_change")
+_policy("INVALID_FUNCTION_ARGUMENT DIVISION_BY_ZERO SUBQUERY_MULTIPLE_ROWS", "SQL_EXECUTION_ERROR", "after_query_change")
+_policy("EXCEEDED_LOCAL_MEMORY_LIMIT GENERIC_INSUFFICIENT_RESOURCES QUERY_TIMEOUT EXCEEDED_TIME_LIMIT EXCEEDED_GLOBAL_MEMORY_LIMIT EXCEEDED_CPU_LIMIT EXCEEDED_SPILL_LIMIT EXCEEDED_SCAN_LIMIT EXCEEDED_FUNCTION_MEMORY_LIMIT CLUSTER_OUT_OF_MEMORY", "QUERY_RESOURCE_LIMIT", "after_scope_or_capacity_change")
+_policy("TABLE_NOT_FOUND SCHEMA_NOT_FOUND CATALOG_NOT_FOUND VIEW_IS_STALE INVALID_VIEW INVALID_ROW_FILTER INVALID_COLUMN_MASK", "EXECUTION_CONFIGURATION_ERROR", "after_operator_action")
+_policy("PERMISSION_DENIED ACCESS_DENIED", "EXECUTION_ACCESS_DENIED", "after_access_change")
+_policy("ABANDONED_QUERY CATALOG_UNAVAILABLE", "EXECUTION_SERVICE_UNAVAILABLE", "after_service_recovery")
+_policy("QUERY_QUEUE_FULL", "EXECUTION_SERVICE_UNAVAILABLE", "after_service_recovery")
+_policy("USER_CANCELED", "EXECUTION_CANCELLED", "after_user_request")
+_policy("ADMINISTRATIVELY_KILLED", "EXECUTION_CANCELLED", "after_operator_action")
+
+
 def rewrite_trino_error(exc) -> str:
     """Return safe guidance without relying on downstream redaction."""
     try:

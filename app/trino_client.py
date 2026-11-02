@@ -848,8 +848,10 @@ def _raise_execution_error(exc: Exception) -> None:
             "TRINO_QUERY_ERROR",
         ) from exc
 
+    from app.trino_errors import ERROR_POLICIES
     if isinstance(exc, TrinoQueryError) and (
         isinstance(exc, TrinoUserError) or exc.error_type == "INSUFFICIENT_RESOURCES"
+        or exc.error_name in ERROR_POLICIES
     ):
         logger.error(
             "trino query rejected by coordinator: code=%s failure_class=%s "
