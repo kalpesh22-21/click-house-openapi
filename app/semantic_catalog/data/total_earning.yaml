@@ -158,14 +158,14 @@ measures:
     column: earn_hours
     agg: sum
     defined_over: >
-      rows after deduplication with FINAL; may be filtered by earn_code, pay_class_code,
+      rows after MCP-managed storage deduplication; may be filtered by earn_code, pay_class_code,
       department_code, or date range
 
   total_amount:
     column: earn_amount
     agg: sum
     defined_over: >
-      rows after deduplication with FINAL; may be filtered by earn_code, pay_class_code,
+      rows after MCP-managed storage deduplication; may be filtered by earn_code, pay_class_code,
       department_code, or date range
     unit: USD
 
@@ -173,14 +173,14 @@ measures:
     column: earn_rate
     agg: avg
     defined_over: >
-      rows after deduplication with FINAL; meaningful when scoped to a single earn_code
+      rows after MCP-managed storage deduplication; meaningful when scoped to a single earn_code
       or employee
 
   earning_entry_count:
     column: "*"
     agg: count
     defined_over: >
-      rows after deduplication with FINAL; may be filtered by earn_code, pay_class_code,
+      rows after MCP-managed storage deduplication; may be filtered by earn_code, pay_class_code,
       department_code, or date range
 
 rules:
@@ -204,15 +204,14 @@ rules:
       Apply per result and blueprint slot; disclose population briefly.
       Filter via a tenant-scoped employee semijoin to avoid duplicating records.
   - id: dedup_first
-    predicate: "FROM total_earning FINAL"
-    applies_when: any aggregation or analysis on this table
+    predicate: "MCP-managed storage deduplication"
+    applies_when: any aggregation or analysis on this table through MCP
     description: >
-      The ONLY canonical deduplication pattern is `FROM total_earning FINAL`. The
-      ReplacingMergeTree(__version, __deleted) requires FINAL to deliver correct,
-      tombstone-safe state. Aggregation without FINAL is INCORRECT — it can include
-      stale duplicates or resurrect deleted rows. Filtering `__deleted = 0` without FINAL
-      is also incorrect. Note that replica convergence after merges means non-FINAL reads
-      may see divergent counts across replicas.
+      MCP owns storage-version deduplication. Its ClickHouse execution layer applies
+      the final=1 query setting; agent SQL and blueprint templates do not need an
+      explicit FINAL clause. Do not reject an MCP query merely because its SQL lacks
+      FINAL, and do not invent __version or __deleted predicates. This storage-level
+      deduplication does not remove overlap between payroll and timecard earnings.
 
   - id: pay_period_alignment_check
     predicate: "punch_date NOT BETWEEN pay_period_start_date AND pay_period_end_date"
@@ -233,13 +232,13 @@ ambiguities:
 
   - term: regular_hours
     resolves_to:
-      - "resolveValues(earn_code, 'regular / standard / base hours') → filter earn_code IN result; SUM(earn_hours) after FINAL"
+      - "resolveValues(earn_code, 'regular / standard / base hours') → filter earn_code IN result; SUM(earn_hours) after MCP-managed storage deduplication"
     default: regular_hours_by_earn_code
     clarify_if: user defines regular hours differently or wants all non-overtime hours
 
   - term: labor_cost
     resolves_to:
-      - "SUM(earn_amount) after deduplication with FINAL"
+      - "SUM(earn_amount) after MCP-managed storage deduplication"
     default: total_amount
     clarify_if: user wants cost by department, employee, pay period, or date range
 

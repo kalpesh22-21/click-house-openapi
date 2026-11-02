@@ -26,7 +26,7 @@ def test_default_gross_uses_payment_year_without_status_or_timecard_substitution
         assert explicit['slots'][0]['required'] is True
 
 
-def test_timecard_grouping_uses_searched_case_and_canonical_dedup():
+def test_timecard_grouping_uses_searched_case_and_leaves_dedup_to_mcp():
     # ClickHouse 24.8 lowers simple CASE to transform and rejects its variable
     # result branches (ILLEGAL_COLUMN). Searched CASE keeps the supported path.
     import sqlglot
@@ -37,4 +37,4 @@ def test_timecard_grouping_uses_searched_case_and_canonical_dedup():
     sql = re.sub(r'\{[a-z_]+\}', "'day'", sql)
     tree = sqlglot.parse_one(sql, dialect='clickhouse')
     assert all(case.this is None for case in tree.find_all(exp.Case))
-    assert 'FROM dbpcm_warehouse.total_earning FINAL' in sql
+    assert 'FROM dbpcm_warehouse.total_earning FINAL' not in sql

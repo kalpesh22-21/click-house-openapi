@@ -6,7 +6,7 @@ intent: 'Total timecard earnings, paid hours, entry counts and employee counts b
   infer period-close status or switch sources. Amount is not net pay, annual salary or proof of payment. Optional
   earning_code is client-defined: resolve regular/overtime concepts, never hardcode a universal OT code. No average-rate
   calculation across unlike earning codes. Required half-open punch-date period and resolved table_source prevent
-  accidental cross-source double counting. FINAL deduplicates storage versions, not overlapping real-world events.
+  accidental cross-source double counting. MCP handles storage-version deduplication; this does not remove overlapping real-world events.
   Department means recorded labor-allocation department code, not current home department. No scheduled shift, tardiness
   or overtime policy is inferred. Observed first/last dates do not prove completeness; missing days/months are not
   zero-filled.'
@@ -88,7 +88,7 @@ sql_template: |
          count(DISTINCT punch_date) AS `Observed Days`,
          min(punch_date) AS `First Observed Date`,
          max(punch_date) AS `Last Observed Date`
-  FROM dbpcm_warehouse.total_earning FINAL
+  FROM dbpcm_warehouse.total_earning
   WHERE punch_date >= toDate({period_start})
     AND punch_date < toDate({period_end})
     AND table_source = {source}

@@ -9,7 +9,8 @@ text: >
   add an employee-status restriction unless requested. Explicit pay-period coverage
   uses payroll pay-period dates instead; clarify boundary inclusion only if unresolved.
   Timecard earnings, labor earned by work date, and in-progress earnings use
-  total_earning.earn_amount with FINAL and its documented punch_date default;
+  total_earning.earn_amount and its documented punch_date default;
+  MCP handles storage deduplication, so agent SQL does not need explicit FINAL;
   explicit period coverage uses its pay-period dates. These are different measures,
   not interchangeable sources for the same total. Missing recent payroll rows do
   not prove that a period is open, incomplete or unpaid, and do not authorize a

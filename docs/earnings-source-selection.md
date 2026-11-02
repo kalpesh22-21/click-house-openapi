@@ -3,7 +3,7 @@
 Unqualified gross earnings for a year/month/range uses payroll register `EARN`
 amounts by payment date, across authorized facts without an implicit employee-status
 filter. Explicit timecard/in-progress earnings uses `total_earning.earn_amount`
-with `FINAL`, by work/punch date unless explicit period coverage overrides it.
+with MCP-managed storage deduplication, by work/punch date unless explicit period coverage overrides it.
 These are different measures; missing recent payroll rows do not authorize a switch.
 Combining stages requires verified finalization and overlap handling.
 
@@ -16,7 +16,7 @@ Blueprint migration:
   start/end). Callers that supplied the previous single `period` ending date must
   migrate to `bp-gross-earnings-for-pay-period`, whose ending date is required.
 - `bp-gross-earnings-for-pay-period` preserves explicit period-ending semantics.
-- `bp-timecard-earnings-summary` explicitly applies the catalog's `FINAL` rule and uses searched
+- `bp-timecard-earnings-summary` leaves storage deduplication to MCP (`final=1`) and uses searched
   CASE for column-valued grouping branches (ClickHouse 24.8 rejects the simple CASE).
 - `bp-payroll-summary` remains the richer grouped payment-date summary.
 
