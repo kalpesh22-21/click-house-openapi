@@ -35,7 +35,7 @@ def test_compensation_blueprints_have_typed_trino_conversion(blueprint):
         # Simple CASE with coerced boolean WHEN clauses was rejected by live Trino.
         for case in tree.find_all(exp.Case):
             assert case.this is None
-        assert 'employee_pay_type' in sql
+        assert 'pay_type' in sql
         assert '2080' in sql
 
 
@@ -46,7 +46,7 @@ def test_salary_and_hourly_zeros_do_not_mix_and_unknowns_stay_null():
     for table in tree.find_all(exp.Table):
         table.set('db', None)
     with sqlite3.connect(':memory:') as db:
-        db.execute('CREATE TABLE employee(employee_pay_type TEXT,annual_salary REAL,hourly_salary REAL,employee_status TEXT)')
+        db.execute('CREATE TABLE employee(pay_type TEXT,annual_salary REAL,hourly_salary REAL,employee_status TEXT)')
         db.executemany('INSERT INTO employee VALUES (?,?,?,?)', [
             ('Salary',100000,None,'Active'),('Salary',200000,None,'On Leave'),
             ('Hourly',0,25,'Active'),('Hourly',0,50,'On Leave'),

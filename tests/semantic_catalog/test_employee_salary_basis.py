@@ -30,7 +30,7 @@ def test_salary_values_remain_nullable_without_universal_zero_guarantees():
         assert 'never NULL' not in column['description']
     annual = _entry()['columns']['annual_salary']['description']
     assert 'zero for Hourly employees is not zero earnings' in annual
-    assert 'employee_pay_type' in annual
+    assert 'pay_type' in annual
     assert 'quantileExactLow(0.5)' in annual
 
 
@@ -41,13 +41,13 @@ def test_hourly_value_is_not_documented_as_a_calculated_annual_ratio():
 
 
 def test_pay_classification_does_not_claim_equivalence_to_positive_salary():
-    description = _entry()['columns']['employee_pay_type']['description']
+    description = _entry()['columns']['pay_type']['description']
     assert 'other or unknown types remain separate' in description
     assert 'annual_salary > 0' not in description
     # A source classification must not silently discard other compensation
     # populations for every unqualified salary question.
     assert not any(
         rule['id'] == 'annual_compensation'
-        and rule['predicate'] == "employee_pay_type = 'Salary'"
+        and rule['predicate'] == "pay_type = 'Salary'"
         for rule in _entry()['rules']
     )

@@ -12,7 +12,7 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_status
-- dbpcm_warehouse.employee.employee_pay_type
+- dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.hourly_salary
 - dbpcm_warehouse.department.department_name
 slots:
@@ -61,10 +61,10 @@ slots:
 result_grain:
 - Pay Type
 sql_template: |
-  SELECT e.employee_pay_type AS `Pay Type`,
+  SELECT e.pay_type AS `Pay Type`,
          CASE
-             WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
-             WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary'
+             WHEN e.pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+             WHEN e.pay_type = 'Salary' THEN 'Recorded annual salary'
              ELSE 'Unknown compensation basis'
          END AS `Compensation Basis`,
          count(DISTINCT e.employee_code) AS `Employee Count`
@@ -75,29 +75,29 @@ sql_template: |
     AND e.employee_code = {employee}
     AND (({comparison} = 'above'
           AND (CASE
-                   WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                   WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                   WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                   WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                    ELSE NULL
                END) > {salary})
          OR ({comparison} = 'at_least'
              AND (CASE
-                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                       ELSE NULL
                   END) >= {salary})
          OR ({comparison} = 'equal'
              AND (CASE
-                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                       ELSE NULL
                   END) = {salary})
          OR ({comparison} = 'below'
              AND (CASE
-                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                       ELSE NULL
                   END) < {salary}))
-  GROUP BY e.employee_pay_type
+  GROUP BY e.pay_type
 uses_rules:
 - compensation_by_pay_type
 column_formats:

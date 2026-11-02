@@ -12,7 +12,7 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.annual_salary
 - dbpcm_warehouse.employee.employee_status
-- dbpcm_warehouse.employee.employee_pay_type
+- dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.hourly_salary
 - dbpcm_warehouse.department.department_name
 slots:
@@ -53,28 +53,28 @@ result_grain:
 - Department
 - Pay Type
 sql_template: |
-  SELECT employee_pay_type AS `Pay Type`,
+  SELECT pay_type AS `Pay Type`,
          CASE
-             WHEN employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
-             WHEN employee_pay_type = 'Salary' THEN 'Recorded annual salary'
+             WHEN pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+             WHEN pay_type = 'Salary' THEN 'Recorded annual salary'
              ELSE 'Unknown compensation basis'
          END AS `Compensation Basis`,
          department_name AS "Department",
          AVG((CASE
-                  WHEN employee_pay_type = 'Salary' THEN annual_salary
-                  WHEN employee_pay_type = 'Hourly' THEN hourly_salary * 2080
+                  WHEN pay_type = 'Salary' THEN annual_salary
+                  WHEN pay_type = 'Hourly' THEN hourly_salary * 2080
                   ELSE NULL
               END)) AS "Average Annual Compensation",
          COUNT(DISTINCT employee_code) AS "Headcount",
          avg(CASE
-                 WHEN employee_pay_type = 'Hourly' THEN hourly_salary
+                 WHEN pay_type = 'Hourly' THEN hourly_salary
                  ELSE NULL
              END) AS `Average Hourly Rate`
   FROM dbpcm_warehouse.employee
   WHERE department_name = {department}
     AND (employee_status = {employee_status}
          OR {employee_status} = 'All')
-  GROUP BY employee_pay_type,
+  GROUP BY pay_type,
            department_name
   ORDER BY `Pay Type` ASC, CASE WHEN {order_direction} = 'DESC' THEN "Average Annual Compensation" END DESC NULLS LAST,
            CASE WHEN {order_direction} = 'ASC' THEN "Average Annual Compensation" END ASC NULLS LAST,

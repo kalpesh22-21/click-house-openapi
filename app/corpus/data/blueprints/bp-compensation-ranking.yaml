@@ -12,7 +12,7 @@ uses:
 - dbpcm_warehouse.employee.employee_name
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_status
-- dbpcm_warehouse.employee.employee_pay_type
+- dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.annual_salary
 - dbpcm_warehouse.employee.hourly_salary
 - dbpcm_warehouse.department.department_name
@@ -62,11 +62,11 @@ sql_template: |
     (SELECT e.employee_code,
             e.employee_name,
             e.department_name,
-            e.employee_pay_type,
+            e.pay_type,
             e.hourly_salary,
             CASE
-                WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                 ELSE NULL
             END AS annual_compensation
      FROM dbpcm_warehouse.employee e
@@ -77,10 +77,10 @@ sql_template: |
     (SELECT employee_code,
             employee_name,
             department_name,
-            employee_pay_type,
+            pay_type,
             hourly_salary,
             annual_compensation,
-            row_number() OVER (PARTITION BY employee_pay_type
+            row_number() OVER (PARTITION BY pay_type
                                ORDER BY CASE
                                             WHEN {order_direction} = 'DESC' THEN annual_compensation
                                         END DESC, CASE
@@ -88,7 +88,7 @@ sql_template: |
                                                   END ASC, employee_code) AS compensation_rank
      FROM compensation
      WHERE annual_compensation IS NOT NULL)
-  SELECT employee_pay_type AS `Pay Type`,
+  SELECT pay_type AS `Pay Type`,
          compensation_rank AS `Rank`,
          employee_code AS `Employee Code`,
          employee_name AS `Employee Name`,
@@ -97,7 +97,7 @@ sql_template: |
          hourly_salary AS `Hourly Rate`
   FROM ranked
   WHERE compensation_rank <= {top_n}
-  ORDER BY employee_pay_type,
+  ORDER BY pay_type,
            compensation_rank
 uses_rules:
 - default_employee_population

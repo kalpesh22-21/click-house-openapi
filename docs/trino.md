@@ -591,3 +591,28 @@ bounded to 32 KiB. Local restricted diagnostic files retain their existing redac
 regardless of this Phoenix flag. With no incoming trace context, API work starts
 its own trace. Calls made without an active agent span cannot be attached to an
 older turn merely by session ID.
+
+## Employee column alignment
+
+The employee catalog and blueprints use the ClickHouse names in both lanes.
+Change the public output names directly in each deployment-owned employee view:
+
+| Previous output | Required output |
+|---|---|
+| street_address_1 | primary_address_line_1 |
+| street_address_2 | primary_address_line_2 |
+| city | primary_city_municipality |
+| state | primary_state_province |
+| zip_code | primary_zip_postal_code |
+| employee_pay_type | pay_type |
+| ethnic_background_description | ethnic_background |
+
+`ethnic_background` contains the human-readable description. Remove the previous
+raw-code output of that name to avoid a duplicate column. Preserve underlying
+source expressions and row-security predicates. No runtime name mapping or
+catalog alias configuration is used.
+
+Private view templates are gitignored. Deploy their updated definitions alongside
+this catalog change, then rehydrate catalog, blueprints and knowledge using the
+regenerated manifests. A Git push alone does not update private SQL or deployed
+views. This naming change does not resolve separate RLS issues.

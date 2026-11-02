@@ -13,7 +13,7 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_status
-- dbpcm_warehouse.employee.employee_pay_type
+- dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.hourly_salary
 - dbpcm_warehouse.department.department_name
 slots:
@@ -75,18 +75,18 @@ slots:
 result_grain:
 - Employee Code
 sql_template: |
-  SELECT e.employee_pay_type AS `Pay Type`,
+  SELECT e.pay_type AS `Pay Type`,
          CASE
-             WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
-             WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary'
+             WHEN e.pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+             WHEN e.pay_type = 'Salary' THEN 'Recorded annual salary'
              ELSE 'Unknown compensation basis'
          END AS `Compensation Basis`,
          e.employee_code AS `Employee Code`,
          e.department_name AS `Department`,
          e.employee_status AS `Status`,
          (CASE
-              WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-              WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+              WHEN e.pay_type = 'Salary' THEN e.annual_salary
+              WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
               ELSE NULL
           END) AS `Annual Compensation`,
          e.hourly_salary AS `Hourly Rate`
@@ -97,35 +97,35 @@ sql_template: |
     AND e.employee_code = {employee}
     AND (({comparison} = 'above'
           AND (CASE
-                   WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                   WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                   WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                   WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                    ELSE NULL
                END) > {salary})
          OR ({comparison} = 'at_least'
              AND (CASE
-                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                       ELSE NULL
                   END) >= {salary})
          OR ({comparison} = 'equal'
              AND (CASE
-                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                       ELSE NULL
                   END) = {salary})
          OR ({comparison} = 'below'
              AND (CASE
-                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                       ELSE NULL
                   END) < {salary}))
   ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN e.employee_pay_type
+               WHEN {order_direction} = 'DESC' THEN e.pay_type
            END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN e.employee_pay_type
+                         WHEN {order_direction} = 'ASC' THEN e.pay_type
                      END ASC, (CASE
-                                   WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                                   WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                                   WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                                   WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                                    ELSE NULL
                                END) DESC, e.employee_code
   LIMIT {row_limit}

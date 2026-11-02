@@ -13,7 +13,7 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_status
-- dbpcm_warehouse.employee.employee_pay_type
+- dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.hourly_salary
 - dbpcm_warehouse.department.department_name
 slots:
@@ -70,43 +70,43 @@ result_grain:
 - Lower Bound
 - Pay Type
 sql_template: |
-  SELECT e.employee_pay_type AS `Pay Type`,
+  SELECT e.pay_type AS `Pay Type`,
          CASE
-             WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
-             WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary'
+             WHEN e.pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+             WHEN e.pay_type = 'Salary' THEN 'Recorded annual salary'
              ELSE 'Unknown compensation basis'
          END AS `Compensation Basis`,
          floor((CASE
-                    WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                    WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                    WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                    WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                     ELSE NULL
                 END) / {band_width}) * {band_width} AS `Lower Bound`, (floor((CASE
-                                                                                  WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                                                                                  WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                                                                                  WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                                                                                  WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                                                                                   ELSE NULL
                                                                               END) / {band_width}) + 1) * {band_width} AS `Upper Bound Exclusive`,
                                                                                                            count(*) AS `Employee Count`,
-                                                                                                           100.0 * count(*) / sum(count(*)) OVER (PARTITION BY e.employee_pay_type) AS `Percent Within Pay Type`
+                                                                                                           100.0 * count(*) / sum(count(*)) OVER (PARTITION BY e.pay_type) AS `Percent Within Pay Type`
   FROM dbpcm_warehouse.employee e
   WHERE (e.employee_status = {employee_status}
          OR {employee_status} = 'All')
     AND e.department_name = {department}
     AND e.employee_code = {employee}
     AND (CASE
-             WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-             WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+             WHEN e.pay_type = 'Salary' THEN e.annual_salary
+             WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
              ELSE NULL
          END) IS NOT NULL
     AND ({salary_population} = 'recorded'
          OR (CASE
-                 WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                 WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                 WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                 WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                  ELSE NULL
              END) > 0)
-  GROUP BY e.employee_pay_type,
+  GROUP BY e.pay_type,
            floor((CASE
-                      WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                      WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                      WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                       ELSE NULL
                   END) / {band_width})
   ORDER BY CASE

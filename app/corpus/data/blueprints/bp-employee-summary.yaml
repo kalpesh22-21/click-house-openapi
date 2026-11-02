@@ -13,7 +13,7 @@ uses:
 - dbpcm_warehouse.employee.employee_status
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.annual_salary
-- dbpcm_warehouse.employee.employee_pay_type
+- dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.hourly_salary
 - dbpcm_warehouse.department.department_name
 slots:
@@ -65,10 +65,10 @@ result_grain:
 - Group
 - Pay Type
 sql_template: |
-  SELECT e.employee_pay_type AS `Pay Type`,
+  SELECT e.pay_type AS `Pay Type`,
          CASE
-             WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
-             WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary'
+             WHEN e.pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+             WHEN e.pay_type = 'Salary' THEN 'Recorded annual salary'
              ELSE 'Unknown compensation basis'
          END AS `Compensation Basis`,
          CASE
@@ -78,32 +78,32 @@ sql_template: |
          END AS `Group`,
          uniqExact(e.employee_code) AS `Employee Count`,
          count((CASE
-                    WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                    WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                    WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                    WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                     ELSE NULL
                 END)) AS `Known Compensation Count`,
          sum((CASE
-                  WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                  WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                  WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                  WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                   ELSE NULL
               END)) AS `Annual Compensation Sum`,
          avg((CASE
-                  WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                  WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                  WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                  WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                   ELSE NULL
               END)) AS `Average Annual Compensation`,
          min((CASE
-                  WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                  WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                  WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                  WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                   ELSE NULL
               END)) AS `Minimum Annual Compensation`,
          max((CASE
-                  WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary
-                  WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                  WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                  WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
                   ELSE NULL
               END)) AS `Maximum Annual Compensation`,
          avg(CASE
-                 WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary
+                 WHEN e.pay_type = 'Hourly' THEN e.hourly_salary
                  ELSE NULL
              END) AS `Average Hourly Rate`
   FROM dbpcm_warehouse.employee e
@@ -111,7 +111,7 @@ sql_template: |
          OR {employee_status} = 'All')
     AND e.department_name = {department}
     AND e.employee_code = {employee}
-  GROUP BY e.employee_pay_type,
+  GROUP BY e.pay_type,
            CASE
                WHEN {group_by} = 'department' THEN e.department_name
                WHEN {group_by} = 'status' THEN e.employee_status
