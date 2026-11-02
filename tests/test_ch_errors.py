@@ -159,7 +159,7 @@ class TestWiring:
                 cc.execute_query("SELECT 1", get_settings())
         err = exc.value.detail["error"]
         assert exc.value.detail["code"] == "CLICKHOUSE_QUERY_ERROR"
-        assert err.startswith("ClickHouse query error: NOT_AN_AGGREGATE. Hint:")
+        assert err.startswith("ClickHouse query error: NOT_AN_AGGREGATE (code 215). Hint:")
         assert "Hint:" in err
         assert "In query" not in err
         assert "localhost:8123" not in err

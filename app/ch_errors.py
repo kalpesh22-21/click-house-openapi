@@ -180,10 +180,21 @@ def rewrite_clickhouse_error(raw: str) -> str:
     return out
 
 
+# Expose numeric identifiers only when the observed name/code pair is known.
+PUBLIC_ERROR_CODES = {"UNSUPPORTED_METHOD": 1, "SYNTAX_ERROR": 62,
+                      "UNKNOWN_IDENTIFIER": 47, "UNKNOWN_FUNCTION": 46,
+                      "NOT_AN_AGGREGATE": 215, "ILLEGAL_AGGREGATION": 184,
+                      "TYPE_MISMATCH": 53, "NO_COMMON_TYPE": 386,
+                      "ILLEGAL_TYPE_OF_ARGUMENT": 43}
+
+
 def public_clickhouse_error(raw: str) -> str:
     """Allowlisted label/advice only; raw bodies may contain private view SQL."""
     names = re.findall(r"\(([A-Z][A-Z0-9_]+)\)", raw or "")
     name = next((n for n in reversed(names) if n in _HINTS), None)
     if name is None:
         return "ClickHouse rejected the query. Check the submitted ClickHouse SQL and contact the operator if the problem persists."
-    return f"{name}. Hint: {_HINTS[name]}"
+    match = re.search(r"\bCode:\s*(\d+)\.", raw or "")
+    code = int(match[1]) if match else None
+    label = f"{name} (code {code})" if code is not None and PUBLIC_ERROR_CODES.get(name) == code else name
+    return f"{label}. Hint: {_HINTS[name]}"

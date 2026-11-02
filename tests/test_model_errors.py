@@ -120,3 +120,15 @@ def test_missing_source_survives_sanitized_database_exception_chain():
     assert payload["code"] == "SOURCE_UNAVAILABLE"
     assert payload["source"] == "dbpcm_warehouse.expense"
     assert "private_value" not in json.dumps(payload)
+
+
+def test_public_clickhouse_cause_survives_without_private_body():
+    from app.ch_errors import public_clickhouse_error
+    raw = "Code: 1. DB::Exception: secret literal and private_view.sql (UNSUPPORTED_METHOD)"
+    safe = public_clickhouse_error(raw)
+    p = model_error_payload(ClickHouseQueryError(safe, 'CLICKHOUSE_QUERY_ERROR'))
+    assert p['cause'] == 'UNSUPPORTED_METHOD' and p['code_num'] == 1
+    assert 'secret' not in str(p) and 'private_view' not in str(p)
+    assert 'precise cause is unavailable' not in p['message']
+    wrong = public_clickhouse_error(raw.replace('Code: 1.', 'Code: 999.'))
+    assert 'code_num' not in model_error_payload(ClickHouseQueryError(wrong, 'CLICKHOUSE_QUERY_ERROR'))

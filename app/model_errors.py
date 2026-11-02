@@ -80,6 +80,14 @@ def model_error_payload(exc):
         return None  # Existing scope/argument contracts are backend-neutral.
     payload = dict(version=1, code=public, message=_MESSAGES[public],
                    input_dialect='clickhouse', guidance=guidance, retry=retry)
+    # Only the sanitized public label is eligible; never parse raw DB bodies.
+    from app.ch_errors import _HINTS, PUBLIC_ERROR_CODES
+    label = re.match(r"^(?:ClickHouse query error: )?([A-Z][A-Z0-9_]+)(?: \(code (\d+)\))?\. Hint:", text)
+    if label and label[1] in _HINTS:
+        payload['cause'] = label[1]
+        if label[2] and PUBLIC_ERROR_CODES.get(label[1]) == int(label[2]):
+            payload['code_num'] = int(label[2])
+        payload['message'] = 'The query was rejected: ' + label[1] + '.'
     if public == 'SOURCE_UNAVAILABLE':
         payload['source'] = exc.unavailable_source
         payload['retryable'] = False
