@@ -16,11 +16,11 @@ slots:
   min_value: 1
   max_value: 36
 result_grain:
-- month
+- Month
 window_anchor: data
 sql_template: |
-  SELECT toStartOfMonth(hire_date) AS month,
-         COUNT(DISTINCT employee_code) AS hires
+  SELECT toStartOfMonth(hire_date) AS "Month",
+         COUNT(DISTINCT employee_code) AS "Hires"
   FROM dbpcm_warehouse.employee
   WHERE hire_date >=
       (SELECT toStartOfMonth(max(hire_date))
@@ -31,7 +31,7 @@ sql_template: |
          OR employee_status IS NULL)
   GROUP BY toStartOfMonth(hire_date)
 column_formats:
-  month:
+  Month:
     kind: date
-  hires:
+  Hires:
     kind: integer

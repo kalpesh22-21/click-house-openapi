@@ -23,3 +23,19 @@ def test_identifier_and_percentage_regressions():
     assert BLUEPRINTS['bp-gross-earnings-summary']['column_formats']['Total Gross Earnings']['currency']=='USD'
     # Plan-specific units are not established by the catalog.
     assert 'unit' not in BLUEPRINTS['bp-accrual-balance-summary']['column_formats']['Beginning Balance']
+
+
+@pytest.mark.parametrize('blueprint', list(BLUEPRINTS.values()), ids=list(BLUEPRINTS))
+def test_terminal_columns_use_readable_display_aliases(blueprint):
+    for label in blueprint['column_formats']:
+        assert '_' not in label
+        assert not label.islower()
+
+
+def test_paycheck_comparison_uses_renamed_producer_columns():
+    producer = BLUEPRINTS['bp-employee-check-detail-for-period']
+    consumer = BLUEPRINTS['bp-compare-employee-check-detail-two-periods']['composes'][-1]['sql_template']
+    tree = sqlglot.parse_one(consumer, dialect='clickhouse')
+    refs = {column.name for column in tree.find_all(sqlglot.exp.Column) if column.table in {'a', 'b'}}
+    assert refs <= set(producer['column_formats'])
+    assert {'Amount', 'Hours', 'Register Type', 'Type Code'} <= refs

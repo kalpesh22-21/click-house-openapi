@@ -42,8 +42,8 @@ uses_rules:
 result_grain:
 - Department
 sql_template: |
-  SELECT e.department_name AS department,
-         SUM(p.amount) AS earnings
+  SELECT e.department_name AS "Department",
+         SUM(p.amount) AS "Earnings"
   FROM dbpcm_warehouse.payroll AS p
   JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
   WHERE p.register_type = 'EARN'
@@ -51,12 +51,12 @@ sql_template: |
     AND e.department_name = {department}
     AND p.pay_period_end_date = {pay_period}
   GROUP BY e.department_name
-  ORDER BY CASE WHEN {order_direction} = 'DESC' THEN earnings END DESC NULLS LAST,
-           CASE WHEN {order_direction} = 'ASC' THEN earnings END ASC NULLS LAST,
-           department ASC
+  ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Earnings" END DESC NULLS LAST,
+           CASE WHEN {order_direction} = 'ASC' THEN "Earnings" END ASC NULLS LAST,
+           "Department" ASC
 column_formats:
-  department:
+  Department:
     kind: text
-  earnings:
+  Earnings:
     kind: currency
     currency: USD

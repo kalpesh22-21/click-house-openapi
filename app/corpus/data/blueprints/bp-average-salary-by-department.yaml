@@ -23,7 +23,8 @@ slots:
   - DESC
   - ASC
   default: DESC
-  description: Sort by average annual compensation; defaults to highest first. Departments are ranked within each pay type.
+  description: Sort by average annual compensation; defaults to highest first. Departments are ranked within each
+    pay type.
 - name: department
   type: string
   required: false
@@ -58,13 +59,13 @@ sql_template: |
              WHEN employee_pay_type = 'Salary' THEN 'Recorded annual salary'
              ELSE 'Unknown compensation basis'
          END AS `Compensation Basis`,
-         department_name AS department,
+         department_name AS "Department",
          AVG((CASE
                   WHEN employee_pay_type = 'Salary' THEN annual_salary
                   WHEN employee_pay_type = 'Hourly' THEN hourly_salary * 2080
                   ELSE NULL
-              END)) AS average_annual_compensation,
-         COUNT(DISTINCT employee_code) AS headcount,
+              END)) AS "Average Annual Compensation",
+         COUNT(DISTINCT employee_code) AS "Headcount",
          avg(CASE
                  WHEN employee_pay_type = 'Hourly' THEN hourly_salary
                  ELSE NULL
@@ -75,9 +76,9 @@ sql_template: |
          OR {employee_status} = 'All')
   GROUP BY employee_pay_type,
            department_name
-  ORDER BY `Pay Type` ASC, CASE WHEN {order_direction} = 'DESC' THEN average_annual_compensation END DESC NULLS LAST,
-           CASE WHEN {order_direction} = 'ASC' THEN average_annual_compensation END ASC NULLS LAST,
-           department ASC
+  ORDER BY `Pay Type` ASC, CASE WHEN {order_direction} = 'DESC' THEN "Average Annual Compensation" END DESC NULLS LAST,
+           CASE WHEN {order_direction} = 'ASC' THEN "Average Annual Compensation" END ASC NULLS LAST,
+           "Department" ASC
 uses_rules:
 - compensation_by_pay_type
 column_formats:
@@ -85,13 +86,13 @@ column_formats:
     kind: text
   Compensation Basis:
     kind: text
-  department:
+  Department:
     kind: text
-  average_annual_compensation:
+  Average Annual Compensation:
     kind: currency
     currency: USD
     precision: 2
-  headcount:
+  Headcount:
     kind: integer
   Average Hourly Rate:
     kind: currency

@@ -15,11 +15,11 @@ slots:
   temporal_type: date
   required: true
 result_grain:
-- month
+- Month
 window_anchor: calendar
 sql_template: |
-  SELECT toStartOfMonth(hire_date) AS month,
-         COUNT(DISTINCT employee_code) AS hires
+  SELECT toStartOfMonth(hire_date) AS "Month",
+         COUNT(DISTINCT employee_code) AS "Hires"
   FROM dbpcm_warehouse.employee
   WHERE hire_date >= {hire_window_start}
     AND hire_date < {hire_window_end}
@@ -27,7 +27,7 @@ sql_template: |
          OR employee_status IS NULL)
   GROUP BY toStartOfMonth(hire_date)
 column_formats:
-  month:
+  Month:
     kind: date
-  hires:
+  Hires:
     kind: integer

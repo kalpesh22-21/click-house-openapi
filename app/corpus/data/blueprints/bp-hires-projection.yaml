@@ -23,9 +23,9 @@ slots:
 result_grain: []
 window_anchor: data
 sql_template: |
-  SELECT COUNT(DISTINCT employee_code) AS hires_in_window,
-         round(COUNT(DISTINCT employee_code) / {window_months}, 1) AS avg_monthly_hires,
-         round(COUNT(DISTINCT employee_code) / {window_months} * {horizon_months}) AS projected_next_n_hires
+  SELECT COUNT(DISTINCT employee_code) AS "Hires In Window",
+         round(COUNT(DISTINCT employee_code) / {window_months}, 1) AS "Average Monthly Hires",
+         round(COUNT(DISTINCT employee_code) / {window_months} * {horizon_months}) AS "Projected Hires"
   FROM dbpcm_warehouse.employee
   WHERE hire_date >= addMonths(
                                  (SELECT toStartOfMonth(max(hire_date))
@@ -35,9 +35,9 @@ sql_template: |
     AND (employee_status != 'N'
          OR employee_status IS NULL)
 column_formats:
-  hires_in_window:
+  Hires In Window:
     kind: integer
-  avg_monthly_hires:
+  Average Monthly Hires:
     kind: number
-  projected_next_n_hires:
+  Projected Hires:
     kind: number

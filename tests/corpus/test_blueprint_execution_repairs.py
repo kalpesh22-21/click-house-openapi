@@ -102,10 +102,10 @@ def test_payroll_group_selectors_use_searched_case_for_row_values():
 
 def test_department_metric_sorting_preserves_zero_negative_and_unknown_values():
     metrics = {
-        'average-salary-by-department': 'average_annual_compensation',
-        'overtime-by-department': 'earnings',
-        'total-earnings-by-department': 'total_earnings',
-        'earnings-by-department-via-scratch-join': 'total_earnings',
+        'average-salary-by-department': 'Average Annual Compensation',
+        'overtime-by-department': 'Earnings',
+        'total-earnings-by-department': 'Total Earnings',
+        'earnings-by-department-via-scratch-join': 'Total Earnings',
     }
     for name, metric in metrics.items():
         entry = yaml.safe_load((ROOT / f'bp-{name}.yaml').read_text())
@@ -117,7 +117,7 @@ def test_department_metric_sorting_preserves_zero_negative_and_unknown_values():
         assert parse(template).args.get('order')
         order = template[template.rindex('ORDER BY'):]
         with sqlite3.connect(':memory:') as db:
-            db.execute(f'CREATE TABLE results (department TEXT, {metric} REAL, "Pay Type" TEXT)')
+            db.execute(f'CREATE TABLE results (department TEXT, "{metric}" REAL, "Pay Type" TEXT)')
             db.executemany('INSERT INTO results VALUES (?, ?, ?)', [
                 ('Zero', 0, 'Salary'), ('Negative', -10, 'Salary'),
                 ('Unknown', None, 'Salary'), ('B', 20, 'Salary'), ('A', 20, 'Salary'),

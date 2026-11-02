@@ -45,19 +45,19 @@ composes:
     emp_earnings: $0
   output: {}
   sql_template: |
-    SELECT e.department_name AS department,
-           SUM(x.earnings) AS total_earnings
+    SELECT e.department_name AS "Department",
+           SUM(x.earnings) AS "Total Earnings"
     FROM scratch.emp_earnings AS x
     JOIN dbpcm_warehouse.employee AS e ON e.employee_code = x.employee_code
     WHERE e.department_name = {department}
     GROUP BY e.department_name
-    ORDER BY CASE WHEN {order_direction} = 'DESC' THEN total_earnings END DESC NULLS LAST,
-             CASE WHEN {order_direction} = 'ASC' THEN total_earnings END ASC NULLS LAST,
-             department ASC
+    ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Total Earnings" END DESC NULLS LAST,
+             CASE WHEN {order_direction} = 'ASC' THEN "Total Earnings" END ASC NULLS LAST,
+             "Department" ASC
 column_formats:
-  department:
+  Department:
     kind: text
-  total_earnings:
+  Total Earnings:
     kind: currency
     currency: USD
     precision: 2

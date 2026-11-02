@@ -26,16 +26,16 @@ slots:
   required: true
   binds_to: dbpcm_warehouse.payroll.pay_period_end_date
 result_grain:
-- register_type
-- type_code
+- Register Type
+- Type Code
 sql_template: |
-  SELECT toString(p.register_type) AS register_type,
-         toString(p.type_code) AS type_code,
-         any(toString(p.type_code_description)) AS type_code_description,
-         e.employee_name AS employee_name,
-         e.department_name AS department_name,
-         toFloat64(SUM(p.amount)) AS amount,
-         toFloat64(SUM(p.type_hours)) AS hours
+  SELECT toString(p.register_type) AS "Register Type",
+         toString(p.type_code) AS "Type Code",
+         any(toString(p.type_code_description)) AS "Type Code Description",
+         e.employee_name AS "Employee Name",
+         e.department_name AS "Department Name",
+         toFloat64(SUM(p.amount)) AS "Amount",
+         toFloat64(SUM(p.type_hours)) AS "Hours"
   FROM dbpcm_warehouse.payroll p
   LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = p.employee_code
   WHERE p.employee_code = {employee}
@@ -45,21 +45,21 @@ sql_template: |
            e.employee_name,
            e.department_name
 column_formats:
-  register_type:
+  Register Type:
     kind: text
-  type_code:
+  Type Code:
     kind: identifier
-  type_code_description:
+  Type Code Description:
     kind: text
-  employee_name:
+  Employee Name:
     kind: text
-  department_name:
+  Department Name:
     kind: text
-  amount:
+  Amount:
     kind: currency
     currency: USD
     precision: 2
-  hours:
+  Hours:
     kind: number
     unit: hours
     precision: 2

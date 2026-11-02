@@ -31,8 +31,8 @@ slots:
   required: true
   binds_to: dbpcm_warehouse.payroll.pay_period_end_date
 result_grain:
-- register_type
-- type_code
+- Register Type
+- Type Code
 composes:
 - order: 0
   output:
@@ -59,43 +59,43 @@ composes:
     detail_b: $1
   output: {}
   sql_template: |
-    SELECT coalesce(a.register_type, b.register_type) AS register_type,
-           coalesce(a.type_code, b.type_code) AS type_code,
-           coalesce(a.type_code_description, b.type_code_description) AS type_code_description,
-           coalesce(a.amount, 0) AS amount_a,
-           coalesce(b.amount, 0) AS amount_b,
-           coalesce(b.amount, 0) - coalesce(a.amount, 0) AS amount_delta,
-           coalesce(a.hours, 0) AS hours_a,
-           coalesce(b.hours, 0) AS hours_b
+    SELECT coalesce(a."Register Type", b."Register Type") AS "Register Type",
+           coalesce(a."Type Code", b."Type Code") AS "Type Code",
+           coalesce(a."Type Code Description", b."Type Code Description") AS "Type Code Description",
+           coalesce(a."Amount", 0) AS "Amount Period A",
+           coalesce(b."Amount", 0) AS "Amount Period B",
+           coalesce(b."Amount", 0) - coalesce(a."Amount", 0) AS "Amount Change",
+           coalesce(a."Hours", 0) AS "Hours Period A",
+           coalesce(b."Hours", 0) AS "Hours Period B"
     FROM scratch.detail_a AS a
-    FULL OUTER JOIN scratch.detail_b AS b ON a.register_type = b.register_type
-    AND a.type_code = b.type_code
-    ORDER BY coalesce(a.register_type, b.register_type),
-             coalesce(a.type_code, b.type_code)
+    FULL OUTER JOIN scratch.detail_b AS b ON a."Register Type" = b."Register Type"
+    AND a."Type Code" = b."Type Code"
+    ORDER BY coalesce(a."Register Type", b."Register Type"),
+             coalesce(a."Type Code", b."Type Code")
 column_formats:
-  register_type:
+  Register Type:
     kind: text
-  type_code:
+  Type Code:
     kind: identifier
-  type_code_description:
+  Type Code Description:
     kind: text
-  amount_a:
+  Amount Period A:
     kind: currency
     currency: USD
     precision: 2
-  amount_b:
+  Amount Period B:
     kind: currency
     currency: USD
     precision: 2
-  amount_delta:
+  Amount Change:
     kind: currency
     currency: USD
     precision: 2
-  hours_a:
+  Hours Period A:
     kind: number
     unit: hours
     precision: 2
-  hours_b:
+  Hours Period B:
     kind: number
     unit: hours
     precision: 2
