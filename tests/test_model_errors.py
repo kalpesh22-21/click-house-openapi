@@ -132,3 +132,24 @@ def test_public_clickhouse_cause_survives_without_private_body():
     assert 'precise cause is unavailable' not in p['message']
     wrong = public_clickhouse_error(raw.replace('Code: 1.', 'Code: 999.'))
     assert 'code_num' not in model_error_payload(ClickHouseQueryError(wrong, 'CLICKHOUSE_QUERY_ERROR'))
+
+
+def test_unsupported_method_advice_is_structural_and_does_not_claim_a_location():
+    from app.ch_errors import public_clickhouse_error
+    raw = "Code: 1. DB::Exception: failed at position 987 (line 17, col 44): private_view.secret = 'private-literal' (UNSUPPORTED_METHOD)"
+    payload = model_error_payload(ClickHouseQueryError(public_clickhouse_error(raw), 'CLICKHOUSE_QUERY_ERROR'))
+    assert payload['cause'] == 'UNSUPPORTED_METHOD' and payload['code_num'] == 1
+    hint = payload['guidance']
+    assert 'IN expressions' in hint and 'correlated scalar subqueries in SELECT' in hint
+    assert 'possible causes, not a confirmed failing clause' in hint
+    assert 'NULL behavior and join cardinality' in hint
+    assert 'Do not change the requested measure or scope' in hint
+    assert all(value not in str(payload) for value in ('private_view', 'private-literal', '987', 'line 17', 'col 44'))
+
+
+def test_public_syntax_hint_does_not_refer_to_an_unmapped_server_position():
+    from app.ch_errors import public_clickhouse_error
+    safe = public_clickhouse_error("Code: 62. DB::Exception: failed at position 987 (line 17, col 44): private SQL (SYNTAX_ERROR)")
+    assert 'reported position' not in safe
+    assert '987' not in safe and 'private SQL' not in safe
+    assert 'trailing comma' in safe

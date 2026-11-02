@@ -74,7 +74,7 @@ _HINTS: dict[str, str] = {
         "toStartOfMonth, dateDiff, countIf, sumIf)."
     ),
     "SYNTAX_ERROR": (
-        "Fix the SQL at the reported position; check for a trailing comma or operator, "
+        "Check the submitted SQL for a trailing comma or operator, "
         "unbalanced parentheses/quotes, and ClickHouse-specific syntax."
     ),
     "AMBIGUOUS_IDENTIFIER": "Qualify the column with its table alias (t.col).",
@@ -118,7 +118,13 @@ _HINTS: dict[str, str] = {
     "TOO_SLOW": "The query exceeded the time cap; narrow the date range or pre-aggregate.",
     "READONLY": "Only read-only SELECT/WITH statements can run here.",
     "ACCESS_DENIED": "You do not have access to that object; stay within the tables listed by listTables.",
-    "UNSUPPORTED_METHOD": "ClickHouse does not support that operation on this table engine.",
+    "UNSUPPORTED_METHOD": (
+        "ClickHouse rejected an unsupported operation. Check tuple/list IN expressions, "
+        "correlated scalar subqueries in SELECT, and table-engine restrictions; these are "
+        "possible causes, not a confirmed failing clause. If present, rewrite membership "
+        "as explicit comparisons or pre-aggregate subqueries before joining, preserving "
+        "NULL behavior and join cardinality. Do not change the requested measure or scope."
+    ),
 }
 
 
