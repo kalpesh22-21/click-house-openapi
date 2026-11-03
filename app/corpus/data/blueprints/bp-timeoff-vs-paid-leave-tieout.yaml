@@ -11,6 +11,7 @@ sql_template: |
             round(SUM(hours), 2) AS tor_hours
      FROM dbpcm_warehouse.time_off_request
      WHERE status = 'Approved'
+       AND event_type = {event_type}
        AND request_date >= addMonths(today(), -{win})
        AND earn_code IN
          (SELECT earn_code
@@ -76,13 +77,23 @@ slots:
   required: true
   binds_to: dbpcm_warehouse.earning_category.category_name
   description: Resolve the requested timeoff concept to this client's category label; do not invent earning codes.
-slots_summary: win, top_n, order_direction, timeoff_category
+- name: event_type
+  type: enum
+  required: false
+  enum_values:
+  - Time Off Request
+  - Payout Request
+  default: Time Off Request
+  description: Accrual event category to count. Defaults to Time Off Request; use Payout Request only when payouts
+    are explicitly requested.
+slots_summary: win, top_n, order_direction, timeoff_category, event_type
 uses:
 - dbpcm_warehouse.time_off_request.employee_code
 - dbpcm_warehouse.time_off_request.request_date
 - dbpcm_warehouse.time_off_request.hours
 - dbpcm_warehouse.time_off_request.earn_code
 - dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.time_off_request.event_type
 - dbpcm_warehouse.total_earning.employee_code
 - dbpcm_warehouse.total_earning.punch_date
 - dbpcm_warehouse.total_earning.earn_code

@@ -16,6 +16,7 @@ sql_template: |
      FROM punch_days pd
      JOIN dbpcm_warehouse.time_off_request tor ON tor.employee_code = pd.employee_code
      WHERE tor.status = 'Approved'
+       AND tor.event_type = {event_type}
        AND toDate32(tor.request_date) = pd.punch_date)
   SELECT e.employee_code AS "Employee Code",
          e.employee_name AS "Employee Name",
@@ -52,13 +53,23 @@ slots:
   - ASC
   default: DESC
   description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: window, threshold, max_rows, order_direction
+- name: event_type
+  type: enum
+  required: false
+  enum_values:
+  - Time Off Request
+  - Payout Request
+  default: Time Off Request
+  description: Accrual event category to count. Defaults to Time Off Request; use Payout Request only when payouts
+    are explicitly requested.
+slots_summary: window, threshold, max_rows, order_direction, event_type
 uses:
 - dbpcm_warehouse.punch_pair.employee_code
 - dbpcm_warehouse.punch_pair.punch_date
 - dbpcm_warehouse.time_off_request.employee_code
 - dbpcm_warehouse.time_off_request.request_date
 - dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.time_off_request.event_type
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name
 - dbpcm_warehouse.employee.department_name

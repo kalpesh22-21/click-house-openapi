@@ -9,6 +9,7 @@ sql_template: |
          round(SUM(t.hours), 2) AS "Approved Hours"
   FROM dbpcm_warehouse.time_off_request AS t
   WHERE t.status = 'Approved'
+    AND t.event_type = {event_type}
     AND t.hours IS NOT NULL
     AND t.request_date >=
       (SELECT MAX(request_date)
@@ -31,11 +32,21 @@ slots:
   - ASC
   default: DESC
   description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: win, order_direction
+- name: event_type
+  type: enum
+  required: false
+  enum_values:
+  - Time Off Request
+  - Payout Request
+  default: Time Off Request
+  description: Accrual event category to count. Defaults to Time Off Request; use Payout Request only when payouts
+    are explicitly requested.
+slots_summary: win, order_direction, event_type
 uses:
 - dbpcm_warehouse.time_off_request.request_date
 - dbpcm_warehouse.time_off_request.hours
 - dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.time_off_request.event_type
 column_formats:
   Month:
     kind: text

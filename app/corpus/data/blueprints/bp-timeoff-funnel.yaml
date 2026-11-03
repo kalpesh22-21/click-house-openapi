@@ -8,6 +8,7 @@ sql_template: |
          COUNT(*) AS "Request Count"
   FROM dbpcm_warehouse.time_off_request AS t
   WHERE toDate32(t.request_date) BETWEEN {window_start} AND {window_end}
+    AND t.event_type = {event_type}
   GROUP BY t.status
   ORDER BY CASE
                WHEN {order_direction} = 'DESC' THEN "Request Count"
@@ -27,9 +28,19 @@ slots:
   - ASC
   default: DESC
   description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: window, order_direction
+- name: event_type
+  type: enum
+  required: false
+  enum_values:
+  - Time Off Request
+  - Payout Request
+  default: Time Off Request
+  description: Accrual event category to count. Defaults to Time Off Request; use Payout Request only when payouts
+    are explicitly requested.
+slots_summary: window, order_direction, event_type
 uses:
 - dbpcm_warehouse.time_off_request.status
+- dbpcm_warehouse.time_off_request.event_type
 - dbpcm_warehouse.time_off_request.request_date
 column_formats:
   Status:
