@@ -1,11 +1,11 @@
 id: bp-expense-line-size-distribution
-intent: Distribution of expense line amounts into bands by account description for a payment date window
+intent: Size distribution of approved expense line amounts in fixed amount bands for a payment date window, one row per
+  band in amount order. Lines without an approved amount are excluded. Optional single-account filter.
 status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT expense_account_description AS "Account Description",
-         toInt32(floor(toFloat64(amount_approved) / {band}) * {band}) AS "Band Start",
+  SELECT concat('$', toString(toInt32(floor(toFloat64(amount_approved) / {band}) * {band})), ' to under $', toString(toInt32(floor(toFloat64(amount_approved) / {band}) * {band} + {band}))) AS "Amount Band",
          count() AS "Line Count"
   FROM dbpcm_warehouse.expense
   WHERE expense_status IN ('Approved',
@@ -13,13 +13,14 @@ sql_template: |
                            'Marked as Paid')
     AND expense_paid_date >= {expense_window_start}
     AND expense_paid_date <= {expense_window_end}
-  GROUP BY expense_account_description,
-           toInt32(floor(toFloat64(amount_approved) / {band}) * {band})
+    AND amount_approved IS NOT NULL
+    AND expense_account_description = {account}
+  GROUP BY floor(toFloat64(amount_approved) / {band})
   ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Account Description"
+               WHEN {order_direction} = 'DESC' THEN floor(toFloat64(amount_approved) / {band})
            END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Account Description"
-                     END ASC, "Band Start"
+                         WHEN {order_direction} = 'ASC' THEN floor(toFloat64(amount_approved) / {band})
+                     END ASC
 slots:
 - name: expense_window
   type: period_range
@@ -28,6 +29,13 @@ slots:
 - name: band
   type: positive_integer
   required: true
+  description: Whole-dollar band width. Use the requested width; otherwise choose one that gives roughly 10 to 25 bands.
+- name: account
+  type: entity
+  required: false
+  binds_to: dbpcm_warehouse.expense.expense_account_description
+  optional_pattern: 'TRUE'
+  description: Omit for all accounts. Bind one expense account description to show that account's line sizes only.
 - name: order_direction
   type: enum
   required: false
@@ -35,19 +43,17 @@ slots:
   - DESC
   - ASC
   default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
-slots_summary: expense_window, band, order_direction
+  description: Sort direction for the amount bands. Defaults to ASC (smallest band first).
+result_grain:
+- Amount Band
+slots_summary: expense_window, band, account, order_direction
 uses:
 - dbpcm_warehouse.expense.amount_approved
 - dbpcm_warehouse.expense.expense_account_description
 - dbpcm_warehouse.expense.expense_status
 - dbpcm_warehouse.expense.expense_paid_date
 column_formats:
-  Account Description:
+  Amount Band:
     kind: text
-  Band Start:
-    kind: currency
-    currency: USD
-    precision: 2
   Line Count:
     kind: integer

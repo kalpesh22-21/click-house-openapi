@@ -1,0 +1,61 @@
+id: bp-expense-category-distribution
+intent: Distribution of approved expense spend across every expense account category for a payment date window, one
+  row per account with approved spend, share of total approved spend and line count. Complete, not a top-N ranking.
+status: validated
+drift_status: clean
+catalog_sha: ''
+sql_template: |
+  SELECT expense_account_code AS "Account Code",
+         any(expense_account_description) AS "Account Description",
+         round(toFloat64(sum(amount_approved)), 2) AS "Approved Spend",
+         round(100.0 * toFloat64(sum(amount_approved)) / nullIf(toFloat64(sum(sum(amount_approved)) OVER ()), 0), 2) AS "Share Of Approved Spend Pct",
+         count() AS "Line Count"
+  FROM dbpcm_warehouse.expense
+  WHERE expense_status IN ('Approved',
+                           'Paid',
+                           'Marked as Paid')
+    AND expense_paid_date >= {expense_window_start}
+    AND expense_paid_date <= {expense_window_end}
+  GROUP BY expense_account_code
+  ORDER BY CASE
+               WHEN {order_direction} = 'DESC' THEN "Approved Spend"
+           END DESC, CASE
+                         WHEN {order_direction} = 'ASC' THEN "Approved Spend"
+                     END ASC, "Account Code"
+slots:
+- name: expense_window
+  type: period_range
+  required: true
+  temporal_type: date
+- name: order_direction
+  type: enum
+  required: false
+  enum_values:
+  - DESC
+  - ASC
+  default: DESC
+  description: Sort direction for approved spend. Defaults to DESC (largest category first).
+result_grain:
+- Account Code
+slots_summary: expense_window, order_direction
+uses:
+- dbpcm_warehouse.expense.amount_approved
+- dbpcm_warehouse.expense.expense_account_code
+- dbpcm_warehouse.expense.expense_account_description
+- dbpcm_warehouse.expense.expense_status
+- dbpcm_warehouse.expense.expense_paid_date
+column_formats:
+  Account Code:
+    kind: identifier
+  Account Description:
+    kind: text
+  Approved Spend:
+    kind: currency
+    currency: USD
+    precision: 2
+  Share Of Approved Spend Pct:
+    kind: percent
+    scale: percent
+    precision: 2
+  Line Count:
+    kind: integer

@@ -754,6 +754,45 @@ def test_blueprint_active_headcount_transpiles_to_exact_count_distinct(
     }
 
 
+# Expense is a MySQL source, so these two blueprints only ever run on the Trino
+# path. Bound as the data-agent binder renders them; executed against Trino 483
+# with synthetic rows when they were authored (2026-11-03).
+_EXPENSE_WINDOW = {
+    "{expense_window_start}": "CAST('2026-09-01' AS DATE)",
+    "{expense_window_end}": "CAST('2026-09-30' AS DATE)",
+    "{order_direction}": "'ASC'",
+}
+
+
+def _bind_expense(blueprint_id, **tokens):
+    from app.corpus.loader import load_blueprints
+
+    sql = load_blueprints()[blueprint_id]["sql_template"]
+    for token, value in {**_EXPENSE_WINDOW, **tokens}.items():
+        sql = sql.replace(token, value)
+    return sql
+
+
+def test_expense_line_size_distribution_transpiles_to_one_band_axis(trino_settings, principal):
+    # The omitted optional account slot's 'TRUE' replaces its whole predicate.
+    bound = _bind_expense("bp-expense-line-size-distribution", **{
+        "{band}": "100", "expense_account_description = {account}": "TRUE",
+    })
+    physical = trino_client.rewrite_query(bound, trino_settings)
+    group_by = sqlglot.parse_one(physical, read="trino").args["group"].expressions
+    assert [g.sql(dialect="trino") for g in group_by] == ["FLOOR(CAST(amount_approved AS DOUBLE) / NULLIF(100, 0))"]
+    assert "CONCAT(" in physical and "COUNT(*)" in physical
+    assert tables(physical) == {("online__okc__01__dbonline", "dbonline", "expense")}
+
+
+def test_expense_category_distribution_transpiles_with_a_share_window(trino_settings, principal):
+    physical = trino_client.rewrite_query(_bind_expense("bp-expense-category-distribution"), trino_settings)
+    assert "ARBITRARY(expense_account_description)" in physical
+    assert "SUM(SUM(amount_approved)) OVER ()" in physical
+    assert "LIMIT" not in physical.upper()
+    assert tables(physical) == {("online__okc__01__dbonline", "dbonline", "expense")}
+
+
 # --- Trino failure logging ----------------------------------------------------
 
 def test_execution_records_both_sql_forms_and_query_id(monkeypatch, trino_settings, principal, tmp_path):

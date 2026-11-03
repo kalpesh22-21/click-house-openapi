@@ -1,14 +1,14 @@
 # Clickhouse-API Blueprint Collection
 
-**Total:** 193 blueprints
+**Total:** 192 blueprints
 **Generated:** 2026-10-28
 
 ## Table of Contents
 
 - [Accruals (8)](#accruals)
-- [Compensation (17)](#compensation)
+- [Compensation (15)](#compensation)
 - [Employee (26)](#employee)
-- [Expenses (18)](#expenses)
+- [Expenses (19)](#expenses)
 - [Headcount (23)](#headcount)
 - [Payroll (49)](#payroll)
 - [Punches (17)](#punches)
@@ -818,48 +818,6 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN employee_code END DESC, CASE 
 
 ---
 
-### Blueprint: bp-salary-distribution
-
-**ID:** `bp-salary-distribution`
-
-**Intent:** Annual compensation histogram by pay type with positive whole-currency band_width. Lower inclusive, upper exclusive; percentages use the selected known-compensation population within each pay type. salary_population selects recorded (including zero) or positive values. Salary uses annual_salary; Hourly uses hourly_salary and estimated annual compensation = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes overtime). Keep pay types separate. Defaults to Active + On Leave; employee_status overrides or All removes the filter.
-
-**Slots:**
-
-- `band_width` (positive_integer, required)
-- `salary_population` (enum, required) — values: `recorded`, `positive`. Use recorded (including zero) unless the user explicitly requests positive/nonzero compensation.
-- `employee_status` (enum, optional) — values: `Active`, `Deceased`, `Inactive`, `Retired`, `Terminated`, `On Leave`, `Not Hired`, `Prehire`, `Unknown`, `All`; binds: `dbpcm_warehouse.employee.employee_status`. Omit for Active + On Leave; select a status to override, or All to remove the status filter.
-- `department` (entity, optional) — binds: `dbpcm_warehouse.department.department_name`. Resolve department names/abbreviations against the directory; a known department may have no matching employees.
-- `employee` (entity, optional) — binds: `dbpcm_warehouse.employee.employee_code`
-- `order_direction` (enum, optional) — values: `DESC`, `ASC`; default: `ASC`. Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
-
-**Status:** validated (drift: clean)
-
-**Catalog SHA:** `0c0c24a9bb5ccc742d3b7f9685607355a6d6a051`
-
-**SQL Template:**
-
-```sql
-SELECT e.employee_pay_type AS `Pay Type`, CASE WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)' WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown compensation basis' END AS `Compensation Basis`, floor((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) / {band_width}) * {band_width} AS `Lower Bound`,
- (floor((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) / {band_width}) + 1) * {band_width} AS `Upper Bound Exclusive`,
- count(*) AS `Employee Count`, 100.0 * count(*) / sum(count(*)) OVER (PARTITION BY e.employee_pay_type) AS `Percent Within Pay Type`
-FROM dbpcm_warehouse.employee e WHERE (e.employee_status = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department} AND e.employee_code = {employee} AND (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) IS NOT NULL
- AND ({salary_population} = 'recorded' OR (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) > 0)
-GROUP BY e.employee_pay_type, floor((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) / {band_width}) ORDER BY CASE WHEN {order_direction} = 'DESC' THEN `Lower Bound` END DESC, CASE WHEN {order_direction} = 'ASC' THEN `Lower Bound` END ASC
-```
-
-**Uses:**
-
-- `dbpcm_warehouse.employee.annual_salary`
-- `dbpcm_warehouse.employee.department_name`
-- `dbpcm_warehouse.employee.employee_code`
-- `dbpcm_warehouse.employee.employee_status`
-- `dbpcm_warehouse.employee.employee_pay_type`
-- `dbpcm_warehouse.employee.hourly_salary`
-- `dbpcm_warehouse.department.department_name`
-
----
-
 ### Blueprint: bp-salary-exact-median
 
 **ID:** `bp-salary-exact-median`
@@ -899,40 +857,6 @@ GROUP BY e.employee_pay_type, CASE WHEN {group_by} = 'department' THEN e.departm
 - `dbpcm_warehouse.employee.employee_pay_type`
 - `dbpcm_warehouse.employee.hourly_salary`
 - `dbpcm_warehouse.department.department_name`
-
----
-
-### Blueprint: bp-salary-histogram
-
-**ID:** `bp-salary-histogram`
-
-**Intent:** Active employee salary distribution histogram in configurable dollar bands, excluding zero or null salary placeholders
-
-**Slots:**
-
-- `band` (positive_integer, required)
-
-**Status:** validated (drift: clean)
-
-**SQL Template:**
-
-```sql
-SELECT concat('$', toString(toInt32(floor(toFloat64(annual_salary) / toUInt32({band})) * toUInt32({band}))) ,
-              ' - $', toString(toInt32(floor(toFloat64(annual_salary) / toUInt32({band})) * toUInt32({band}) + toUInt32({band}) - 1))) AS "Salary Band",
-       count(DISTINCT employee_code) AS "Headcount"
-FROM dbpcm_warehouse.employee
-WHERE employee_status = 'Active'
-  AND annual_salary IS NOT NULL
-  AND toFloat64(annual_salary) > 0
-GROUP BY floor(toFloat64(annual_salary) / toUInt32({band}))
-ORDER BY floor(toFloat64(annual_salary) / toUInt32({band})) ASC
-```
-
-**Uses:**
-
-- `dbpcm_warehouse.employee.employee_code`
-- `dbpcm_warehouse.employee.annual_salary`
-- `dbpcm_warehouse.employee.employee_status`
 
 ---
 
@@ -2518,6 +2442,46 @@ LIMIT {top_n}
 
 ---
 
+### Blueprint: bp-expense-category-distribution
+
+**ID:** `bp-expense-category-distribution`
+
+**Intent:** Distribution of approved expense spend across every expense account category for a payment date window, one row per account with approved spend, share of total approved spend and line count. Complete, not a top-N ranking.
+
+**Slots:**
+
+- `expense_window` (period_range, required)
+- `order_direction` (enum, optional) — values: `DESC`, `ASC`; default: `DESC`. Sort direction for approved spend. Defaults to DESC (largest category first).
+
+**Status:** validated (drift: clean)
+
+**SQL Template:**
+
+```sql
+SELECT
+  expense_account_code AS "Account Code",
+  any(expense_account_description) AS "Account Description",
+  round(toFloat64(sum(amount_approved)), 2) AS "Approved Spend",
+  round(100.0 * toFloat64(sum(amount_approved)) / nullIf(toFloat64(sum(sum(amount_approved)) OVER ()), 0), 2) AS "Share Of Approved Spend Pct",
+  count() AS "Line Count"
+FROM dbpcm_warehouse.expense
+WHERE expense_status IN ('Approved', 'Paid', 'Marked as Paid')
+  AND expense_paid_date >= {expense_window_start}
+  AND expense_paid_date <= {expense_window_end}
+GROUP BY expense_account_code
+ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Approved Spend" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Approved Spend" END ASC, "Account Code"
+```
+
+**Uses:**
+
+- `dbpcm_warehouse.expense.amount_approved`
+- `dbpcm_warehouse.expense.expense_account_code`
+- `dbpcm_warehouse.expense.expense_account_description`
+- `dbpcm_warehouse.expense.expense_status`
+- `dbpcm_warehouse.expense.expense_paid_date`
+
+---
+
 ### Blueprint: bp-expense-concept-spend
 
 **ID:** `bp-expense-concept-spend`
@@ -2616,13 +2580,14 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Month" END DESC, CASE WHEN {
 
 **ID:** `bp-expense-line-size-distribution`
 
-**Intent:** Distribution of expense line amounts into bands by account description for a payment date window
+**Intent:** Size distribution of approved expense line amounts in fixed amount bands for a payment date window, one row per band in amount order. Lines without an approved amount are excluded. Optional single-account filter.
 
 **Slots:**
 
 - `expense_window` (period_range, required)
-- `band` (positive_integer, required)
-- `order_direction` (enum, optional) — values: `DESC`, `ASC`; default: `ASC`. Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+- `band` (positive_integer, required) — Whole-dollar band width. Use the requested width; otherwise choose one that gives roughly 10 to 25 bands.
+- `account` (entity, optional) — binds to `dbpcm_warehouse.expense.expense_account_description`. Omit for all accounts. Bind one expense account description to show that account's line sizes only.
+- `order_direction` (enum, optional) — values: `DESC`, `ASC`; default: `ASC`. Sort direction for the amount bands. Defaults to ASC (smallest band first).
 
 **Status:** validated (drift: clean)
 
@@ -2630,16 +2595,17 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Month" END DESC, CASE WHEN {
 
 ```sql
 SELECT
-  expense_account_description AS "Account Description",
-  toInt32(floor(toFloat64(amount_approved) / {band}) * {band}) AS "Band Start",
+  concat('$', toString(toInt32(floor(toFloat64(amount_approved) / {band}) * {band})), ' to under $',
+         toString(toInt32(floor(toFloat64(amount_approved) / {band}) * {band} + {band}))) AS "Amount Band",
   count() AS "Line Count"
 FROM dbpcm_warehouse.expense
 WHERE expense_status IN ('Approved', 'Paid', 'Marked as Paid')
   AND expense_paid_date >= {expense_window_start}
   AND expense_paid_date <= {expense_window_end}
-GROUP BY expense_account_description,
-         toInt32(floor(toFloat64(amount_approved) / {band}) * {band})
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Account Description" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Account Description" END ASC, "Band Start"
+  AND amount_approved IS NOT NULL
+  AND expense_account_description = {account}
+GROUP BY floor(toFloat64(amount_approved) / {band})
+ORDER BY CASE WHEN {order_direction} = 'DESC' THEN floor(toFloat64(amount_approved) / {band}) END DESC, CASE WHEN {order_direction} = 'ASC' THEN floor(toFloat64(amount_approved) / {band}) END ASC
 ```
 
 **Uses:**

@@ -38,7 +38,6 @@ _BLUEPRINT_IDS = {
         "bp-employee-day-clock-span",
         "bp-timecard-earnings-summary",
         "bp-salary-exact-median",
-        "bp-salary-distribution",
         "bp-salary-threshold-count",
         "bp-salary-threshold-directory",
         "bp-employee-date-summary",
@@ -78,7 +77,7 @@ class TestLoadBlueprints:
     def test_loads_all_migrated_ids(self):
         blueprints = loader.load_blueprints()
         assert _BLUEPRINT_IDS <= set(blueprints.keys())
-        assert len(blueprints) == 189
+        assert len(blueprints) == 188
 
     def test_entry_carries_authored_fields_verbatim(self):
         bp = loader.load_blueprints()["bp-overtime-by-department"]
