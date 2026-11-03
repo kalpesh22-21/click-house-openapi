@@ -429,7 +429,25 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Balance Hours" END DESC, CAS
 **SQL Template:**
 
 ```sql
-SELECT employee_pay_type AS `Pay Type`, CASE WHEN employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)' WHEN employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown compensation basis' END AS `Compensation Basis`, avg(CASE WHEN employee_pay_type = 'Salary' THEN annual_salary WHEN employee_pay_type = 'Hourly' THEN hourly_salary * 2080 ELSE NULL END) AS `Average Annual Compensation`, avg(CASE WHEN employee_pay_type = 'Hourly' THEN hourly_salary ELSE NULL END) AS `Average Hourly Rate` FROM dbpcm_warehouse.employee WHERE (employee_status = {employee_status} OR {employee_status} = 'All') GROUP BY employee_pay_type
+SELECT pay_type AS `Pay Type`,
+       CASE
+           WHEN pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+           WHEN pay_type = 'Salary' THEN 'Recorded annual salary'
+           ELSE 'Unknown compensation basis'
+       END AS `Compensation Basis`,
+       avg(CASE
+               WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary
+               WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary * 2080
+               ELSE NULL
+           END) AS `Average Annual Compensation`,
+       avg(CASE
+               WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary
+               ELSE NULL
+           END) AS `Average Hourly Rate`
+FROM dbpcm_warehouse.employee
+WHERE (employee_status = {employee_status}
+       OR {employee_status} = 'All')
+GROUP BY pay_type
 ```
 
 **Uses:**
@@ -459,13 +477,32 @@ SELECT employee_pay_type AS `Pay Type`, CASE WHEN employee_pay_type = 'Hourly' T
 **SQL Template:**
 
 ```sql
-SELECT employee_pay_type AS `Pay Type`, CASE WHEN employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)' WHEN employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown compensation basis' END AS `Compensation Basis`, department_name AS department,
-       AVG((CASE WHEN employee_pay_type = 'Salary' THEN annual_salary WHEN employee_pay_type = 'Hourly' THEN hourly_salary * 2080 ELSE NULL END)) AS average_annual_compensation,
-       COUNT(DISTINCT employee_code) AS headcount, avg(CASE WHEN employee_pay_type = 'Hourly' THEN hourly_salary ELSE NULL END) AS `Average Hourly Rate`
+SELECT pay_type AS `Pay Type`,
+       CASE
+           WHEN pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+           WHEN pay_type = 'Salary' THEN 'Recorded annual salary'
+           ELSE 'Unknown compensation basis'
+       END AS `Compensation Basis`,
+       department_name AS "Department",
+       AVG((CASE
+                WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary
+                WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary * 2080
+                ELSE NULL
+            END)) AS "Average Annual Compensation",
+       COUNT(DISTINCT employee_code) AS "Headcount",
+       avg(CASE
+               WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary
+               ELSE NULL
+           END) AS `Average Hourly Rate`
 FROM dbpcm_warehouse.employee
 WHERE department_name = {department}
-  AND (employee_status = {employee_status} OR {employee_status} = 'All')
-GROUP BY employee_pay_type, department_name
+  AND (employee_status = {employee_status}
+       OR {employee_status} = 'All')
+GROUP BY pay_type,
+         department_name
+ORDER BY `Pay Type` ASC, CASE WHEN {order_direction} = 'DESC' THEN "Average Annual Compensation" END DESC NULLS LAST,
+         CASE WHEN {order_direction} = 'ASC' THEN "Average Annual Compensation" END ASC NULLS LAST,
+         "Department" ASC
 ```
 
 **Uses:**
@@ -527,7 +564,7 @@ LIMIT {top_n}
 
 **ID:** `bp-comp-range-exceptions`
 
-**Intent:** Active employees paid outside their salary range or below a compa-ratio cap
+**Intent:** Active Salary-pay-type employees whose recorded annual salary is outside their salary range or below a compa-ratio cap
 
 **Slots:**
 
@@ -550,11 +587,17 @@ SELECT employee_code AS "Employee Code",
 FROM dbpcm_warehouse.employee
 WHERE employee_status = 'Active'
   AND department_name = {department}
-  AND annual_salary IS NOT NULL
-  AND ( toFloat64(annual_salary) < toFloat64(salary_min)
-     OR (toFloat64(salary_max) > 0 AND toFloat64(annual_salary) > toFloat64(salary_max))
-     OR toFloat64(annual_salary) / nullIf(toFloat64(salary_mid), 0) < {compa_cap_pct} / 100.0 )
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Compa Ratio" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Compa Ratio" END ASC
+  AND pay_type = 'Salary'
+  AND annual_salary > 0
+  AND (toFloat64(annual_salary) < toFloat64(salary_min)
+       OR (toFloat64(salary_max) > 0
+           AND toFloat64(annual_salary) > toFloat64(salary_max))
+       OR toFloat64(annual_salary) / nullIf(toFloat64(salary_mid), 0) < {compa_cap_pct} / 100.0)
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Compa Ratio"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Compa Ratio"
+                   END ASC
 ```
 
 **Uses:**
@@ -589,16 +632,47 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Compa Ratio" END DESC, CASE 
 **SQL Template:**
 
 ```sql
-WITH compensation AS (
-SELECT e.employee_code, e.employee_name, e.department_name, e.employee_pay_type, e.hourly_salary,
-CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END AS annual_compensation
-FROM dbpcm_warehouse.employee e WHERE (e.employee_status = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department}
-), ranked AS (
-SELECT employee_code, employee_name, department_name, employee_pay_type, hourly_salary, annual_compensation, row_number() OVER (PARTITION BY employee_pay_type ORDER BY CASE WHEN {order_direction} = 'DESC' THEN annual_compensation END DESC, CASE WHEN {order_direction} = 'ASC' THEN annual_compensation END ASC, employee_code) AS compensation_rank
-FROM compensation WHERE annual_compensation IS NOT NULL
-)
-SELECT employee_pay_type AS `Pay Type`, compensation_rank AS `Rank`, employee_code AS `Employee Code`, employee_name AS `Employee Name`, department_name AS `Department`, annual_compensation AS `Annual Compensation`, hourly_salary AS `Hourly Rate`
-FROM ranked WHERE compensation_rank <= {top_n} ORDER BY employee_pay_type, compensation_rank
+WITH compensation AS
+  (SELECT e.employee_code,
+          e.employee_name,
+          e.department_name,
+          e.pay_type,
+          e.hourly_salary,
+          CASE
+              WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+              WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+              ELSE NULL
+          END AS annual_compensation
+   FROM dbpcm_warehouse.employee e
+   WHERE (e.employee_status = {employee_status}
+          OR {employee_status} = 'All')
+     AND e.department_name = {department}),
+     ranked AS
+  (SELECT employee_code,
+          employee_name,
+          department_name,
+          pay_type,
+          hourly_salary,
+          annual_compensation,
+          row_number() OVER (PARTITION BY pay_type
+                             ORDER BY CASE
+                                          WHEN {order_direction} = 'DESC' THEN annual_compensation
+                                      END DESC, CASE
+                                                    WHEN {order_direction} = 'ASC' THEN annual_compensation
+                                                END ASC, employee_code) AS compensation_rank
+   FROM compensation
+   WHERE annual_compensation IS NOT NULL)
+SELECT pay_type AS `Pay Type`,
+       compensation_rank AS `Rank`,
+       employee_code AS `Employee Code`,
+       employee_name AS `Employee Name`,
+       department_name AS `Department`,
+       annual_compensation AS `Annual Compensation`,
+       hourly_salary AS `Hourly Rate`
+FROM ranked
+WHERE compensation_rank <= {top_n}
+ORDER BY pay_type,
+         compensation_rank
 ```
 
 **Uses:**
@@ -647,7 +721,7 @@ FROM ranked WHERE compensation_rank <= {top_n} ORDER BY employee_pay_type, compe
 
 **ID:** `bp-median-annual-salary`
 
-**Intent:** True median annual salary of active employees, overall or per department
+**Intent:** True median annual salary of active Salary-pay-type employees with a recorded salary, overall or per department. Hourly employees are paid by rate and are not included
 
 **Slots:**
 
@@ -662,7 +736,8 @@ SELECT round((quantileExactLow(0.5)(toFloat64(annual_salary)) + quantileExactHig
        count(DISTINCT employee_code) AS "Headcount"
 FROM dbpcm_warehouse.employee
 WHERE employee_status = 'Active'
-  AND annual_salary IS NOT NULL
+  AND pay_type = 'Salary'
+  AND annual_salary > 0
   AND department_name = {department}
 ```
 
@@ -717,7 +792,7 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN works_in_state END DESC, CASE
 
 **ID:** `bp-median-salary-by-position-level`
 
-**Intent:** True median annual salary per position level for active employees
+**Intent:** True median annual salary per position level for active Salary-pay-type employees with a recorded salary. Hourly employees are paid by rate and are not included
 
 **Slots:**
 
@@ -733,9 +808,14 @@ SELECT position_level AS "Position Level",
        count(DISTINCT employee_code) AS "Headcount"
 FROM dbpcm_warehouse.employee
 WHERE employee_status = 'Active'
-  AND annual_salary IS NOT NULL
+  AND pay_type = 'Salary'
+  AND annual_salary > 0
 GROUP BY position_level
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN position_level END DESC, CASE WHEN {order_direction} = 'ASC' THEN position_level END ASC
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN position_level
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN position_level
+                   END ASC
 ```
 
 **Uses:**
@@ -843,12 +923,12 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN employee_code END DESC, CASE 
 
 **ID:** `bp-salary-exact-median`
 
-**Intent:** Exact middle-pair median, mean, min, max and known-compensation count by company, department or status, separately by pay type. salary_population selects recorded values (including zero) or positive values; NULLs excluded. Salary uses annual_salary; Hourly uses hourly_salary and estimated annual compensation = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes overtime). Keep pay types separate. Defaults to Active + On Leave; employee_status overrides or All removes the filter.
+**Intent:** Exact middle-pair median, mean, min, max and known-compensation count by company, department or status, separately by pay type. salary_population selects positive values (the default reading; a zero hourly rate or salary is not recorded compensation) or recorded values including zeros; NULLs excluded. Salary uses annual_salary; Hourly uses hourly_salary and estimated annual compensation = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes overtime). Keep pay types separate. Defaults to Active + On Leave; employee_status overrides or All removes the filter.
 
 **Slots:**
 
 - `group_by` (enum, required) — values: `company`, `department`, `status`
-- `salary_population` (enum, required) — values: `recorded`, `positive`. Use recorded (including zero) unless the user explicitly requests positive/nonzero compensation.
+- `salary_population` (enum, required) — values: `recorded`, `positive`. Use positive unless the user explicitly asks to include recorded zeros. A zero is not a recorded rate; an Hourly employee with hourly_salary 0 or a Salary employee with annual_salary 0 has no compensation on record.
 - `employee_status` (enum, optional) — values: `Active`, `Deceased`, `Inactive`, `Retired`, `Terminated`, `On Leave`, `Not Hired`, `Prehire`, `Unknown`, `All`; binds: `dbpcm_warehouse.employee.employee_status`. Omit for Active + On Leave; select a status to override, or All to remove the status filter.
 - `department` (entity, optional) — binds: `dbpcm_warehouse.department.department_name`. Resolve department names/abbreviations against the directory; a known department may have no matching employees.
 - `employee` (entity, optional) — binds: `dbpcm_warehouse.employee.employee_code`
@@ -861,12 +941,77 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN employee_code END DESC, CASE 
 **SQL Template:**
 
 ```sql
-SELECT e.employee_pay_type AS `Pay Type`, CASE WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)' WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown compensation basis' END AS `Compensation Basis`, CASE WHEN {group_by} = 'department' THEN e.department_name WHEN {group_by} = 'status' THEN e.employee_status ELSE 'Company' END AS `Group`, count((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Known Compensation Count`,
- (quantileExactLow(0.5)((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) + quantileExactHigh(0.5)((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END))) / 2 AS `Exact Median Annual Compensation`,
- avg((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Average Annual Compensation`, min((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Minimum Annual Compensation`, max((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Maximum Annual Compensation`, avg(CASE WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary ELSE NULL END) AS `Average Hourly Rate`
-FROM dbpcm_warehouse.employee e WHERE (e.employee_status = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department} AND e.employee_code = {employee}
- AND (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) IS NOT NULL AND ({salary_population} = 'recorded' OR (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) > 0)
-GROUP BY e.employee_pay_type, CASE WHEN {group_by} = 'department' THEN e.department_name WHEN {group_by} = 'status' THEN e.employee_status ELSE 'Company' END ORDER BY CASE WHEN {order_direction} = 'DESC' THEN `Group` END DESC, CASE WHEN {order_direction} = 'ASC' THEN `Group` END ASC
+SELECT e.pay_type AS `Pay Type`,
+       CASE
+           WHEN e.pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+           WHEN e.pay_type = 'Salary' THEN 'Recorded annual salary'
+           ELSE 'Unknown compensation basis'
+       END AS `Compensation Basis`,
+       CASE
+           WHEN {group_by} = 'department' THEN e.department_name
+           WHEN {group_by} = 'status' THEN e.employee_status
+           ELSE 'Company'
+       END AS `Group`,
+       count((CASE
+                  WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                  WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                  ELSE NULL
+              END)) AS `Known Compensation Count`,
+       (quantileExactLow(0.5)((CASE
+                                   WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                                   WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                                   ELSE NULL
+                               END)) + quantileExactHigh(0.5)((CASE
+                                                                   WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                                                                   WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                                                                   ELSE NULL
+                                                               END))) / 2 AS `Exact Median Annual Compensation`,
+       avg((CASE
+                WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                ELSE NULL
+            END)) AS `Average Annual Compensation`,
+       min((CASE
+                WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                ELSE NULL
+            END)) AS `Minimum Annual Compensation`,
+       max((CASE
+                WHEN e.pay_type = 'Salary' THEN e.annual_salary
+                WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                ELSE NULL
+            END)) AS `Maximum Annual Compensation`,
+       avg(CASE
+               WHEN e.pay_type = 'Hourly' THEN e.hourly_salary
+               ELSE NULL
+           END) AS `Average Hourly Rate`
+FROM dbpcm_warehouse.employee e
+WHERE (e.employee_status = {employee_status}
+       OR {employee_status} = 'All')
+  AND e.department_name = {department}
+  AND e.employee_code = {employee}
+  AND (CASE
+           WHEN e.pay_type = 'Salary' THEN e.annual_salary
+           WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+           ELSE NULL
+       END) IS NOT NULL
+  AND ({salary_population} = 'recorded'
+       OR (CASE
+               WHEN e.pay_type = 'Salary' THEN e.annual_salary
+               WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+               ELSE NULL
+           END) > 0)
+GROUP BY e.pay_type,
+         CASE
+             WHEN {group_by} = 'department' THEN e.department_name
+             WHEN {group_by} = 'status' THEN e.employee_status
+             ELSE 'Company'
+         END
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN `Group`
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN `Group`
+                   END ASC
 ```
 
 **Uses:**
@@ -902,7 +1047,43 @@ GROUP BY e.employee_pay_type, CASE WHEN {group_by} = 'department' THEN e.departm
 **SQL Template:**
 
 ```sql
-SELECT e.employee_pay_type AS `Pay Type`, CASE WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)' WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown compensation basis' END AS `Compensation Basis`, count(DISTINCT e.employee_code) AS `Employee Count` FROM dbpcm_warehouse.employee e WHERE (e.employee_status = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department} AND e.employee_code = {employee} AND (({comparison} = 'above' AND (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) > {salary}) OR ({comparison} = 'at_least' AND (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) >= {salary}) OR ({comparison} = 'equal' AND (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) = {salary}) OR ({comparison} = 'below' AND (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) < {salary})) GROUP BY e.employee_pay_type
+SELECT e.pay_type AS `Pay Type`,
+       CASE
+           WHEN e.pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+           WHEN e.pay_type = 'Salary' THEN 'Recorded annual salary'
+           ELSE 'Unknown compensation basis'
+       END AS `Compensation Basis`,
+       count(DISTINCT e.employee_code) AS `Employee Count`
+FROM dbpcm_warehouse.employee e
+WHERE (e.employee_status = {employee_status}
+       OR {employee_status} = 'All')
+  AND e.department_name = {department}
+  AND e.employee_code = {employee}
+  AND (({comparison} = 'above'
+        AND (CASE
+                 WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                 WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                 ELSE NULL
+             END) > {salary})
+       OR ({comparison} = 'at_least'
+           AND (CASE
+                    WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                    WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                    ELSE NULL
+                END) >= {salary})
+       OR ({comparison} = 'equal'
+           AND (CASE
+                    WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                    WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                    ELSE NULL
+                END) = {salary})
+       OR ({comparison} = 'below'
+           AND (CASE
+                    WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                    WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                    ELSE NULL
+                END) < {salary}))
+GROUP BY e.pay_type
 ```
 
 **Uses:**
@@ -940,9 +1121,60 @@ SELECT e.employee_pay_type AS `Pay Type`, CASE WHEN e.employee_pay_type = 'Hourl
 **SQL Template:**
 
 ```sql
-SELECT e.employee_pay_type AS `Pay Type`, CASE WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)' WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown compensation basis' END AS `Compensation Basis`, e.employee_code AS `Employee Code`, e.department_name AS `Department`, e.employee_status AS `Status`, (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) AS `Annual Compensation`, e.hourly_salary AS `Hourly Rate`
-FROM dbpcm_warehouse.employee e WHERE (e.employee_status = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department} AND e.employee_code = {employee} AND (({comparison} = 'above' AND (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) > {salary}) OR ({comparison} = 'at_least' AND (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) >= {salary}) OR ({comparison} = 'equal' AND (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) = {salary}) OR ({comparison} = 'below' AND (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) < {salary}))
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN e.employee_pay_type END DESC, CASE WHEN {order_direction} = 'ASC' THEN e.employee_pay_type END ASC, (CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END) DESC, e.employee_code LIMIT {row_limit}
+SELECT e.pay_type AS `Pay Type`,
+       CASE
+           WHEN e.pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+           WHEN e.pay_type = 'Salary' THEN 'Recorded annual salary'
+           ELSE 'Unknown compensation basis'
+       END AS `Compensation Basis`,
+       e.employee_code AS `Employee Code`,
+       e.department_name AS `Department`,
+       e.employee_status AS `Status`,
+       (CASE
+            WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+            WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+            ELSE NULL
+        END) AS `Annual Compensation`,
+       e.hourly_salary AS `Hourly Rate`
+FROM dbpcm_warehouse.employee e
+WHERE (e.employee_status = {employee_status}
+       OR {employee_status} = 'All')
+  AND e.department_name = {department}
+  AND e.employee_code = {employee}
+  AND (({comparison} = 'above'
+        AND (CASE
+                 WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                 WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                 ELSE NULL
+             END) > {salary})
+       OR ({comparison} = 'at_least'
+           AND (CASE
+                    WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                    WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                    ELSE NULL
+                END) >= {salary})
+       OR ({comparison} = 'equal'
+           AND (CASE
+                    WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                    WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                    ELSE NULL
+                END) = {salary})
+       OR ({comparison} = 'below'
+           AND (CASE
+                    WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                    WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                    ELSE NULL
+                END) < {salary}))
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN e.pay_type
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN e.pay_type
+                   END ASC, (CASE
+                                 WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                                 WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                                 ELSE NULL
+                             END) DESC, e.employee_code
+LIMIT {row_limit}
 ```
 
 **Uses:**
@@ -1581,15 +1813,63 @@ LIMIT {max_rows}
 **SQL Template:**
 
 ```sql
-SELECT e.employee_pay_type AS `Pay Type`, CASE WHEN e.employee_pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)' WHEN e.employee_pay_type = 'Salary' THEN 'Recorded annual salary' ELSE 'Unknown compensation basis' END AS `Compensation Basis`, CASE WHEN {group_by} = 'department' THEN e.department_name WHEN {group_by} = 'status' THEN e.employee_status ELSE 'Company' END AS `Group`,
- uniqExact(e.employee_code) AS `Employee Count`,
- count((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Known Compensation Count`,
- sum((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Annual Compensation Sum`, avg((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Average Annual Compensation`,
- min((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Minimum Annual Compensation`, max((CASE WHEN e.employee_pay_type = 'Salary' THEN e.annual_salary WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary * 2080 ELSE NULL END)) AS `Maximum Annual Compensation`, avg(CASE WHEN e.employee_pay_type = 'Hourly' THEN e.hourly_salary ELSE NULL END) AS `Average Hourly Rate`
+SELECT e.pay_type AS `Pay Type`,
+       CASE
+           WHEN e.pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
+           WHEN e.pay_type = 'Salary' THEN 'Recorded annual salary'
+           ELSE 'Unknown compensation basis'
+       END AS `Compensation Basis`,
+       CASE
+           WHEN {group_by} = 'department' THEN e.department_name
+           WHEN {group_by} = 'status' THEN e.employee_status
+           ELSE 'Company'
+       END AS `Group`,
+       uniqExact(e.employee_code) AS `Employee Count`,
+       count((CASE
+                  WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                  WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                  ELSE NULL
+              END)) AS `Known Compensation Count`,
+       sum((CASE
+                WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                ELSE NULL
+            END)) AS `Annual Compensation Sum`,
+       avg((CASE
+                WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                ELSE NULL
+            END)) AS `Average Annual Compensation`,
+       min((CASE
+                WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                ELSE NULL
+            END)) AS `Minimum Annual Compensation`,
+       max((CASE
+                WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
+                ELSE NULL
+            END)) AS `Maximum Annual Compensation`,
+       avg(CASE
+               WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary
+               ELSE NULL
+           END) AS `Average Hourly Rate`
 FROM dbpcm_warehouse.employee e
-WHERE (e.employee_status = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department} AND e.employee_code = {employee}
-GROUP BY e.employee_pay_type, CASE WHEN {group_by} = 'department' THEN e.department_name WHEN {group_by} = 'status' THEN e.employee_status ELSE 'Company' END
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN `Group` END DESC, CASE WHEN {order_direction} = 'ASC' THEN `Group` END ASC
+WHERE (e.employee_status = {employee_status}
+       OR {employee_status} = 'All')
+  AND e.department_name = {department}
+  AND e.employee_code = {employee}
+GROUP BY e.pay_type,
+         CASE
+             WHEN {group_by} = 'department' THEN e.department_name
+             WHEN {group_by} = 'status' THEN e.employee_status
+             ELSE 'Company'
+         END
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN `Group`
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN `Group`
+                   END ASC
 ```
 
 **Uses:**
@@ -3192,19 +3472,27 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Affected Employees" END DESC
 ```sql
 SELECT department_name AS "Department",
        countIf(employee_status = 'Active') AS "Active Headcount",
-       round(avgIf(toFloat64(annual_salary), employee_status = 'Active'), 2) AS "Avg Salary (Active)",
+       round(avgIf(toFloat64(annual_salary), employee_status = 'Active' AND pay_type = 'Salary' AND annual_salary > 0), 2) AS "Avg Salary (Active)",
        round(avgIf(date_diff('day', hire_date, now()) / 365.25, employee_status = 'Active'), 1) AS "Avg Tenure Years (Active)",
-       round(100 * countIf(employee_status = 'Active' AND gender = 'Female') / nullIf(countIf(employee_status = 'Active'), 0), 2) AS "Pct Female (Active)",
-       round(100 * countIf(employee_status = 'Active' AND direct_deposit = 1) / nullIf(countIf(employee_status = 'Active'), 0), 2) AS "Pct Direct Deposit (Active)",
+       round(100 * countIf(employee_status = 'Active'
+                           AND gender = 'Female') / nullIf(countIf(employee_status = 'Active'), 0), 2) AS "Pct Female (Active)",
+       round(100 * countIf(employee_status = 'Active'
+                           AND direct_deposit = 1) / nullIf(countIf(employee_status = 'Active'), 0), 2) AS "Pct Direct Deposit (Active)",
        countIf(employee_status = 'On Leave') AS "On Leave",
        countIf(employee_status = 'On Leave'
-               AND leave_absence_start IS NOT NULL AND toDate32(leave_absence_start) > toDate32('1900-01-01')
-               AND NOT (leave_absence_end IS NOT NULL AND toDate32(leave_absence_end) > toDate32('1900-01-01'))
+               AND leave_absence_start IS NOT NULL
+               AND toDate32(leave_absence_start) > toDate32('1900-01-01')
+               AND NOT (leave_absence_end IS NOT NULL
+                        AND toDate32(leave_absence_end) > toDate32('1900-01-01'))
                AND leave_absence_start < now() - INTERVAL 1 YEAR) AS "On Leave Over 1 Year No End"
 FROM dbpcm_warehouse.employee
 WHERE department_name = {department}
 GROUP BY department_name
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Department" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Department" END ASC
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Department"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Department"
+                   END ASC
 ```
 
 **Uses:**
@@ -8392,11 +8680,11 @@ SELECT count(DISTINCT CASE
                                                                END), 0), 2) AS "W2 Share Pct",
        round((quantileExactLow(0.5)(CASE
                                         WHEN employee_status = 'Active'
-                                             AND NOT (annual_salary IS NULL) THEN toFloat64(annual_salary)
+                                             AND pay_type = 'Salary' AND annual_salary > 0 THEN toFloat64(annual_salary)
                                         ELSE NULL
                                     END) + quantileExactHigh(0.5)(CASE
                                                                       WHEN employee_status = 'Active'
-                                                                           AND NOT (annual_salary IS NULL) THEN toFloat64(annual_salary)
+                                                                           AND pay_type = 'Salary' AND annual_salary > 0 THEN toFloat64(annual_salary)
                                                                       ELSE NULL
                                                                   END)) / 2, 2) AS "Median Annual Salary",
        round(avg(CASE

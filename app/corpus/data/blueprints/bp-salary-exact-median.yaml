@@ -1,6 +1,6 @@
 id: bp-salary-exact-median
 intent: Exact middle-pair median, mean, min, max and known-compensation count by company, department or status,
-  separately by pay type. salary_population selects recorded values (including zero) or positive values; NULLs excluded.
+  separately by pay type. salary_population selects positive values (the default reading; a zero hourly rate or salary is not recorded compensation) or recorded values including zeros; NULLs excluded.
   Salary uses annual_salary; Hourly uses hourly_salary and estimated annual compensation = hourly_salary * 2080
   (40 hours/week, 52 weeks/year; excludes overtime). Keep pay types separate. Defaults to Active + On Leave; employee_status
   overrides or All removes the filter.
@@ -30,7 +30,7 @@ slots:
   enum_values:
   - recorded
   - positive
-  description: Use recorded (including zero) unless the user explicitly requests positive/nonzero compensation.
+  description: Use positive unless the user explicitly asks to include recorded zeros. A zero is not a recorded rate; an Hourly employee with hourly_salary 0 or a Salary employee with annual_salary 0 has no compensation on record.
 - name: employee_status
   description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
   type: enum

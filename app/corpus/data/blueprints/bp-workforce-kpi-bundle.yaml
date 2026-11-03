@@ -18,11 +18,11 @@ sql_template: |
                                                                  END), 0), 2) AS "W2 Share Pct",
          round((quantileExactLow(0.5)(CASE
                                           WHEN employee_status = 'Active'
-                                               AND NOT (annual_salary IS NULL) THEN toFloat64(annual_salary)
+                                               AND pay_type = 'Salary' AND annual_salary > 0 THEN toFloat64(annual_salary)
                                           ELSE NULL
                                       END) + quantileExactHigh(0.5)(CASE
                                                                         WHEN employee_status = 'Active'
-                                                                             AND NOT (annual_salary IS NULL) THEN toFloat64(annual_salary)
+                                                                             AND pay_type = 'Salary' AND annual_salary > 0 THEN toFloat64(annual_salary)
                                                                         ELSE NULL
                                                                     END)) / 2, 2) AS "Median Annual Salary",
          round(avg(CASE
@@ -93,6 +93,7 @@ slots:
   temporal_type: date
 slots_summary: kpi_window
 uses:
+- dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_status
 - dbpcm_warehouse.employee.employment_type

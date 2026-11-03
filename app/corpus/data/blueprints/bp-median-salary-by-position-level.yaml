@@ -1,5 +1,5 @@
 id: bp-median-salary-by-position-level
-intent: True median annual salary per position level for active employees
+intent: True median annual salary per position level for active Salary-pay-type employees with a recorded salary. Hourly employees are paid by rate and are not included
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -9,7 +9,8 @@ sql_template: |
          count(DISTINCT employee_code) AS "Headcount"
   FROM dbpcm_warehouse.employee
   WHERE employee_status = 'Active'
-    AND annual_salary IS NOT NULL
+    AND pay_type = 'Salary'
+    AND annual_salary > 0
   GROUP BY position_level
   ORDER BY CASE
                WHEN {order_direction} = 'DESC' THEN position_level
@@ -27,6 +28,7 @@ slots:
   description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
 slots_summary: order_direction
 uses:
+- dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.position_level
 - dbpcm_warehouse.employee.annual_salary

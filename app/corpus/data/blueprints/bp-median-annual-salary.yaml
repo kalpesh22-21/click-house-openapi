@@ -1,5 +1,5 @@
 id: bp-median-annual-salary
-intent: True median annual salary of active employees, overall or per department
+intent: True median annual salary of active Salary-pay-type employees with a recorded salary, overall or per department. Hourly employees are paid by rate and are not included
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -8,7 +8,8 @@ sql_template: |
          count(DISTINCT employee_code) AS "Headcount"
   FROM dbpcm_warehouse.employee
   WHERE employee_status = 'Active'
-    AND annual_salary IS NOT NULL
+    AND pay_type = 'Salary'
+    AND annual_salary > 0
     AND department_name = {department}
 slots:
 - name: department
@@ -18,6 +19,7 @@ slots:
   optional_pattern: 'TRUE'
 slots_summary: department
 uses:
+- dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.annual_salary
 - dbpcm_warehouse.employee.department_name

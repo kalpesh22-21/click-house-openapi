@@ -23,11 +23,11 @@ composes:
     company_hourly_avg: scalar
   sql_template: |
     SELECT avg(CASE
-                   WHEN pay_type = 'Salary' THEN annual_salary
+                   WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary
                    ELSE NULL
                END) AS company_salary_avg,
            avg(CASE
-                   WHEN pay_type = 'Hourly' THEN hourly_salary * 2080
+                   WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary * 2080
                    ELSE NULL
                END) AS company_hourly_avg
     FROM dbpcm_warehouse.employee
@@ -48,12 +48,12 @@ composes:
                ELSE 'Recorded annual salary'
            END AS `Compensation Basis`,
            avg(CASE
-                   WHEN pay_type = 'Salary' THEN annual_salary
-                   WHEN pay_type = 'Hourly' THEN hourly_salary * 2080
+                   WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary
+                   WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary * 2080
                    ELSE NULL
                END) AS `Department Average Annual Compensation`,
            avg(CASE
-                   WHEN pay_type = 'Hourly' THEN hourly_salary
+                   WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary
                    ELSE NULL
                END) AS `Average Hourly Rate`
     FROM dbpcm_warehouse.employee
@@ -62,8 +62,8 @@ composes:
     GROUP BY department_name,
              pay_type
     HAVING avg(CASE
-                   WHEN pay_type = 'Salary' THEN annual_salary
-                   WHEN pay_type = 'Hourly' THEN hourly_salary * 2080
+                   WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary
+                   WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary * 2080
                    ELSE NULL
                END) > CASE
                           WHEN pay_type = 'Salary' THEN {company_salary_avg}

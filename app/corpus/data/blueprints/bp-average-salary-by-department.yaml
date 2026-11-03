@@ -61,13 +61,13 @@ sql_template: |
          END AS `Compensation Basis`,
          department_name AS "Department",
          AVG((CASE
-                  WHEN pay_type = 'Salary' THEN annual_salary
-                  WHEN pay_type = 'Hourly' THEN hourly_salary * 2080
+                  WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary
+                  WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary * 2080
                   ELSE NULL
               END)) AS "Average Annual Compensation",
          COUNT(DISTINCT employee_code) AS "Headcount",
          avg(CASE
-                 WHEN pay_type = 'Hourly' THEN hourly_salary
+                 WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary
                  ELSE NULL
              END) AS `Average Hourly Rate`
   FROM dbpcm_warehouse.employee

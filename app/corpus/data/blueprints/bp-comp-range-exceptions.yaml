@@ -1,5 +1,5 @@
 id: bp-comp-range-exceptions
-intent: Active employees paid outside their salary range or below a compa-ratio cap
+intent: Active Salary-pay-type employees whose recorded annual salary is outside their salary range or below a compa-ratio cap
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -14,7 +14,8 @@ sql_template: |
   FROM dbpcm_warehouse.employee
   WHERE employee_status = 'Active'
     AND department_name = {department}
-    AND annual_salary IS NOT NULL
+    AND pay_type = 'Salary'
+    AND annual_salary > 0
     AND (toFloat64(annual_salary) < toFloat64(salary_min)
          OR (toFloat64(salary_max) > 0
              AND toFloat64(annual_salary) > toFloat64(salary_max))
@@ -43,6 +44,7 @@ slots:
   description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
 slots_summary: compa_cap_pct, department, order_direction
 uses:
+- dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.employee.annual_salary

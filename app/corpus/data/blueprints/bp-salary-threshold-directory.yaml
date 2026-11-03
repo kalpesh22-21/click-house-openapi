@@ -85,8 +85,8 @@ sql_template: |
          e.department_name AS `Department`,
          e.employee_status AS `Status`,
          (CASE
-              WHEN e.pay_type = 'Salary' THEN e.annual_salary
-              WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+              WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+              WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
               ELSE NULL
           END) AS `Annual Compensation`,
          e.hourly_salary AS `Hourly Rate`
@@ -97,26 +97,26 @@ sql_template: |
     AND e.employee_code = {employee}
     AND (({comparison} = 'above'
           AND (CASE
-                   WHEN e.pay_type = 'Salary' THEN e.annual_salary
-                   WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                   WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                   WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
                    ELSE NULL
                END) > {salary})
          OR ({comparison} = 'at_least'
              AND (CASE
-                      WHEN e.pay_type = 'Salary' THEN e.annual_salary
-                      WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                      WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
                       ELSE NULL
                   END) >= {salary})
          OR ({comparison} = 'equal'
              AND (CASE
-                      WHEN e.pay_type = 'Salary' THEN e.annual_salary
-                      WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                      WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
                       ELSE NULL
                   END) = {salary})
          OR ({comparison} = 'below'
              AND (CASE
-                      WHEN e.pay_type = 'Salary' THEN e.annual_salary
-                      WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                      WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                      WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
                       ELSE NULL
                   END) < {salary}))
   ORDER BY CASE
@@ -124,8 +124,8 @@ sql_template: |
            END DESC, CASE
                          WHEN {order_direction} = 'ASC' THEN e.pay_type
                      END ASC, (CASE
-                                   WHEN e.pay_type = 'Salary' THEN e.annual_salary
-                                   WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                                   WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                                   WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
                                    ELSE NULL
                                END) DESC, e.employee_code
   LIMIT {row_limit}

@@ -65,8 +65,8 @@ sql_template: |
             e.pay_type,
             e.hourly_salary,
             CASE
-                WHEN e.pay_type = 'Salary' THEN e.annual_salary
-                WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
                 ELSE NULL
             END AS annual_compensation
      FROM dbpcm_warehouse.employee e

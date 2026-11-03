@@ -78,32 +78,32 @@ sql_template: |
          END AS `Group`,
          uniqExact(e.employee_code) AS `Employee Count`,
          count((CASE
-                    WHEN e.pay_type = 'Salary' THEN e.annual_salary
-                    WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                    WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                    WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
                     ELSE NULL
                 END)) AS `Known Compensation Count`,
          sum((CASE
-                  WHEN e.pay_type = 'Salary' THEN e.annual_salary
-                  WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                  WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                  WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
                   ELSE NULL
               END)) AS `Annual Compensation Sum`,
          avg((CASE
-                  WHEN e.pay_type = 'Salary' THEN e.annual_salary
-                  WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                  WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                  WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
                   ELSE NULL
               END)) AS `Average Annual Compensation`,
          min((CASE
-                  WHEN e.pay_type = 'Salary' THEN e.annual_salary
-                  WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                  WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                  WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
                   ELSE NULL
               END)) AS `Minimum Annual Compensation`,
          max((CASE
-                  WHEN e.pay_type = 'Salary' THEN e.annual_salary
-                  WHEN e.pay_type = 'Hourly' THEN e.hourly_salary * 2080
+                  WHEN e.pay_type = 'Salary' AND e.annual_salary > 0 THEN e.annual_salary
+                  WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary * 2080
                   ELSE NULL
               END)) AS `Maximum Annual Compensation`,
          avg(CASE
-                 WHEN e.pay_type = 'Hourly' THEN e.hourly_salary
+                 WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0 THEN e.hourly_salary
                  ELSE NULL
              END) AS `Average Hourly Rate`
   FROM dbpcm_warehouse.employee e
