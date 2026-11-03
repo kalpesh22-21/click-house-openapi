@@ -33,3 +33,9 @@ column_formats:
     precision: 2
   Employees:
     kind: integer
+presentation:
+  kind: facts
+  measure_columns:
+  - Payout Requests
+  - Total Hours
+  - Employees

@@ -56,3 +56,5 @@ column_formats:
     kind: datetime
   Seat Effective:
     kind: datetime
+presentation:
+  kind: table

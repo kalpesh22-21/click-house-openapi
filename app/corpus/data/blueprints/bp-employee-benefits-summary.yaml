@@ -43,3 +43,9 @@ column_formats:
   Total Benefit Contributions:
     kind: currency
     currency: USD
+presentation:
+  kind: bars
+  category_columns:
+  - Benefit Code
+  measure_columns:
+  - Total Benefit Contributions

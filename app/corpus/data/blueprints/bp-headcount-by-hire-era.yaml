@@ -42,3 +42,9 @@ column_formats:
     kind: number
     unit: years
     precision: 2
+presentation:
+  kind: donut
+  category_columns:
+  - Hire Era
+  measure_columns:
+  - Headcount

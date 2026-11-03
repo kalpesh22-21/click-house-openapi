@@ -151,3 +151,5 @@ column_formats:
     currency: USD
     precision: 2
     unit: per hour
+presentation:
+  kind: table

@@ -40,3 +40,9 @@ column_formats:
     kind: number
     unit: miles
     precision: 2
+presentation:
+  kind: facts
+  measure_columns:
+  - Approved Amount
+  - Approved Miles
+  - Submitted Miles

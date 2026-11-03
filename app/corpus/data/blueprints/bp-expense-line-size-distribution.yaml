@@ -57,3 +57,9 @@ column_formats:
     kind: text
   Expense Count:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Amount Band
+  measure_columns:
+  - Expense Count

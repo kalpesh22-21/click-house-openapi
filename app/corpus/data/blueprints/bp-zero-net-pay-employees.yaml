@@ -40,3 +40,5 @@ uses:
 column_formats:
   Employee Code:
     kind: identifier
+presentation:
+  kind: table

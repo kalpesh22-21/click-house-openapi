@@ -25,3 +25,8 @@ column_formats:
     kind: integer
   Distinct Checks:
     kind: integer
+presentation:
+  kind: facts
+  measure_columns:
+  - Pay Items
+  - Distinct Checks

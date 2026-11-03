@@ -43,3 +43,9 @@ column_formats:
   Total Tax Withheld:
     kind: currency
     currency: USD
+presentation:
+  kind: bars
+  category_columns:
+  - Tax Code
+  measure_columns:
+  - Total Tax Withheld

@@ -42,3 +42,9 @@ column_formats:
     kind: text
   Change Events:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Changed Field
+  measure_columns:
+  - Change Events

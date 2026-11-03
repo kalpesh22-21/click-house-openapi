@@ -43,3 +43,9 @@ column_formats:
   Total Employer Tax:
     kind: currency
     currency: USD
+presentation:
+  kind: bars
+  category_columns:
+  - Tax Code
+  measure_columns:
+  - Total Employer Tax

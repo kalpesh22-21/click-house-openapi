@@ -88,3 +88,5 @@ column_formats:
     kind: text
   Supervisor:
     kind: text
+presentation:
+  kind: table

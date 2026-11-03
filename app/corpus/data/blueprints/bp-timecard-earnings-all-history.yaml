@@ -53,3 +53,9 @@ column_formats:
     kind: number
     unit: hours
     precision: 2
+presentation:
+  kind: bars
+  category_columns:
+  - Earn Code
+  measure_columns:
+  - Total Earnings

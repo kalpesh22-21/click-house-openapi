@@ -48,3 +48,5 @@ column_formats:
   Total Tax:
     kind: currency
     currency: USD
+presentation:
+  kind: table

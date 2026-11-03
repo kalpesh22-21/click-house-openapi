@@ -31,3 +31,8 @@ column_formats:
     precision: 2
   Headcount:
     kind: integer
+presentation:
+  kind: facts
+  measure_columns:
+  - Median Annual Salary
+  - Headcount

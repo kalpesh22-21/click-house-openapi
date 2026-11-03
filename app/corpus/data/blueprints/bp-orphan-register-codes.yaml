@@ -42,3 +42,9 @@ column_formats:
     kind: identifier
   Pay Items:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Employee Code
+  measure_columns:
+  - Pay Items

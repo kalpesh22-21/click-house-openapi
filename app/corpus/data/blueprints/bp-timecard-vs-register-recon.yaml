@@ -97,3 +97,5 @@ column_formats:
     kind: percent
     scale: percent
     precision: 2
+presentation:
+  kind: table

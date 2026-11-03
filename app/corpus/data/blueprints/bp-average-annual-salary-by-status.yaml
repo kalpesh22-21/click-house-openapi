@@ -68,3 +68,9 @@ column_formats:
     currency: USD
     precision: 2
     unit: per hour
+presentation:
+  kind: bars
+  category_columns:
+  - Pay Type
+  measure_columns:
+  - Average Annual Compensation

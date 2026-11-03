@@ -67,3 +67,5 @@ column_formats:
     kind: date
   Last Pay Date:
     kind: date
+presentation:
+  kind: table

@@ -42,3 +42,9 @@ column_formats:
     kind: currency
     currency: USD
     precision: 2
+presentation:
+  kind: bars
+  category_columns:
+  - Register Type
+  measure_columns:
+  - Total Amount

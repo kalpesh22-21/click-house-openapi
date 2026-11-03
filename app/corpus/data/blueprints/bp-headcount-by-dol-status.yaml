@@ -40,3 +40,9 @@ column_formats:
     kind: text
   Headcount:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - DOL Status
+  measure_columns:
+  - Headcount

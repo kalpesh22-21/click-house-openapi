@@ -43,3 +43,9 @@ column_formats:
     kind: text
   Direct Reports:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Manager
+  measure_columns:
+  - Direct Reports

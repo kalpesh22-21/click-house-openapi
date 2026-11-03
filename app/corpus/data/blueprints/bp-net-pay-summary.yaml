@@ -25,3 +25,7 @@ column_formats:
   Total Net Pay:
     kind: currency
     currency: USD
+presentation:
+  kind: figure
+  measure_columns:
+  - Total Net Pay

@@ -45,3 +45,5 @@ column_formats:
     kind: text
   Termination Date:
     kind: date
+presentation:
+  kind: table

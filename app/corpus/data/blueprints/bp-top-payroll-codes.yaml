@@ -57,3 +57,9 @@ column_formats:
     kind: currency
     currency: USD
     precision: 2
+presentation:
+  kind: bars
+  category_columns:
+  - Type Code
+  measure_columns:
+  - Total Amount

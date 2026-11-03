@@ -63,3 +63,11 @@ column_formats:
     kind: number
     unit: days
     precision: 2
+presentation:
+  kind: line
+  category_columns:
+  - Month
+  measure_columns:
+  - Expense Count
+  - Median Submission To Approval
+  - Median Approval To Payment

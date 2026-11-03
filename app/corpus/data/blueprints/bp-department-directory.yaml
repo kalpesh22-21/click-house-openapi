@@ -43,3 +43,9 @@ column_formats:
     kind: integer
   Total Headcount:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Department
+  measure_columns:
+  - Active Headcount

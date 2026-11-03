@@ -107,3 +107,9 @@ column_formats:
     kind: text
   Employee Count:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Pay Type
+  measure_columns:
+  - Employee Count

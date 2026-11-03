@@ -56,3 +56,5 @@ column_formats:
     kind: text
   Department:
     kind: text
+presentation:
+  kind: table

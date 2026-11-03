@@ -55,3 +55,9 @@ column_formats:
   Total Dollars:
     kind: currency
     currency: USD
+presentation:
+  kind: line
+  category_columns:
+  - Month
+  measure_columns:
+  - Total Dollars

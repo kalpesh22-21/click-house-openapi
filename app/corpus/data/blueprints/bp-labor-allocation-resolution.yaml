@@ -77,3 +77,5 @@ column_formats:
     kind: text
   Unallocated:
     kind: integer
+presentation:
+  kind: table

@@ -28,3 +28,8 @@ column_formats:
   Net Pay:
     kind: currency
     currency: USD
+presentation:
+  kind: facts
+  measure_columns:
+  - Gross Earnings
+  - Net Pay

@@ -49,3 +49,9 @@ column_formats:
     kind: currency
     currency: USD
     precision: 2
+presentation:
+  kind: line
+  category_columns:
+  - Month
+  measure_columns:
+  - Total Approved Spend

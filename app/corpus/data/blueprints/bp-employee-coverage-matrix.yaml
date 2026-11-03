@@ -81,3 +81,5 @@ column_formats:
     kind: integer
   Gap Count:
     kind: integer
+presentation:
+  kind: table

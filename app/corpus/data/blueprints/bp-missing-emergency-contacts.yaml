@@ -53,3 +53,5 @@ column_formats:
     kind: text
   Primary Phone:
     kind: identifier
+presentation:
+  kind: table

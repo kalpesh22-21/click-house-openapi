@@ -73,3 +73,5 @@ column_formats:
     precision: 2
   Gap Count:
     kind: integer
+presentation:
+  kind: table

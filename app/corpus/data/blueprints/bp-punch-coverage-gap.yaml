@@ -36,3 +36,10 @@ column_formats:
     kind: percent
     scale: percent
     precision: 2
+presentation:
+  kind: facts
+  measure_columns:
+  - Active Employees
+  - Employees With Punches
+  - Employees Without Punches
+  - Coverage Pct

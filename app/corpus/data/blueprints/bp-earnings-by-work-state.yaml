@@ -52,3 +52,9 @@ column_formats:
   Gross Earnings:
     kind: currency
     currency: USD
+presentation:
+  kind: bars
+  category_columns:
+  - Work State
+  measure_columns:
+  - Gross Earnings

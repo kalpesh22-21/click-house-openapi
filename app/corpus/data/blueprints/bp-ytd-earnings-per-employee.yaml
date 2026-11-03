@@ -68,3 +68,9 @@ column_formats:
     kind: number
     unit: hours
     precision: 2
+presentation:
+  kind: bars
+  category_columns:
+  - Employee Name
+  measure_columns:
+  - Gross Earnings

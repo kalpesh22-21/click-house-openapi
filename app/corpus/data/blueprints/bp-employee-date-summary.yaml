@@ -109,3 +109,12 @@ column_formats:
     kind: text
   Employee Count:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Group
+  measure_columns:
+  - Employee Count
+  by_group_by:
+    company: figure
+    month: line

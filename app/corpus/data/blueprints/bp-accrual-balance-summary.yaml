@@ -119,3 +119,11 @@ column_formats:
     kind: number
   Employee Count:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Group
+  measure_columns:
+  - Beginning Balance
+  by_group_by:
+    company: figure

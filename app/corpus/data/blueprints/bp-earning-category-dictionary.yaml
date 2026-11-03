@@ -31,3 +31,5 @@ column_formats:
     kind: identifier
   Category:
     kind: text
+presentation:
+  kind: table

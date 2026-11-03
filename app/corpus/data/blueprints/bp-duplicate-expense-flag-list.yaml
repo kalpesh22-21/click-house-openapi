@@ -49,3 +49,9 @@ column_formats:
     precision: 2
   Flagged Expenses:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Employee Code
+  measure_columns:
+  - Flagged Amount

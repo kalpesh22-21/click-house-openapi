@@ -55,3 +55,9 @@ column_formats:
   Gross Earnings:
     kind: currency
     currency: USD
+presentation:
+  kind: line
+  category_columns:
+  - Period
+  measure_columns:
+  - Gross Earnings

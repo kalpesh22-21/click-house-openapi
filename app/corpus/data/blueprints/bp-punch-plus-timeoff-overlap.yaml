@@ -82,3 +82,9 @@ column_formats:
     kind: text
   Overlap Days:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Employee Name
+  measure_columns:
+  - Overlap Days

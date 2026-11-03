@@ -127,3 +127,12 @@ column_formats:
     precision: 2
   Employee Count:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Group
+  measure_columns:
+  - Payroll Amount
+  by_group_by:
+    company: figure
+    month: line

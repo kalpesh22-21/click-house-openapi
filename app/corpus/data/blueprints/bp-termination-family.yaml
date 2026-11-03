@@ -90,3 +90,5 @@ column_formats:
     kind: date
   Total Matching Employees:
     kind: integer
+presentation:
+  kind: table

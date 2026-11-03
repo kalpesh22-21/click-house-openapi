@@ -65,3 +65,11 @@ column_formats:
     kind: integer
   Net Delta:
     kind: integer
+presentation:
+  kind: line
+  category_columns:
+  - Month
+  measure_columns:
+  - Hires
+  - Terms
+  - Net Delta

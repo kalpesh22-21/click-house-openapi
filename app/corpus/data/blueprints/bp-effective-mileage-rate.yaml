@@ -63,3 +63,9 @@ column_formats:
     currency: USD
     unit: per mile
     precision: 4
+presentation:
+  kind: bars
+  category_columns:
+  - Expense Rule
+  measure_columns:
+  - Total Approved

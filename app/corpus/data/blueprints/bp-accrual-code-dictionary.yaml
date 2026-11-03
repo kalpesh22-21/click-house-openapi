@@ -37,3 +37,9 @@ column_formats:
     kind: text
   Holder Count:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Accrual Code
+  measure_columns:
+  - Holder Count

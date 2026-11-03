@@ -77,3 +77,9 @@ column_formats:
     kind: integer
   On Leave Over 1 Year No End:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Department
+  measure_columns:
+  - Active Headcount

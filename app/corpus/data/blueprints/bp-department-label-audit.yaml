@@ -37,3 +37,9 @@ column_formats:
     kind: text
   Affected Employees:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Department Name
+  measure_columns:
+  - Affected Employees

@@ -131,3 +131,11 @@ column_formats:
     kind: number
     unit: years
     precision: 2
+presentation:
+  kind: bars
+  category_columns:
+  - Group
+  measure_columns:
+  - Valid Hire Date Count
+  by_group_by:
+    company: figure

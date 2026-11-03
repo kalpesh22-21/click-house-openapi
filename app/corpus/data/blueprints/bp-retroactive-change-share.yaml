@@ -58,3 +58,9 @@ column_formats:
     kind: percent
     scale: percent
     precision: 2
+presentation:
+  kind: bars
+  category_columns:
+  - Changed Field
+  measure_columns:
+  - Retroactive Changes

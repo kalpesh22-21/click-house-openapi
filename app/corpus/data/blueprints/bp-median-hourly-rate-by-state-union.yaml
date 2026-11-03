@@ -53,3 +53,5 @@ column_formats:
     unit: per hour
   Headcount:
     kind: integer
+presentation:
+  kind: table

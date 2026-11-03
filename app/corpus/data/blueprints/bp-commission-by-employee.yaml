@@ -62,3 +62,9 @@ column_formats:
   Total Commission:
     kind: currency
     currency: USD
+presentation:
+  kind: bars
+  category_columns:
+  - Employee Name
+  measure_columns:
+  - Total Commission

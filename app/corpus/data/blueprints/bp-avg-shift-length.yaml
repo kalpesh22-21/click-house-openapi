@@ -60,3 +60,9 @@ column_formats:
     precision: 2
   Pair Count:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Department
+  measure_columns:
+  - Avg Shift Hours

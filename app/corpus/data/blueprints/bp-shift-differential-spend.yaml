@@ -42,3 +42,8 @@ column_formats:
     kind: number
     unit: hours
     precision: 2
+presentation:
+  kind: facts
+  measure_columns:
+  - Shift Differential Dollars
+  - Shift Differential Hours

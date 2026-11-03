@@ -47,3 +47,5 @@ column_formats:
     kind: text
   Pair Count:
     kind: integer
+presentation:
+  kind: table

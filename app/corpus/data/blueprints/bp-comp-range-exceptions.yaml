@@ -73,3 +73,9 @@ column_formats:
   Compa Ratio:
     kind: number
     precision: 3
+presentation:
+  kind: bars
+  category_columns:
+  - Employee Code
+  measure_columns:
+  - Annual Salary

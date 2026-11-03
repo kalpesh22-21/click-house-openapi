@@ -34,3 +34,9 @@ column_formats:
     kind: identifier
   Headcount:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Union Code
+  measure_columns:
+  - Headcount

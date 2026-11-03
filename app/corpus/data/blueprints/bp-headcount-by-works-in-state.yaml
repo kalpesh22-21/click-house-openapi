@@ -45,3 +45,9 @@ column_formats:
     kind: integer
   Lives Elsewhere:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Works In State
+  measure_columns:
+  - Headcount

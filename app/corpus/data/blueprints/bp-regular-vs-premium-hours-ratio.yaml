@@ -65,3 +65,11 @@ column_formats:
     kind: percent
     scale: percent
     precision: 2
+presentation:
+  kind: line
+  category_columns:
+  - Month
+  measure_columns:
+  - Regular Hours
+  - Premium Hours
+  - Regular Pct

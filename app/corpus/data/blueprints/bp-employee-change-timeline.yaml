@@ -60,3 +60,5 @@ column_formats:
     kind: text
   Description:
     kind: text
+presentation:
+  kind: table

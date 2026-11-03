@@ -44,3 +44,5 @@ column_formats:
     kind: text
   Hire Date:
     kind: datetime
+presentation:
+  kind: table

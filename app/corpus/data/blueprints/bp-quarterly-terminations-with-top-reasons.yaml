@@ -67,3 +67,5 @@ column_formats:
     kind: integer
   Quarter Total:
     kind: integer
+presentation:
+  kind: table

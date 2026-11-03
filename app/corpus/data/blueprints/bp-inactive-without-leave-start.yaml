@@ -56,3 +56,5 @@ column_formats:
     kind: datetime
   Leave Absence Start:
     kind: datetime
+presentation:
+  kind: table

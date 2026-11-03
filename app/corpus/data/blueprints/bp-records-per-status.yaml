@@ -37,3 +37,9 @@ column_formats:
     kind: text
   Employee Records:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Employee Status
+  measure_columns:
+  - Employee Records

@@ -54,3 +54,9 @@ column_formats:
     kind: number
     unit: hours
     precision: 2
+presentation:
+  kind: line
+  category_columns:
+  - Month
+  measure_columns:
+  - Approved Hours

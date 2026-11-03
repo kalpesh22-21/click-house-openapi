@@ -45,3 +45,9 @@ column_formats:
   Gross Earnings:
     kind: currency
     currency: USD
+presentation:
+  kind: bars
+  category_columns:
+  - Pay Basis
+  measure_columns:
+  - Gross Earnings

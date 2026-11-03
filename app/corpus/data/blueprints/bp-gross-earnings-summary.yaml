@@ -26,3 +26,7 @@ column_formats:
   Total Gross Earnings:
     kind: currency
     currency: USD
+presentation:
+  kind: figure
+  measure_columns:
+  - Total Gross Earnings

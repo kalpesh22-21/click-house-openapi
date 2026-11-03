@@ -25,3 +25,7 @@ column_formats:
   Total Gross Wages:
     kind: currency
     currency: USD
+presentation:
+  kind: figure
+  measure_columns:
+  - Total Gross Wages

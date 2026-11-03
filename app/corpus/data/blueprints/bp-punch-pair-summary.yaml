@@ -149,3 +149,13 @@ column_formats:
     kind: date
   Last Observed Date:
     kind: date
+presentation:
+  kind: bars
+  category_columns:
+  - Group
+  measure_columns:
+  - Pair Count
+  by_group_by:
+    company: figure
+    day: line
+    month: line

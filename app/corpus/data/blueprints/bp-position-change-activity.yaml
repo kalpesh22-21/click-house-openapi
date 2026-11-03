@@ -62,3 +62,5 @@ column_formats:
     kind: text
   Change Events:
     kind: integer
+presentation:
+  kind: table

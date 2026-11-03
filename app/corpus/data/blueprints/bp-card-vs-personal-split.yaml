@@ -46,3 +46,9 @@ column_formats:
     kind: currency
     currency: USD
     precision: 2
+presentation:
+  kind: donut
+  category_columns:
+  - Expense Type
+  measure_columns:
+  - Approved Amount

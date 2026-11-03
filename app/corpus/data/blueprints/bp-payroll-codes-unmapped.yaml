@@ -44,3 +44,5 @@ uses:
 column_formats:
   Type Code:
     kind: identifier
+presentation:
+  kind: table

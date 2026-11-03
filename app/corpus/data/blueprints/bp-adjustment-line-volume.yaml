@@ -45,3 +45,10 @@ column_formats:
   Adjustment Amount:
     kind: currency
     currency: USD
+presentation:
+  kind: line
+  category_columns:
+  - Month
+  measure_columns:
+  - Adjustment Pay Items
+  - Adjustment Amount

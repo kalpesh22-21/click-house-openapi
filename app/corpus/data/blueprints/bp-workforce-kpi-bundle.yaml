@@ -139,3 +139,17 @@ column_formats:
     kind: integer
   Missing Emergency Contacts:
     kind: integer
+presentation:
+  kind: facts
+  measure_columns:
+  - Active Headcount
+  - W2 Share Pct
+  - Median Annual Salary
+  - Avg Tenure Years
+  - Pct Full Time
+  - Pct Direct Deposit
+  - Hires In Window
+  - Terms In Window
+  - Turnover Rate In Window
+  - On Leave
+  - Missing Emergency Contacts

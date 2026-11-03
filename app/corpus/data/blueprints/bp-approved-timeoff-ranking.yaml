@@ -84,3 +84,9 @@ column_formats:
     kind: integer
   Rank:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Employee Name
+  measure_columns:
+  - Approved Time-Off Hours

@@ -67,3 +67,5 @@ column_formats:
     kind: text
   Post-Termination Changes:
     kind: integer
+presentation:
+  kind: table

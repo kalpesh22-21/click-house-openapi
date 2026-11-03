@@ -41,3 +41,9 @@ column_formats:
     kind: number
   Projected Hires:
     kind: number
+presentation:
+  kind: facts
+  measure_columns:
+  - Hires In Window
+  - Average Monthly Hires
+  - Projected Hires

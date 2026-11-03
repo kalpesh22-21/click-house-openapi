@@ -60,3 +60,5 @@ column_formats:
     kind: identifier
   Seat Status:
     kind: text
+presentation:
+  kind: table

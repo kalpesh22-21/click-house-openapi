@@ -54,3 +54,9 @@ column_formats:
     kind: number
     unit: days
     precision: 2
+presentation:
+  kind: bars
+  category_columns:
+  - Employee Code
+  measure_columns:
+  - Pending Expenses

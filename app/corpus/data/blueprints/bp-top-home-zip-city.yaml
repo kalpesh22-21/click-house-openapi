@@ -47,3 +47,9 @@ column_formats:
     kind: text
   Headcount:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Zip Code
+  measure_columns:
+  - Headcount

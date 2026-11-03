@@ -65,3 +65,9 @@ column_formats:
   Balance Hours:
     kind: number
     precision: 2
+presentation:
+  kind: bars
+  category_columns:
+  - Employee Name
+  measure_columns:
+  - Balance Hours

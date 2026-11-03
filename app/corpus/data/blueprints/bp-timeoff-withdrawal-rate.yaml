@@ -64,3 +64,9 @@ column_formats:
     kind: percent
     scale: percent
     precision: 2
+presentation:
+  kind: bars
+  category_columns:
+  - Department
+  measure_columns:
+  - Total Requests

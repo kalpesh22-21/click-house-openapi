@@ -58,3 +58,9 @@ column_formats:
     kind: integer
   Employee-Days:
     kind: integer
+presentation:
+  kind: donut
+  category_columns:
+  - Pairs Per Day
+  measure_columns:
+  - Employee-Days

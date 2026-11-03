@@ -42,3 +42,9 @@ column_formats:
     precision: 2
   Headcount:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Position Level
+  measure_columns:
+  - Median Annual Salary

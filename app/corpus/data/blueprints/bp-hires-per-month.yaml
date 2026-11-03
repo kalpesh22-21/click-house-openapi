@@ -35,3 +35,9 @@ column_formats:
     kind: date
   Hires:
     kind: integer
+presentation:
+  kind: line
+  category_columns:
+  - Month
+  measure_columns:
+  - Hires

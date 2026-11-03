@@ -57,3 +57,10 @@ column_formats:
     kind: integer
   Terms In Month:
     kind: integer
+presentation:
+  kind: line
+  category_columns:
+  - Month
+  measure_columns:
+  - Active Headcount
+  - Terms In Month

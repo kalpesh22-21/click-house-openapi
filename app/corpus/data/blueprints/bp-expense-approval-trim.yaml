@@ -59,3 +59,9 @@ column_formats:
     kind: currency
     currency: USD
     precision: 2
+presentation:
+  kind: bars
+  category_columns:
+  - Expense Rule
+  measure_columns:
+  - Approved Total

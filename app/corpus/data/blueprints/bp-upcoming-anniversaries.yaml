@@ -52,3 +52,5 @@ column_formats:
     kind: number
     unit: years
     precision: 2
+presentation:
+  kind: table

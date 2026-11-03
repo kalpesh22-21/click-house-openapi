@@ -50,3 +50,5 @@ column_formats:
     kind: text
   Supervisor Status:
     kind: text
+presentation:
+  kind: table

@@ -41,3 +41,9 @@ column_formats:
     kind: text
   Headcount:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Mapping Status
+  measure_columns:
+  - Headcount

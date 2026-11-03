@@ -51,3 +51,9 @@ column_formats:
     kind: percent
     scale: ratio
     precision: 2
+presentation:
+  kind: bars
+  category_columns:
+  - Rule Description
+  measure_columns:
+  - Missing Receipts

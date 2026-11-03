@@ -94,3 +94,9 @@ column_formats:
     kind: text
   Usage Count:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Allocation Description
+  measure_columns:
+  - Usage Count

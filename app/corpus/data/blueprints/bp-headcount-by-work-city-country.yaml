@@ -49,3 +49,5 @@ column_formats:
     kind: text
   Headcount:
     kind: integer
+presentation:
+  kind: table

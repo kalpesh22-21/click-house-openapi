@@ -46,3 +46,9 @@ column_formats:
     kind: number
     unit: hours
     precision: 2
+presentation:
+  kind: line
+  category_columns:
+  - Punch Date
+  measure_columns:
+  - Total Hours

@@ -61,3 +61,5 @@ column_formats:
     kind: text
   Anomaly Type:
     kind: text
+presentation:
+  kind: table

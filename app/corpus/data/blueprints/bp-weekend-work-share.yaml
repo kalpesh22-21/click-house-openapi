@@ -56,3 +56,12 @@ column_formats:
     kind: percent
     scale: percent
     precision: 2
+presentation:
+  kind: line
+  category_columns:
+  - Month
+  measure_columns:
+  - Total Hours
+  - Weekend Hours
+  - Weekday Hours
+  - Weekend Share Pct

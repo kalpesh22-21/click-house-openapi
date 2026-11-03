@@ -47,3 +47,9 @@ column_formats:
   Total Deductions:
     kind: currency
     currency: USD
+presentation:
+  kind: bars
+  category_columns:
+  - Deduction Code
+  measure_columns:
+  - Total Deductions

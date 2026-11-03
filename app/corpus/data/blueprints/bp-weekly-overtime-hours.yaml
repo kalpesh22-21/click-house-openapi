@@ -75,3 +75,5 @@ column_formats:
     kind: number
     unit: hours
     precision: 2
+presentation:
+  kind: table

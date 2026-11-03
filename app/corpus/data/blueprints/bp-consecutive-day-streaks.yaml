@@ -68,3 +68,5 @@ column_formats:
     kind: date
   Streak Length:
     kind: integer
+presentation:
+  kind: table

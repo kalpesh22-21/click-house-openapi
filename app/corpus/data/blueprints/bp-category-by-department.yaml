@@ -65,3 +65,9 @@ column_formats:
   Total Dollars:
     kind: currency
     currency: USD
+presentation:
+  kind: bars
+  category_columns:
+  - Department
+  measure_columns:
+  - Total Dollars

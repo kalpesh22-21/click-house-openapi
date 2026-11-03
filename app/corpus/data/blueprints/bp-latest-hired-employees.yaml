@@ -85,3 +85,5 @@ column_formats:
     kind: text
   Most Recent Hire Date:
     kind: datetime
+presentation:
+  kind: table

@@ -51,3 +51,9 @@ column_formats:
     kind: integer
   Total:
     kind: integer
+presentation:
+  kind: bars
+  category_columns:
+  - Work Location
+  measure_columns:
+  - Full Time

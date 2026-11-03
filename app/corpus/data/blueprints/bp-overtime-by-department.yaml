@@ -60,3 +60,9 @@ column_formats:
   Earnings:
     kind: currency
     currency: USD
+presentation:
+  kind: bars
+  category_columns:
+  - Department
+  measure_columns:
+  - Earnings

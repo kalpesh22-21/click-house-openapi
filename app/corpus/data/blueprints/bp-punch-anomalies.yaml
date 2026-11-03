@@ -84,3 +84,5 @@ column_formats:
     kind: date
   Anomaly Type:
     kind: text
+presentation:
+  kind: table

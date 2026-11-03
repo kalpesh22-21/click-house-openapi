@@ -62,3 +62,5 @@ column_formats:
   Net Pay:
     kind: currency
     currency: USD
+presentation:
+  kind: table
