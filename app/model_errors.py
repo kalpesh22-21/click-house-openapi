@@ -30,6 +30,21 @@ _MESSAGES = {
     'EXECUTION_CONFIGURATION_ERROR': 'The execution service requires operator configuration.',
     'EXECUTION_IDENTITY_REQUIRED': 'A valid authenticated execution identity is required.',
 }
+# EmployeeAccessError codes (app/employee_access.py) by what resolves them. The
+# public code keeps an agent's classification unchanged; the specific code travels
+# as `cause`, and the guidance says this is not an empty result.
+_EMPLOYEE_ACCESS_POLICIES = {
+    'EMPLOYEE_ACCESS_UNAVAILABLE': ('EXECUTION_SERVICE_UNAVAILABLE', 'after_service_recovery'),
+    'EMPLOYEE_ACCESS_NOT_PROVISIONED': ('EXECUTION_CONFIGURATION_ERROR', 'after_operator_action'),
+    'EMPLOYEE_ACCESS_MISCONFIGURED': ('EXECUTION_CONFIGURATION_ERROR', 'after_operator_action'),
+    'EMPLOYEE_ACCESS_NO_TOKEN': ('EXECUTION_IDENTITY_REQUIRED', 'after_access_change'),
+    'EMPLOYEE_ACCESS_NO_JTI': ('EXECUTION_IDENTITY_REQUIRED', 'after_access_change'),
+}
+_EMPLOYEE_ACCESS_GUIDANCE = {
+    'EXECUTION_SERVICE_UNAVAILABLE': "The user's employee-access list could not be loaded, so warehouse data cannot be read for this user right now. This is not an empty result or a permission denial. Tell the user their data access could not be verified and to try again later. Do not change SQL to work around it.",
+    'EXECUTION_CONFIGURATION_ERROR': 'Employee-level access control is not set up correctly on this deployment, so warehouse data cannot be read. This is not an empty result. Ask the operator to fix the configuration. Do not rewrite SQL or bypass access control.',
+    'EXECUTION_IDENTITY_REQUIRED': 'The session does not identify the user for employee-level access, so warehouse data cannot be read. This is not an empty result. Restore a valid authenticated session. Do not rewrite SQL to bypass access checks.',
+}
 
 
 def _neutral(text):
@@ -46,6 +61,7 @@ def model_error_payload(exc):
     # found inside coordinator prose, SQL, literals, or a hint sentence.
     trino_label = re.fullmatch(r"([A-Z][A-Z0-9_]+)(?:\. Hint:.*)?", text, re.S) if code == 'TRINO_QUERY_ERROR' else None
     trino_cause = trino_label[1] if trino_label and trino_label[1] in TRINO_ERROR_POLICIES else None
+    access_cause = code if isinstance(exc, ClickHouseUnavailableError) and code in _EMPLOYEE_ACCESS_POLICIES else None
     retry = 'after_query_change'
     guidance = 'Write ClickHouse SQL using logical catalog tables. Inspect getTableSchema and correct the submitted query before retrying; explainQuery applies the same validation.'
     if getattr(exc, 'unavailable_source', None):
@@ -79,6 +95,9 @@ def model_error_payload(exc):
         public = 'CATALOG_CONTEXT_UNAVAILABLE'
         retry = 'after_operator_action'
         guidance = 'Ask the operator to check the column context query, result shape, limits and source permissions. Do not rewrite business SQL to bypass this failure.'
+    elif access_cause:
+        public, retry = _EMPLOYEE_ACCESS_POLICIES[access_cause]
+        guidance = _EMPLOYEE_ACCESS_GUIDANCE[public]
     elif isinstance(exc, ClickHouseUnavailableError):
         public = 'EXECUTION_SERVICE_UNAVAILABLE'
         retry = 'after_service_recovery'
@@ -103,9 +122,9 @@ def model_error_payload(exc):
     # Only the sanitized public label is eligible; never parse raw DB bodies.
     from app.ch_errors import _HINTS, PUBLIC_ERROR_CODES
     label = re.match(r"^(?:ClickHouse query error: )?([A-Z][A-Z0-9_]+)(?: \(code (\d+)\))?\. Hint:", text)
-    if trino_cause:
-        payload['cause'] = trino_cause
-        payload['message'] = _MESSAGES[public] + ' Cause: ' + trino_cause + '.'
+    if trino_cause or access_cause:
+        payload['cause'] = trino_cause or access_cause
+        payload['message'] = _MESSAGES[public] + ' Cause: ' + payload['cause'] + '.'
     elif label and label[1] in _HINTS:
         payload['cause'] = label[1]
         if label[2] and PUBLIC_ERROR_CODES.get(label[1]) == int(label[2]):

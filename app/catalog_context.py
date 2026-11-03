@@ -161,6 +161,7 @@ def enrich_column_context(response: dict, entry: dict, settings: Settings) -> No
     """Only emitted columns are enriched; the shared authored catalog is untouched."""
     if not settings.trino_enabled:
         return
+    from app.employee_access import EmployeeAccessError
     for column in response["columns"]:
         definition = entry.get("columns", {}).get(column["name"], {})
         if "context_sql" not in definition:
@@ -172,6 +173,11 @@ def enrich_column_context(response: dict, entry: dict, settings: Settings) -> No
             # session scope cannot replay formerly accessible context values.
             receipt = response.setdefault("context_provenance", {"version": 1, "columns": []})
             receipt["columns"].append([f"{entry['database']}.{entry['table']}", column["name"]])
+        except EmployeeAccessError:
+            # The caller's employee-access list failed, not the lookup. Its own code
+            # tells the model which failure it was (model_errors.py); wrapping it as
+            # CATALOG_CONTEXT_UNAVAILABLE would send the operator to the wrong place.
+            raise
         except Exception:
             logging.getLogger(__name__).error("Column context lookup failed: code=CATALOG_CONTEXT_UNAVAILABLE")
             raise ClickHouseUnavailableError(

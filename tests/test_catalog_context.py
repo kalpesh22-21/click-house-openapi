@@ -291,3 +291,22 @@ def test_context_catalogued_mysql_relation_expands_template(tmp_path, monkeypatc
 @pytest.fixture(autouse=True)
 def _authorized_session_for_route_tests(prevalidated_session_scope):
     """Session-scope auth is tested separately in test_session_catalog."""
+
+
+def test_employee_access_failure_is_not_reported_as_a_context_failure(monkeypatch, settings, principal, catalog):
+    from app.employee_access import EmployeeAccessError
+    from app.model_errors import model_error_payload
+    entry = catalog["dbpcm_warehouse.time_off_request"]
+    entry["source"] = "clickhouse"
+    principal.claims["jti"] = "request-alice"
+    connect = MagicMock()
+    monkeypatch.setattr("app.trino_client._connect", connect)
+    monkeypatch.setattr("app.employee_access.ensure_employee_access_fresh", MagicMock(
+        side_effect=EmployeeAccessError("private access detail", "EMPLOYEE_ACCESS_UNAVAILABLE")))
+    with pytest.raises(EmployeeAccessError) as exc:
+        service.get_table_schema("dbpcm_datawarehouse", "time_off_request", settings, columns=["earn_code"])
+    assert exc.value.code == "EMPLOYEE_ACCESS_UNAVAILABLE"
+    connect.assert_not_called()
+    payload = model_error_payload(exc.value)
+    assert payload["code"] == "EXECUTION_SERVICE_UNAVAILABLE"
+    assert payload["cause"] == "EMPLOYEE_ACCESS_UNAVAILABLE"

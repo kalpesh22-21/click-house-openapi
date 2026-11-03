@@ -213,3 +213,27 @@ def test_trino_names_inside_error_body_do_not_create_a_cause_or_permission_denia
     p = model_error_payload(ClickHouseQueryError('Unclassified message contains PERMISSION_DENIED and VIEW_IS_STALE', 'TRINO_QUERY_ERROR'))
     assert p['code'] == 'SQL_EXECUTION_ERROR'
     assert 'cause' not in p
+
+
+@pytest.mark.parametrize('code,public,retry', [
+    ('EMPLOYEE_ACCESS_UNAVAILABLE', 'EXECUTION_SERVICE_UNAVAILABLE', 'after_service_recovery'),
+    ('EMPLOYEE_ACCESS_NOT_PROVISIONED', 'EXECUTION_CONFIGURATION_ERROR', 'after_operator_action'),
+    ('EMPLOYEE_ACCESS_MISCONFIGURED', 'EXECUTION_CONFIGURATION_ERROR', 'after_operator_action'),
+    ('EMPLOYEE_ACCESS_NO_TOKEN', 'EXECUTION_IDENTITY_REQUIRED', 'after_access_change'),
+    ('EMPLOYEE_ACCESS_NO_JTI', 'EXECUTION_IDENTITY_REQUIRED', 'after_access_change'),
+])
+def test_employee_access_failure_keeps_its_cause_and_is_not_an_empty_result(code, public, retry):
+    from app.employee_access import EmployeeAccessError
+    wire = model_tool_error(EmployeeAccessError('private access detail', code))
+    p = json.loads(wire.split('] ', 1)[1])
+    assert wire.startswith(f'[{public}] ')
+    assert p['code'] == public and p['retry'] == retry
+    assert p['cause'] == code and p['message'].endswith(f' Cause: {code}.')
+    assert 'not an empty result' in p['guidance']
+    assert 'private access detail' not in wire
+
+
+def test_other_unavailable_errors_carry_no_access_cause():
+    from app.errors import ClickHouseUnavailableError
+    p = model_error_payload(ClickHouseUnavailableError('down', 'CLICKHOUSE_UNAVAILABLE'))
+    assert p['code'] == 'EXECUTION_SERVICE_UNAVAILABLE' and 'cause' not in p

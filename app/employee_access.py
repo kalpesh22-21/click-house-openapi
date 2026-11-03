@@ -146,8 +146,10 @@ class EmployeeAccessError(ClickHouseUnavailableError):
     """The caller's employee-access set could not be established — fail closed.
 
     Subclasses :class:`ClickHouseUnavailableError` so both transports map it
-    without new wiring: HTTP 502 in the REST layer and a generic "temporarily
-    unreachable" ToolError in the MCP layer.  Carries its own stable ``code``.
+    without new wiring: HTTP 502 in the REST layer, and in the MCP layer the public
+    unavailable / configuration / identity code that fits ``code``, with ``code``
+    itself as the payload's ``cause`` (``app/model_errors.py``).  Carries its own
+    stable ``code``.
     """
 
     def __init__(
