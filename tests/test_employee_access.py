@@ -75,6 +75,21 @@ class TestParseCodes:
     def test_codes_coerced_to_str(self):
         assert ea._parse_codes([1, 2, 2]) == ["1", "2"]
 
+    def test_empty_list_is_an_empty_set(self):
+        assert ea._parse_codes([]) == []
+
+    def test_malformed_items_are_dropped_not_stringified(self, caplog):
+        payload = ["E1", {"code": "E2"}, ["E3"], True, 1.5, "E4"]
+        with caplog.at_level("WARNING", logger="app.employee_access"):
+            assert ea._parse_codes(payload) == ["E1", "E4"]
+        assert "dropped 4 malformed item(s), kept 2 code(s)" in caplog.text
+
+    @pytest.mark.parametrize("payload", [[{"code": "E1"}], {"data": [{"employeeCode": "E1"}, False]}])
+    def test_only_malformed_items_is_a_malformed_response(self, payload):
+        # Writing this as an empty set would silently deny every employee.
+        with pytest.raises(ValueError, match="malformed"):
+            ea._parse_codes(payload)
+
 
 # ---------------------------------------------------------------------------
 # ensure_employee_access_fresh — gating
@@ -273,6 +288,24 @@ class TestWritePull:
         assert data == [[d[0], d[1], d[2]] for d in data]  # shape sanity
         assert len(data) == 1 and data[0][1] == ea._SENTINEL_CODE
 
+    def test_pull_is_logged_with_its_size_and_a_pseudonymous_user(self, caplog):
+        with patch.object(ea, "_get_security_client", return_value=MagicMock()), caplog.at_level(
+            "INFO", logger="app.employee_access"
+        ):
+            ea._write_pull("jti-secret-value", ["E1", "E2"], _settings())
+        assert f"user_ref={ea._user_ref('jti-secret-value')}" in caplog.text
+        assert "codes=2" in caplog.text
+        assert "jti-secret-value" not in caplog.text
+        assert "EMPTY" not in caplog.text
+
+    def test_an_empty_pull_is_logged_as_a_warning(self, caplog):
+        with patch.object(ea, "_get_security_client", return_value=MagicMock()), caplog.at_level(
+            "INFO", logger="app.employee_access"
+        ):
+            ea._write_pull("J", [], _settings())
+        assert "codes=0" in caplog.text
+        assert [r.levelname for r in caplog.records if "EMPTY" in r.getMessage()] == ["WARNING"]
+
 
 # ---------------------------------------------------------------------------
 # _refresh — cold fails loud, stale serves existing set
@@ -291,6 +324,14 @@ class TestRefreshFailureModes:
         ):
             with pytest.raises(ea.EmployeeAccessError):
                 ea._refresh("J", self._principal(), _settings(), is_cold=True)
+
+    def test_cold_malformed_response_fails_closed_without_a_write(self):
+        with patch.object(ea, "verified_opener") as opener, patch.object(ea, "_write_pull") as wp:
+            opener.return_value.open.return_value = _FakeResp(b'[{"code": "E1"}]')
+            with pytest.raises(ea.EmployeeAccessError) as exc:
+                ea._refresh("J", self._principal(), _settings(), is_cold=True)
+        assert exc.value.code == "EMPLOYEE_ACCESS_UNAVAILABLE"
+        wp.assert_not_called()
 
     def test_stale_fetch_failure_serves_existing_and_backs_off(self):
         import urllib.error

@@ -111,6 +111,7 @@ contain e.g. ``{"paycom_client_code":"clientcode","paycom_proc_center":"proc_cen
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -357,10 +358,18 @@ def _parse_codes(payload: Any) -> list[str]:
     """Extract a de-duplicated list of employee-code strings from the response.
 
     Accepts either a bare JSON array of codes or an object carrying the list
-    under a conventional key.  Non-string / empty entries are dropped.  The
+    under a conventional key.  String and integer codes are kept (integers as
+    their decimal string); null and blank entries are skipped.  The
     ``/cl/eeaccess`` contract is "codes only, per-JTI"; this stays lenient about
     the exact envelope so a shape tweak on the API side does not require a code
     change here.
+
+    Any other item (an object, a list, a bool, a float) is not a code: its str()
+    can never equal a real employee code, so keeping it would grant nothing while
+    looking like a successful pull.  Such items are dropped and logged, and a
+    response with no usable code at all is rejected as malformed (a fetch failure)
+    rather than written as an empty set, which would silently deny every employee.
+    An empty list is still an empty set: the API's answer, not a malformation.
     """
     if isinstance(payload, dict):
         for key in ("employeeCodes", "employee_codes", "codes", "data", "result"):
@@ -371,11 +380,24 @@ def _parse_codes(payload: Any) -> list[str]:
         raise ValueError("eeaccess response is not a JSON list of employee codes")
     seen: set[str] = set()
     codes: list[str] = []
+    malformed = 0
     for item in payload:
-        code = str(item).strip() if item is not None else ""
+        if item is None or isinstance(item, str):
+            code = (item or "").strip()
+        elif isinstance(item, int) and not isinstance(item, bool):
+            code = str(item)
+        else:
+            malformed += 1
+            continue
         if code and code not in seen:
             seen.add(code)
             codes.append(code)
+    if malformed:
+        if not codes:
+            raise ValueError("eeaccess response holds no employee codes, only malformed items")
+        logger.warning(
+            "eeaccess response: dropped %d malformed item(s), kept %d code(s)", malformed, len(codes)
+        )
     return codes
 
 
@@ -422,6 +444,12 @@ def _fetch_employee_codes(principal: Principal, settings: Settings) -> list[str]
 # ---------------------------------------------------------------------------
 
 
+def _user_ref(jti: str) -> str:
+    """A short, stable pseudonym for *jti* in logs: enough to correlate one user's
+    pulls with a trace, never the identifier itself."""
+    return hashlib.sha256(jti.encode("utf-8")).hexdigest()[:12]
+
+
 def _write_pull(jti: str, codes: list[str], settings: Settings) -> None:
     """Write one atomic pull: a sentinel row + one row per code, all with a new pull_id."""
     # Wall-clock milliseconds: monotonic enough to order pulls for a single JTI.
@@ -444,8 +472,18 @@ def _write_pull(jti: str, codes: list[str], settings: Settings) -> None:
         column_names=["jti", "employee_code", "pull_id"],
     )
     logger.info(
-        "employee-access pull written",
+        "employee-access pull written: user_ref=%s pull_id=%d codes=%d",
+        _user_ref(jti),
+        pull_id,
+        len(codes),
     )
+    if not codes:
+        logger.warning(
+            "employee-access pull is EMPTY: user_ref=%s pull_id=%d; the row policy grants "
+            "this user no employees until the next refresh",
+            _user_ref(jti),
+            pull_id,
+        )
 
 
 def _refresh(jti: str, principal: Principal, settings: Settings, is_cold: bool) -> None:
