@@ -21,7 +21,7 @@
 
 **ID:** `bp-accrual-balance-summary`
 
-**Intent:** Recorded beginning, accrued, awarded and taken plan balances by company, department or plan. Optional accrual plan code, employee status, department and employee. Uses taken_amount, never approved event hours. No implicit PTO filter: resolve plan code for PTO. No event-date restriction, current-balance formula or assumed units. Cross-plan sums require compatible units; otherwise use plan grouping/filter. Preaggregate balance rows by employee/plan before LEFT JOIN; preserve source row count without assuming unique plan rows.
+**Intent:** Recorded beginning, accrued, awarded and taken plan balances by company, department or plan. Optional accrual plan code, employee status, department and employee. Uses taken_amount, never approved event hours. No implicit PTO filter: resolve plan code for PTO. No event-date restriction, current-balance formula or assumed units. Cross-plan sums require compatible units; otherwise use plan grouping/filter. Preaggregate balance rows by employee/plan before LEFT JOIN without assuming unique plan rows.
 
 **Slots:**
 
@@ -39,21 +39,42 @@
 **SQL Template:**
 
 ```sql
-WITH b AS (
- SELECT employee_code, accrual_code, sum(beginning_balance) AS beginning,
- sum(accrued_amount) AS accrued, sum(awarded_amount) AS awarded,
- sum(taken_amount) AS taken, count(*) AS balance_rows
- FROM dbpcm_warehouse.timeoff_balance WHERE accrual_code = {accrual_code}
- GROUP BY employee_code, accrual_code
-)
-SELECT CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'plan' THEN b.accrual_code ELSE 'Company' END AS `Group`, sum(CAST(b.beginning AS Nullable(Decimal(38, 6)))) AS `Beginning Balance`,
- sum(CAST(b.accrued AS Nullable(Decimal(38, 6)))) AS `Accrued Amount`, sum(CAST(b.awarded AS Nullable(Decimal(38, 6)))) AS `Awarded Amount`,
- sum(CAST(b.taken AS Nullable(Decimal(38, 6)))) AS `Taken Amount`, sum(CAST(b.balance_rows AS Nullable(Decimal(20, 0)))) AS `Source Balance Rows`,
- uniqExact(b.employee_code) AS `Employee Count`
-FROM b LEFT JOIN dbpcm_warehouse.employee e ON b.employee_code = e.employee_code
-WHERE e.employee_status = {employee_status} AND e.department_name = {department} AND e.employee_code = {employee}
-GROUP BY CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'plan' THEN b.accrual_code ELSE 'Company' END
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN `Group` END DESC, CASE WHEN {order_direction} = 'ASC' THEN `Group` END ASC
+WITH b AS
+  (SELECT employee_code,
+          accrual_code,
+          sum(beginning_balance) AS beginning,
+          sum(accrued_amount) AS accrued,
+          sum(awarded_amount) AS awarded,
+          sum(taken_amount) AS taken
+   FROM dbpcm_warehouse.time_off_balance
+   WHERE accrual_code = {accrual_code}
+   GROUP BY employee_code,
+            accrual_code)
+SELECT CASE {group_by}
+           WHEN 'department' THEN e.department_name
+           WHEN 'plan' THEN b.accrual_code
+           ELSE 'Company'
+       END AS "Group",
+       sum(CAST(b.beginning AS Nullable(Decimal(38, 6)))) AS "Beginning Balance",
+       sum(CAST(b.accrued AS Nullable(Decimal(38, 6)))) AS "Accrued Amount",
+       sum(CAST(b.awarded AS Nullable(Decimal(38, 6)))) AS "Awarded Amount",
+       sum(CAST(b.taken AS Nullable(Decimal(38, 6)))) AS "Taken Amount",
+       uniqExact(b.employee_code) AS "Employee Count"
+FROM b
+LEFT JOIN dbpcm_warehouse.employee AS e ON b.employee_code = e.employee_code
+WHERE e.employee_status = {employee_status}
+  AND e.department_name = {department}
+  AND e.employee_code = {employee}
+GROUP BY CASE {group_by}
+             WHEN 'department' THEN e.department_name
+             WHEN 'plan' THEN b.accrual_code
+             ELSE 'Company'
+         END
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Group"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Group"
+                   END ASC
 ```
 
 **Uses:**
@@ -2245,7 +2266,7 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Denied Amount" END DESC, CAS
 
 **ID:** `bp-duplicate-expense-flag-list`
 
-**Intent:** Expense lines flagged as potential duplicate for a payment date window
+**Intent:** Expenses flagged as potential duplicates for a payment date window
 
 **Slots:**
 
@@ -2258,16 +2279,19 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Denied Amount" END DESC, CAS
 **SQL Template:**
 
 ```sql
-SELECT
-  employee_code AS "Employee Code",
-  round(toFloat64(SUM(amount_approved)), 2) AS "Flagged Amount",
-  count() AS "Flagged Lines"
+SELECT employee_code AS "Employee Code",
+       round(toFloat64(SUM(amount_approved)), 2) AS "Flagged Amount",
+       count() AS "Flagged Expenses"
 FROM dbpcm_warehouse.expense
 WHERE potential_duplicate_expense = 'Yes'
   AND expense_paid_date >= {expense_window_start}
   AND expense_paid_date <= {expense_window_end}
 GROUP BY employee_code
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Flagged Amount" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Flagged Amount" END ASC, "Employee Code"
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Flagged Amount"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Flagged Amount"
+                   END ASC, "Employee Code"
 LIMIT {max_rows}
 ```
 
@@ -2297,18 +2321,21 @@ LIMIT {max_rows}
 **SQL Template:**
 
 ```sql
-SELECT
-  employee_code AS "Employee Code",
-  count() AS "Pending Lines",
-  round(toFloat64(SUM(amount_approved)), 2) AS "Pending Amount",
-  round(AVG(dateDiff('day', date_time_submitted, today())), 1) AS "Avg Days Pending"
+SELECT employee_code AS "Employee Code",
+       count() AS "Pending Expenses",
+       round(toFloat64(SUM(amount_approved)), 2) AS "Pending Amount",
+       round(AVG(dateDiff('day', date_time_submitted, today())), 1) AS "Avg Days Pending"
 FROM dbpcm_warehouse.expense
 WHERE expense_status = 'Pending Approval'
   AND date_time_submitted IS NOT NULL
   AND toDate32(date_time_submitted) > toDate32('1900-01-01')
   AND dateDiff('day', date_time_submitted, today()) >= {min_age}
 GROUP BY employee_code
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Avg Days Pending" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Avg Days Pending" END ASC, "Employee Code"
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Avg Days Pending"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Avg Days Pending"
+                   END ASC, "Employee Code"
 LIMIT {top_n}
 ```
 
@@ -2338,18 +2365,22 @@ LIMIT {top_n}
 **SQL Template:**
 
 ```sql
-SELECT
-  expense_rule_description AS "Expense Rule",
-  round(toFloat64(SUM(amount_approved)), 2) AS "Approved Total",
-  round(toFloat64(SUM(amount_requested)), 2) AS "Submitted Total",
-  round(toFloat64(SUM(amount_requested - amount_approved)), 2) AS "Trimmed Total",
-  count() AS "Line Count"
+SELECT expense_rule_description AS "Expense Rule",
+       round(toFloat64(SUM(amount_approved)), 2) AS "Approved Total",
+       round(toFloat64(SUM(amount_requested)), 2) AS "Submitted Total",
+       round(toFloat64(SUM(amount_requested - amount_approved)), 2) AS "Trimmed Total"
 FROM dbpcm_warehouse.expense
-WHERE expense_status IN ('Approved', 'Paid', 'Marked as Paid')
+WHERE expense_status IN ('Approved',
+                         'Paid',
+                         'Marked as Paid')
   AND expense_paid_date >= {expense_window_start}
   AND expense_paid_date <= {expense_window_end}
 GROUP BY expense_rule_description
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Trimmed Total" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Trimmed Total" END ASC, "Expense Rule"
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Trimmed Total"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Trimmed Total"
+                   END ASC, "Expense Rule"
 LIMIT {max_rows}
 ```
 
@@ -2420,16 +2451,20 @@ LIMIT {top_n}
 **SQL Template:**
 
 ```sql
-SELECT
-  expense_policy_description AS "Policy",
-  round(toFloat64(SUM(amount_approved)), 2) AS "Approved Spend",
-  count() AS "Line Count"
+SELECT expense_policy_description AS "Policy",
+       round(toFloat64(SUM(amount_approved)), 2) AS "Approved Spend"
 FROM dbpcm_warehouse.expense
-WHERE expense_status IN ('Approved', 'Paid', 'Marked as Paid')
+WHERE expense_status IN ('Approved',
+                         'Paid',
+                         'Marked as Paid')
   AND expense_paid_date >= {expense_window_start}
   AND expense_paid_date <= {expense_window_end}
 GROUP BY expense_policy_description
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Approved Spend" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Approved Spend" END ASC, "Policy"
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Approved Spend"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Approved Spend"
+                   END ASC, "Policy"
 LIMIT {top_n}
 ```
 
@@ -2446,7 +2481,7 @@ LIMIT {top_n}
 
 **ID:** `bp-expense-category-distribution`
 
-**Intent:** Distribution of approved expense spend across every expense account category for a payment date window, one row per account with approved spend, share of total approved spend and line count. Complete, not a top-N ranking.
+**Intent:** Distribution of approved expense spend across every expense account category for a payment date window, one row per account with approved spend and its share of total approved spend. Complete, not a top-N ranking.
 
 **Slots:**
 
@@ -2458,18 +2493,22 @@ LIMIT {top_n}
 **SQL Template:**
 
 ```sql
-SELECT
-  expense_account_code AS "Account Code",
-  any(expense_account_description) AS "Account Description",
-  round(toFloat64(sum(amount_approved)), 2) AS "Approved Spend",
-  round(100.0 * toFloat64(sum(amount_approved)) / nullIf(toFloat64(sum(sum(amount_approved)) OVER ()), 0), 2) AS "Share Of Approved Spend Pct",
-  count() AS "Line Count"
+SELECT expense_account_code AS "Account Code",
+       any(expense_account_description) AS "Account Description",
+       round(toFloat64(sum(amount_approved)), 2) AS "Approved Spend",
+       round(100.0 * toFloat64(sum(amount_approved)) / nullIf(toFloat64(sum(sum(amount_approved)) OVER ()), 0), 2) AS "Share Of Approved Spend Pct"
 FROM dbpcm_warehouse.expense
-WHERE expense_status IN ('Approved', 'Paid', 'Marked as Paid')
+WHERE expense_status IN ('Approved',
+                         'Paid',
+                         'Marked as Paid')
   AND expense_paid_date >= {expense_window_start}
   AND expense_paid_date <= {expense_window_end}
 GROUP BY expense_account_code
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Approved Spend" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Approved Spend" END ASC, "Account Code"
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Approved Spend"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Approved Spend"
+                   END ASC, "Account Code"
 ```
 
 **Uses:**
@@ -2500,20 +2539,22 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Approved Spend" END DESC, CA
 **SQL Template:**
 
 ```sql
-SELECT
-  coalesce(expense_rule_description, expense_account_description) AS "Matched Description",
-  round(toFloat64(SUM(amount_approved)), 2) AS "Approved Spend",
-  count() AS "Line Count"
+SELECT coalesce(expense_rule_description, expense_account_description) AS "Matched Description",
+       round(toFloat64(SUM(amount_approved)), 2) AS "Approved Spend"
 FROM dbpcm_warehouse.expense
-WHERE expense_status IN ('Approved', 'Paid', 'Marked as Paid')
+WHERE expense_status IN ('Approved',
+                         'Paid',
+                         'Marked as Paid')
   AND expense_paid_date >= {expense_window_start}
   AND expense_paid_date <= {expense_window_end}
-  AND (
-    expense_rule_description ILIKE concat('%', {concept}, '%')
-    OR expense_account_description ILIKE concat('%', {concept}, '%')
-  )
+  AND (expense_rule_description ILIKE concat('%', {concept}, '%')
+       OR expense_account_description ILIKE concat('%', {concept}, '%'))
 GROUP BY coalesce(expense_rule_description, expense_account_description)
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Approved Spend" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Approved Spend" END ASC, "Matched Description"
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Approved Spend"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Approved Spend"
+                   END ASC, "Matched Description"
 LIMIT {max_rows}
 ```
 
@@ -2543,28 +2584,34 @@ LIMIT {max_rows}
 **SQL Template:**
 
 ```sql
-SELECT
-  formatDateTime(toStartOfMonth(expense_paid_date), '%Y-%m') AS "Month",
-  count() AS "Line Count",
-  round(toFloat64(dateDiff('day', date_time_submitted, approved_date)), 1) AS "Median Submission To Approval",
-  round(toFloat64(dateDiff('day', approved_date, expense_paid_date)), 1) AS "Median Approval To Payment"
+SELECT formatDateTime(toStartOfMonth(expense_paid_date), '%Y-%m') AS "Month",
+       count() AS "Expense Count",
+       round((quantileExactLow(0.5)(dateDiff('day', date_time_submitted, approved_date)) + quantileExactHigh(0.5)(dateDiff('day', date_time_submitted, approved_date))) / 2, 1) AS "Median Submission To Approval",
+       round((quantileExactLow(0.5)(dateDiff('day', approved_date, expense_paid_date)) + quantileExactHigh(0.5)(dateDiff('day', approved_date, expense_paid_date))) / 2, 1) AS "Median Approval To Payment"
 FROM dbpcm_warehouse.expense
-WHERE expense_status IN ('Approved', 'Paid', 'Marked as Paid')
+WHERE expense_status IN ('Approved',
+                         'Paid',
+                         'Marked as Paid')
   AND date_time_submitted IS NOT NULL
   AND toDate32(date_time_submitted) > toDate32('1900-01-01')
   AND approved_date IS NOT NULL
   AND toDate32(approved_date) > toDate32('1900-01-01')
   AND expense_paid_date IS NOT NULL
   AND toDate32(expense_paid_date) > toDate32('1900-01-01')
-  AND expense_paid_date >= (
-    SELECT addMonths(toStartOfMonth(max(expense_paid_date)), -{window_months})
-    FROM dbpcm_warehouse.expense
-    WHERE expense_status IN ('Approved', 'Paid', 'Marked as Paid')
-      AND expense_paid_date IS NOT NULL
-      AND toDate32(expense_paid_date) > toDate32('1900-01-01')
-  )
+  AND expense_paid_date >=
+    (SELECT addMonths(toStartOfMonth(max(expense_paid_date)), -{window_months})
+     FROM dbpcm_warehouse.expense
+     WHERE expense_status IN ('Approved',
+                              'Paid',
+                              'Marked as Paid')
+       AND expense_paid_date IS NOT NULL
+       AND toDate32(expense_paid_date) > toDate32('1900-01-01'))
 GROUP BY "Month"
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Month" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Month" END ASC
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Month"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Month"
+                   END ASC
 ```
 
 **Uses:**
@@ -2580,7 +2627,7 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Month" END DESC, CASE WHEN {
 
 **ID:** `bp-expense-line-size-distribution`
 
-**Intent:** Size distribution of approved expense line amounts in fixed amount bands for a payment date window, one row per band in amount order. Lines without an approved amount are excluded. Optional single-account filter.
+**Intent:** Size distribution of approved expense amounts in fixed amount bands for a payment date window, one row per band in amount order. Expenses without an approved amount are excluded. Optional single-account filter.
 
 **Slots:**
 
@@ -2594,18 +2641,22 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Month" END DESC, CASE WHEN {
 **SQL Template:**
 
 ```sql
-SELECT
-  concat('$', toString(toInt32(floor(toFloat64(amount_approved) / {band}) * {band})), ' to under $',
-         toString(toInt32(floor(toFloat64(amount_approved) / {band}) * {band} + {band}))) AS "Amount Band",
-  count() AS "Line Count"
+SELECT concat('$', toString(toInt32(floor(toFloat64(amount_approved) / {band}) * {band})), ' to under $', toString(toInt32(floor(toFloat64(amount_approved) / {band}) * {band} + {band}))) AS "Amount Band",
+       count() AS "Expense Count"
 FROM dbpcm_warehouse.expense
-WHERE expense_status IN ('Approved', 'Paid', 'Marked as Paid')
+WHERE expense_status IN ('Approved',
+                         'Paid',
+                         'Marked as Paid')
   AND expense_paid_date >= {expense_window_start}
   AND expense_paid_date <= {expense_window_end}
   AND amount_approved IS NOT NULL
   AND expense_account_description = {account}
 GROUP BY floor(toFloat64(amount_approved) / {band})
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN floor(toFloat64(amount_approved) / {band}) END DESC, CASE WHEN {order_direction} = 'ASC' THEN floor(toFloat64(amount_approved) / {band}) END ASC
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN floor(toFloat64(amount_approved) / {band})
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN floor(toFloat64(amount_approved) / {band})
+                   END ASC
 ```
 
 **Uses:**
@@ -2819,17 +2870,20 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN e.employee_code END DESC, CAS
 **SQL Template:**
 
 ```sql
-SELECT
-  expense_status AS "Expense Status",
-  count() AS "Line Count",
-  round(toFloat64(SUM(amount_approved)), 2) AS "Total Amount"
+SELECT expense_status AS "Expense Status",
+       count() AS "Expense Count",
+       round(toFloat64(SUM(amount_approved)), 2) AS "Total Amount"
 FROM dbpcm_warehouse.expense
 WHERE expense_status = 'Paid'
   AND payroll_transaction_number = ''
   AND expense_paid_date >= {expense_window_start}
   AND expense_paid_date <= {expense_window_end}
 GROUP BY expense_status
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Total Amount" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Total Amount" END ASC
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Total Amount"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Total Amount"
+                   END ASC
 LIMIT {max_rows}
 ```
 
@@ -3813,7 +3867,7 @@ LIMIT {top_n}
 
 **ID:** `bp-records-per-status`
 
-**Intent:** Record counts per employee status including Not Hired records
+**Intent:** Employee record counts per employee status including Not Hired records
 
 **Slots:**
 
@@ -3826,11 +3880,15 @@ LIMIT {top_n}
 
 ```sql
 SELECT employee_status AS "Employee Status",
-       count() AS "Records"
+       count() AS "Employee Records"
 FROM dbpcm_warehouse.employee
 WHERE department_name = {department}
 GROUP BY employee_status
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Records" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Records" END ASC
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Employee Records"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Employee Records"
+                   END ASC
 ```
 
 **Uses:**
@@ -3972,7 +4030,7 @@ LIMIT {top_n}
 
 **ID:** `bp-adjustment-line-volume`
 
-**Intent:** Volume of negative payroll register earnings lines per month, counting adjustment and reversal activity over the last N pay periods
+**Intent:** Volume of negative payroll earnings pay items per month, counting adjustment and reversal activity over the last N pay periods
 
 **Slots:**
 
@@ -3985,14 +4043,20 @@ LIMIT {top_n}
 
 ```sql
 SELECT formatDateTime(toStartOfMonth(pay_period_end_date), '%Y-%m') AS "Month",
-       count() AS "Adjustment Lines",
+       count() AS "Adjustment Pay Items",
        round(SUM(amount), 2) AS "Adjustment Amount"
 FROM dbpcm_warehouse.payroll
 WHERE register_type = 'EARN'
   AND amount < 0
-  AND pay_period_end_date >= addMonths((SELECT max(pay_period_end_date) FROM dbpcm_warehouse.payroll), -{win})
+  AND pay_period_end_date >= addMonths(
+                                         (SELECT max(pay_period_end_date)
+                                          FROM dbpcm_warehouse.payroll), -{win})
 GROUP BY "Month"
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Month" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Month" END ASC
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Month"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Month"
+                   END ASC
 ```
 
 **Uses:**
@@ -4977,15 +5041,18 @@ WHERE register_type = 'NETPAYDIST'
 
 ```sql
 SELECT p.employee_code AS "Employee Code",
-       count() AS "Register Lines"
+       count() AS "Pay Items"
 FROM dbpcm_warehouse.payroll AS p
-WHERE p.employee_code NOT IN (
-    SELECT DISTINCT employee_code
-    FROM dbpcm_warehouse.employee
-  )
+WHERE p.employee_code NOT IN
+    (SELECT DISTINCT employee_code
+     FROM dbpcm_warehouse.employee)
   AND p.pay_period_end_date = {period}
 GROUP BY p.employee_code
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Register Lines" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Register Lines" END ASC
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Pay Items"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Pay Items"
+                   END ASC
 ```
 
 **Uses:**
@@ -5267,7 +5334,7 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Duplicate Count" END DESC, C
 
 **ID:** `bp-payroll-line-counts`
 
-**Intent:** Count of payroll register lines and distinct employee-check combinations for a pay period
+**Intent:** Count of payroll register pay items and distinct employee checks for a pay period
 
 **Slots:**
 
@@ -5278,7 +5345,7 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Duplicate Count" END DESC, C
 **SQL Template:**
 
 ```sql
-SELECT count() AS "Register Lines",
+SELECT count() AS "Pay Items",
        uniqExact(employee_code, pay_period_end_date) AS "Distinct Checks"
 FROM dbpcm_warehouse.payroll
 WHERE pay_period_end_date = {period}
@@ -5360,7 +5427,7 @@ LIMIT {max_rows}
 
 **ID:** `bp-payroll-summary`
 
-**Intent:** Payroll amount, source line count and distinct employee count by company, department or pay-date month. Required register_type enum and half-open pay-date period [start,end); select EARN for gross earnings. Optional type_code, employee status, department and employee. Earnings represent finalized total_earning after period close; use total_earning for in-progress earnings and never add both for the same covered earnings. Preaggregate payroll per employee/month before LEFT JOIN; unmatched employees retained unless employee filters supplied. Does not prove complete months or zero-fill missing months; no implicit earnings filter.
+**Intent:** Payroll amount and distinct employee count by company, department or pay-date month. Required register_type enum and half-open pay-date period [start,end); select EARN for gross earnings. Optional type_code, employee status, department and employee. Earnings represent finalized total_earning after period close; use total_earning for in-progress earnings and never add both for the same covered earnings. Preaggregate payroll per employee/month before LEFT JOIN; unmatched employees retained unless employee filters supplied. Does not prove complete months or zero-fill missing months; no implicit earnings filter.
 
 **Slots:**
 
@@ -5380,20 +5447,39 @@ LIMIT {max_rows}
 **SQL Template:**
 
 ```sql
-WITH p AS (
- SELECT employee_code, substring(toString(pay_date), 1, 7) AS month,
- sum(amount) AS amount, count(*) AS line_count
- FROM dbpcm_warehouse.payroll
- WHERE register_type = {register_type} AND type_code = {type_code}
- AND toDate(pay_date) >= toDate({period_start}) AND toDate(pay_date) < toDate({period_end})
- GROUP BY employee_code, substring(toString(pay_date), 1, 7)
-)
-SELECT CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'month' THEN toString(p.month) ELSE 'Company' END AS `Group`, sum(CAST(p.amount AS Nullable(Decimal(38, 2)))) AS `Payroll Amount`,
- sum(CAST(p.line_count AS Nullable(Decimal(20, 0)))) AS `Source Line Count`, uniqExact(p.employee_code) AS `Employee Count`
-FROM p LEFT JOIN dbpcm_warehouse.employee e ON p.employee_code = e.employee_code
-WHERE e.employee_status = {employee_status} AND e.department_name = {department} AND e.employee_code = {employee}
-GROUP BY CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'month' THEN toString(p.month) ELSE 'Company' END
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN `Group` END DESC, CASE WHEN {order_direction} = 'ASC' THEN `Group` END ASC
+WITH p AS
+  (SELECT employee_code,
+          substring(toString(pay_date), 1, 7) AS month,
+          sum(amount) AS amount
+   FROM dbpcm_warehouse.payroll
+   WHERE register_type = {register_type}
+     AND type_code = {type_code}
+     AND toDate(pay_date) >= toDate({period_start})
+     AND toDate(pay_date) < toDate({period_end})
+   GROUP BY employee_code,
+            substring(toString(pay_date), 1, 7))
+SELECT CASE
+           WHEN {group_by} = 'department' THEN e.department_name
+           WHEN {group_by} = 'month' THEN toString(p.month)
+           ELSE 'Company'
+       END AS `Group`,
+       sum(CAST(p.amount AS Nullable(Decimal(38, 2)))) AS `Payroll Amount`,
+       uniqExact(p.employee_code) AS `Employee Count`
+FROM p
+LEFT JOIN dbpcm_warehouse.employee e ON p.employee_code = e.employee_code
+WHERE e.employee_status = {employee_status}
+  AND e.department_name = {department}
+  AND e.employee_code = {employee}
+GROUP BY CASE
+             WHEN {group_by} = 'department' THEN e.department_name
+             WHEN {group_by} = 'month' THEN toString(p.month)
+             ELSE 'Company'
+         END
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN `Group`
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN `Group`
+                   END ASC
 ```
 
 **Uses:**
@@ -5464,13 +5550,11 @@ WHERE ec.category_name = 'Select Category'
 ```sql
 SELECT p.employee_code AS "Employee Code",
        any(e.employee_name) AS "Employee Name",
-       count() AS "Register Lines",
        round(SUM(p.amount), 2) AS "Total Earnings",
        any(e.termination_date) AS "Termination Date",
        max(p.pay_date) AS "Last Pay Date"
 FROM dbpcm_warehouse.payroll AS p
-JOIN dbpcm_warehouse.employee AS e
-  ON e.employee_code = p.employee_code
+JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
 WHERE p.register_type = 'EARN'
   AND p.pay_date >= {pay_window_start}
   AND p.pay_date <= {pay_window_end}
@@ -5481,7 +5565,11 @@ WHERE p.register_type = 'EARN'
        OR toDate32(e.most_recent_hire_date) <= toDate32('1900-01-01')
        OR e.most_recent_hire_date <= e.termination_date)
 GROUP BY p.employee_code
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Total Earnings" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Total Earnings" END ASC
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Total Earnings"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Total Earnings"
+                   END ASC
 LIMIT {max_rows}
 ```
 
@@ -6211,13 +6299,21 @@ LIMIT {max_rows}
 ```sql
 SELECT te.punch_date AS "Punch Date",
        count(DISTINCT te.employee_code) AS "Employees",
-       round(SUM(te.earn_hours), 2) AS "Total Hours",
-       count() AS "Line Count"
-FROM (SELECT employee_code, punch_date, earn_hours, earn_code FROM dbpcm_warehouse.total_earning) te
+       round(SUM(te.earn_hours), 2) AS "Total Hours"
+FROM
+  (SELECT employee_code,
+          punch_date,
+          earn_hours,
+          earn_code
+   FROM dbpcm_warehouse.total_earning) te
 WHERE te.punch_date BETWEEN {window_start} AND {window_end}
   AND te.earn_code = {concept}
 GROUP BY te.punch_date
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Total Hours" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Total Hours" END ASC, "Punch Date"
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Total Hours"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Total Hours"
+                   END ASC, "Punch Date"
 LIMIT {max_rows}
 ```
 
@@ -6253,15 +6349,22 @@ LIMIT {max_rows}
 SELECT te.employee_code AS "Employee Code",
        any(e.employee_name) AS "Employee Name",
        te.punch_date AS "Punch Date",
-       round(SUM(te.earn_hours), 2) AS "Daily Hours",
-       count() AS "Line Count"
-FROM (SELECT employee_code, punch_date, earn_hours FROM dbpcm_warehouse.total_earning) AS te
-JOIN dbpcm_warehouse.employee e
-  ON e.employee_code = te.employee_code
+       round(SUM(te.earn_hours), 2) AS "Daily Hours"
+FROM
+  (SELECT employee_code,
+          punch_date,
+          earn_hours
+   FROM dbpcm_warehouse.total_earning) AS te
+JOIN dbpcm_warehouse.employee e ON e.employee_code = te.employee_code
 WHERE te.punch_date BETWEEN {window_start} AND {window_end}
-GROUP BY te.employee_code, te.punch_date
+GROUP BY te.employee_code,
+         te.punch_date
 HAVING SUM(te.earn_hours) > {threshold}
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Daily Hours" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Daily Hours" END ASC, "Employee Code"
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Daily Hours"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Daily Hours"
+                   END ASC, "Employee Code"
 LIMIT {max_rows}
 ```
 
@@ -6765,12 +6868,18 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Month" END DESC, CASE WHEN {
 
 ```sql
 SELECT punch_date AS "Punch Date",
-       round(SUM(earn_hours), 2) AS "Total Hours",
-       count() AS "Line Count"
-FROM (SELECT punch_date, earn_hours FROM dbpcm_warehouse.total_earning)
+       round(SUM(earn_hours), 2) AS "Total Hours"
+FROM
+  (SELECT punch_date,
+          earn_hours
+   FROM dbpcm_warehouse.total_earning)
 WHERE punch_date BETWEEN {window_start} AND {window_end}
 GROUP BY punch_date
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Punch Date" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Punch Date" END ASC
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Punch Date"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Punch Date"
+                   END ASC
 LIMIT {max_rows}
 ```
 
@@ -6787,7 +6896,7 @@ LIMIT {max_rows}
 
 **ID:** `bp-accrual-event-summary`
 
-**Intent:** Accrual event/day row counts, event hours and distinct employees by company, department, workflow status, event type, event-date month or department_status (department and status together). Includes all event types and leave categories unless explicitly filtered. Required half-open requested-for-date period [start,end); optional workflow status enum, resolved event_type and earn_code strings, employee status, department and employee. No implicit Approved or PTO filter. COUNT counts event/day rows, not distinct multi-day requests. Approved hours are not taken balance usage. LEFT JOIN preserves unmatched events unless employee filters supplied; does not zero-fill periods or prove full coverage. For time-off-taken questions bind event_status=Approved and event_type=Time Off Request, plus the requested category/date scope; assume these requests were taken and disclose it. Offer a separate payroll-paid-hours check without executing it unless requested.
+**Intent:** Accrual event days, event hours and distinct employees by company, department, workflow status, event type, event-date month or department_status (department and status together). Includes all event types and leave categories unless explicitly filtered. Required half-open requested-for-date period [start,end); optional workflow status enum, resolved event_type and earn_code strings, employee status, department and employee. No implicit Approved or PTO filter. COUNT counts event/day rows, not distinct multi-day requests. Approved hours are not taken balance usage. LEFT JOIN preserves unmatched events unless employee filters supplied; does not zero-fill periods or prove full coverage. For time-off-taken questions bind event_status=Approved and event_type=Time Off Request, plus the requested category/date scope; assume these requests were taken and disclose it. Offer a separate payroll-paid-hours check without executing it unless requested.
 
 **Slots:**
 
@@ -6808,21 +6917,60 @@ LIMIT {max_rows}
 **SQL Template:**
 
 ```sql
-WITH a AS (
- SELECT employee_code, status, event_type, substring(toString(request_date), 1, 7) AS month,
- count(*) AS event_rows, sum(hours) AS hours
- FROM dbpcm_warehouse.timeoff_request
- WHERE status = {event_status} AND event_type = {event_type} AND earn_code = {earn_code}
- AND toDate(request_date) >= toDate({period_start}) AND toDate(request_date) < toDate({period_end})
- GROUP BY employee_code, status, event_type, substring(toString(request_date), 1, 7)
-)
-SELECT CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'department_status' THEN e.department_name WHEN 'status' THEN a.status WHEN 'event_type' THEN a.event_type WHEN 'month' THEN toString(a.month) ELSE 'Company' END AS `Group`, CASE WHEN {group_by} = 'department_status' THEN a.status ELSE 'All selected statuses' END AS `Event Status`, sum(CAST(a.event_rows AS Nullable(Decimal(20, 0)))) AS `Event Day Rows`,
- sum(CAST(a.hours AS Nullable(Decimal(38, 6)))) AS `Event Hours`, uniqExact(a.employee_code) AS `Employee Count`
-FROM a LEFT JOIN dbpcm_warehouse.employee e ON a.employee_code = e.employee_code
-WHERE e.employee_status = {employee_status} AND e.department_name = {department} AND e.employee_code = {employee}
-GROUP BY CASE {group_by} WHEN 'department' THEN e.department_name WHEN 'department_status' THEN e.department_name WHEN 'status' THEN a.status WHEN 'event_type' THEN a.event_type WHEN 'month' THEN toString(a.month) ELSE 'Company' END
-, CASE WHEN {group_by} = 'department_status' THEN a.status ELSE 'All selected statuses' END
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN `Group` END DESC, CASE WHEN {order_direction} = 'ASC' THEN `Group` END ASC, `Event Status`
+WITH a AS
+  (SELECT employee_code,
+          status,
+          event_type,
+          SUBSTRING(toString(request_date), 1, 7) AS month,
+          count(*) AS event_rows,
+          sum(hours) AS hours
+   FROM dbpcm_warehouse.time_off_request
+   WHERE status = {event_status}
+     AND event_type = {event_type}
+     AND earn_code = {earn_code}
+     AND toDate(request_date) >= toDate({period_start})
+     AND toDate(request_date) < toDate({period_end})
+   GROUP BY employee_code,
+            status,
+            event_type,
+            SUBSTRING(toString(request_date), 1, 7))
+SELECT CASE {group_by}
+           WHEN 'department' THEN e.department_name
+           WHEN 'department_status' THEN e.department_name
+           WHEN 'status' THEN a.status
+           WHEN 'event_type' THEN a.event_type
+           WHEN 'month' THEN toString(a.month)
+           ELSE 'Company'
+       END AS "Group",
+       CASE
+           WHEN {group_by} = 'department_status' THEN a.status
+           ELSE 'All selected statuses'
+       END AS "Event Status",
+       sum(CAST(a.event_rows AS Nullable(Decimal(20, 0)))) AS "Event Days",
+       sum(CAST(a.hours AS Nullable(Decimal(38, 6)))) AS "Event Hours",
+       uniqExact(a.employee_code) AS "Employee Count"
+FROM a
+LEFT JOIN dbpcm_warehouse.employee AS e ON a.employee_code = e.employee_code
+WHERE e.employee_status = {employee_status}
+  AND e.department_name = {department}
+  AND e.employee_code = {employee}
+GROUP BY CASE {group_by}
+             WHEN 'department' THEN e.department_name
+             WHEN 'department_status' THEN e.department_name
+             WHEN 'status' THEN a.status
+             WHEN 'event_type' THEN a.event_type
+             WHEN 'month' THEN toString(a.month)
+             ELSE 'Company'
+         END,
+         CASE
+             WHEN {group_by} = 'department_status' THEN a.status
+             ELSE 'All selected statuses'
+         END
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Group"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Group"
+                   END ASC, "Event Status"
 ```
 
 **Uses:**
@@ -6929,7 +7077,7 @@ FROM ranked r LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = r.employ
 
 **ID:** `bp-avg-request-size`
 
-**Intent:** Average approved time-off request hours per row by leave type over a request-date window
+**Intent:** Average approved time-off hours per request day by leave type over a request-date window
 
 **Slots:**
 
@@ -6944,13 +7092,19 @@ FROM ranked r LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = r.employ
 SELECT t.earn_description AS "Leave Type",
        t.earn_code AS "Earn Code",
        round(AVG(t.hours), 2) AS "Average Hours",
-       COUNT(*) AS "Request Rows"
+       COUNT(*) AS "Request Days"
 FROM dbpcm_warehouse.time_off_request AS t
 WHERE t.status = 'Approved'
+  AND t.event_type = {event_type}
   AND t.hours IS NOT NULL
   AND toDate32(t.request_date) BETWEEN {window_start} AND {window_end}
-GROUP BY t.earn_description, t.earn_code
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Average Hours" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Average Hours" END ASC
+GROUP BY t.earn_description,
+         t.earn_code
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Average Hours"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Average Hours"
+                   END ASC
 ```
 
 **Uses:**
@@ -7175,18 +7329,24 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Request Count" END DESC, CAS
 SELECT t.earn_description AS "Leave Type",
        t.earn_code AS "Earn Code",
        round((quantileExactLow(0.5)(t.lead_days) + quantileExactHigh(0.5)(t.lead_days)) / 2, 1) AS "Median Lead Days",
-       COUNT(*) AS "Request Rows"
-FROM (
-       SELECT earn_description, earn_code,
-              dateDiff('day', date_added, request_date) AS lead_days
-       FROM dbpcm_warehouse.time_off_request
-       WHERE status = 'Approved'
-         AND request_date IS NOT NULL
-         AND toDate32(request_date) > toDate32('1900-01-01')
-         AND toDate32(request_date) BETWEEN {window_start} AND {window_end}
-     ) AS t
-GROUP BY t.earn_description, t.earn_code
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Median Lead Days" END DESC, CASE WHEN {order_direction} = 'ASC' THEN "Median Lead Days" END ASC
+       COUNT(*) AS "Request Days"
+FROM
+  (SELECT earn_description,
+          earn_code,
+          dateDiff('day', date_added, request_date) AS lead_days
+   FROM dbpcm_warehouse.time_off_request
+   WHERE status = 'Approved'
+     AND event_type = {event_type}
+     AND request_date IS NOT NULL
+     AND toDate32(request_date) > toDate32('1900-01-01')
+     AND toDate32(request_date) BETWEEN {window_start} AND {window_end}) AS t
+GROUP BY t.earn_description,
+         t.earn_code
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN "Median Lead Days"
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN "Median Lead Days"
+                   END ASC
 ```
 
 **Uses:**
@@ -8067,7 +8227,7 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Rehire Date" END DESC, CASE 
 
 **ID:** `bp-termination-family`
 
-**Intent:** Employees with a recorded termination date in a half-open period, with total matching record count before the display limit. Includes same-day/later rehires and employees no longer currently Terminated. Apply current status only when explicitly requested. For counts/grouped summaries use bp-employee-date-summary with date_basis=termination.
+**Intent:** Employees with a recorded termination date in a half-open period, with the total matching employee count before the display limit. Includes same-day/later rehires and employees no longer currently Terminated. Apply current status only when explicitly requested. For counts/grouped summaries use bp-employee-date-summary with date_basis=termination.
 
 **Slots:**
 
@@ -8084,11 +8244,24 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Rehire Date" END DESC, CASE 
 **SQL Template:**
 
 ```sql
-SELECT e.employee_code AS `Employee Code`, e.employee_name AS `Employee Name`, e.department_name AS `Department`, e.employee_status AS `Current Status`, e.termination_date AS `Termination Date`, count(*) OVER () AS `Total Matching Records`
+SELECT e.employee_code AS `Employee Code`,
+       e.employee_name AS `Employee Name`,
+       e.department_name AS `Department`,
+       e.employee_status AS `Current Status`,
+       e.termination_date AS `Termination Date`,
+       count(*) OVER () AS `Total Matching Employees`
 FROM dbpcm_warehouse.employee e
-WHERE e.termination_date >= {period_start} AND e.termination_date < {period_end}
-AND (e.employee_status = {employee_status} OR {employee_status} = 'All') AND e.department_name = {department}
-ORDER BY CASE WHEN {order_direction} = 'DESC' THEN e.termination_date END DESC, CASE WHEN {order_direction} = 'ASC' THEN e.termination_date END ASC, e.employee_code LIMIT {row_limit}
+WHERE e.termination_date >= {period_start}
+  AND e.termination_date < {period_end}
+  AND (e.employee_status = {employee_status}
+       OR {employee_status} = 'All')
+  AND e.department_name = {department}
+ORDER BY CASE
+             WHEN {order_direction} = 'DESC' THEN e.termination_date
+         END DESC, CASE
+                       WHEN {order_direction} = 'ASC' THEN e.termination_date
+                   END ASC, e.employee_code
+LIMIT {row_limit}
 ```
 
 **Uses:**
@@ -8205,64 +8378,88 @@ ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Headcount" END DESC, CASE WH
 **SQL Template:**
 
 ```sql
-SELECT ( SELECT count(DISTINCT employee_code)
-         FROM dbpcm_warehouse.employee
-         WHERE employee_status = 'Active' ) AS "Active Headcount",
-       ( SELECT count()
-         FROM dbpcm_warehouse.employee ) AS "Total Records",
-       round(100 * ( SELECT count(DISTINCT employee_code)
-                     FROM dbpcm_warehouse.employee
-                     WHERE employee_status = 'Active' AND employment_type = 'W2' )
-             / nullIf(( SELECT count(DISTINCT employee_code)
-                        FROM dbpcm_warehouse.employee
-                        WHERE employee_status = 'Active' ), 0), 2) AS "W2 Share Pct",
-       ( SELECT round((quantileExactLow(0.5)(toFloat64(annual_salary)) + quantileExactHigh(0.5)(toFloat64(annual_salary))) / 2, 2)
-         FROM dbpcm_warehouse.employee
-         WHERE employee_status = 'Active' AND annual_salary IS NOT NULL ) AS "Median Annual Salary",
-       ( SELECT round(avg(date_diff('day', hire_date, now()) / 365.25), 1)
-         FROM dbpcm_warehouse.employee
-         WHERE employee_status = 'Active' ) AS "Avg Tenure Years",
-       round(100 * ( SELECT count(DISTINCT employee_code)
-                     FROM dbpcm_warehouse.employee
-                     WHERE employee_status = 'Active' AND dol_status_description = 'Full Time' )
-             / nullIf(( SELECT count(DISTINCT employee_code)
-                        FROM dbpcm_warehouse.employee
-                        WHERE employee_status = 'Active' ), 0), 2) AS "Pct Full Time",
-       round(100 * ( SELECT count(DISTINCT employee_code)
-                     FROM dbpcm_warehouse.employee
-                     WHERE employee_status = 'Active' AND direct_deposit = 1 )
-             / nullIf(( SELECT count(DISTINCT employee_code)
-                        FROM dbpcm_warehouse.employee
-                        WHERE employee_status = 'Active' ), 0), 2) AS "Pct Direct Deposit",
-       ( SELECT count(DISTINCT employee_code)
-         FROM dbpcm_warehouse.employee
-         WHERE (employee_status != 'Not Hired' OR employee_status IS NULL)
-           AND hire_date >= {kpi_window_start}
-           AND hire_date < {kpi_window_end} ) AS "Hires In Window",
-       ( SELECT count(DISTINCT employee_code)
-         FROM dbpcm_warehouse.employee
-         WHERE employee_status = 'Terminated'
-           AND termination_date IS NOT NULL AND toDate32(termination_date) > toDate32('1900-01-01')
-           AND (most_recent_hire_date IS NULL OR most_recent_hire_date < termination_date)
-           AND termination_date >= {kpi_window_start}
-           AND termination_date < {kpi_window_end} ) AS "Terms In Window",
-       round(( SELECT count(DISTINCT employee_code)
-               FROM dbpcm_warehouse.employee
-               WHERE employee_status = 'Terminated'
-                 AND termination_date IS NOT NULL AND toDate32(termination_date) > toDate32('1900-01-01')
-                 AND (most_recent_hire_date IS NULL OR most_recent_hire_date < termination_date)
-                 AND termination_date >= {kpi_window_start}
-                 AND termination_date < {kpi_window_end} )
-             / nullIf(( SELECT count(DISTINCT employee_code)
-                        FROM dbpcm_warehouse.employee
-                        WHERE employee_status = 'Active' ), 0), 4) AS "Turnover Rate In Window",
-       ( SELECT count(DISTINCT employee_code)
-         FROM dbpcm_warehouse.employee
-         WHERE employee_status = 'On Leave' ) AS "On Leave",
-       ( SELECT count(DISTINCT employee_code)
-         FROM dbpcm_warehouse.employee
-         WHERE employee_status = 'Active'
-           AND (primary_emergency_contact_phone IS NULL OR primary_emergency_contact_phone = '') ) AS "Missing Emergency Contacts"
+SELECT count(DISTINCT CASE
+                          WHEN employee_status = 'Active' THEN employee_code
+                          ELSE NULL
+                      END) AS "Active Headcount",
+       round(100 * count(DISTINCT CASE
+                                      WHEN employee_status = 'Active'
+                                           AND employment_type = 'W2' THEN employee_code
+                                      ELSE NULL
+                                  END) / nullIf(count(DISTINCT CASE
+                                                                   WHEN employee_status = 'Active' THEN employee_code
+                                                                   ELSE NULL
+                                                               END), 0), 2) AS "W2 Share Pct",
+       round((quantileExactLow(0.5)(CASE
+                                        WHEN employee_status = 'Active'
+                                             AND NOT (annual_salary IS NULL) THEN toFloat64(annual_salary)
+                                        ELSE NULL
+                                    END) + quantileExactHigh(0.5)(CASE
+                                                                      WHEN employee_status = 'Active'
+                                                                           AND NOT (annual_salary IS NULL) THEN toFloat64(annual_salary)
+                                                                      ELSE NULL
+                                                                  END)) / 2, 2) AS "Median Annual Salary",
+       round(avg(CASE
+                     WHEN employee_status = 'Active' THEN DATE_DIFF(DAY, hire_date, now()) / 365.25
+                     ELSE NULL
+                 END), 1) AS "Avg Tenure Years",
+       round(100 * count(DISTINCT CASE
+                                      WHEN employee_status = 'Active'
+                                           AND dol_status_description = 'Full Time' THEN employee_code
+                                      ELSE NULL
+                                  END) / nullIf(count(DISTINCT CASE
+                                                                   WHEN employee_status = 'Active' THEN employee_code
+                                                                   ELSE NULL
+                                                               END), 0), 2) AS "Pct Full Time",
+       round(100 * count(DISTINCT CASE
+                                      WHEN employee_status = 'Active'
+                                           AND direct_deposit = 1 THEN employee_code
+                                      ELSE NULL
+                                  END) / nullIf(count(DISTINCT CASE
+                                                                   WHEN employee_status = 'Active' THEN employee_code
+                                                                   ELSE NULL
+                                                               END), 0), 2) AS "Pct Direct Deposit",
+       count(DISTINCT CASE
+                          WHEN (employee_status <> 'Not Hired'
+                                OR employee_status IS NULL)
+                               AND hire_date >= {kpi_window_start}
+                               AND hire_date < {kpi_window_end} THEN employee_code
+                          ELSE NULL
+                      END) AS "Hires In Window",
+       count(DISTINCT CASE
+                          WHEN employee_status = 'Terminated'
+                               AND NOT (termination_date IS NULL)
+                               AND toDate32(termination_date) > toDate32('1900-01-01')
+                               AND (most_recent_hire_date IS NULL
+                                    OR most_recent_hire_date < termination_date)
+                               AND termination_date >= {kpi_window_start}
+                               AND termination_date < {kpi_window_end} THEN employee_code
+                          ELSE NULL
+                      END) AS "Terms In Window",
+       round(count(DISTINCT CASE
+                                WHEN employee_status = 'Terminated'
+                                     AND NOT (termination_date IS NULL)
+                                     AND toDate32(termination_date) > toDate32('1900-01-01')
+                                     AND (most_recent_hire_date IS NULL
+                                          OR most_recent_hire_date < termination_date)
+                                     AND termination_date >= {kpi_window_start}
+                                     AND termination_date < {kpi_window_end} THEN employee_code
+                                ELSE NULL
+                            END) / nullIf(count(DISTINCT CASE
+                                                             WHEN employee_status = 'Active' THEN employee_code
+                                                             ELSE NULL
+                                                         END), 0), 4) AS "Turnover Rate In Window",
+       count(DISTINCT CASE
+                          WHEN employee_status = 'On Leave' THEN employee_code
+                          ELSE NULL
+                      END) AS "On Leave",
+       count(DISTINCT CASE
+                          WHEN employee_status = 'Active'
+                               AND (primary_emergency_contact_phone IS NULL
+                                    OR primary_emergency_contact_phone = '') THEN employee_code
+                          ELSE NULL
+                      END) AS "Missing Emergency Contacts"
+FROM dbpcm_warehouse.employee
 ```
 
 **Uses:**

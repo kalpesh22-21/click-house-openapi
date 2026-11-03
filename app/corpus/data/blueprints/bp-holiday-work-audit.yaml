@@ -7,8 +7,7 @@ catalog_sha: ''
 sql_template: |
   SELECT te.punch_date AS "Punch Date",
          count(DISTINCT te.employee_code) AS "Employees",
-         round(SUM(te.earn_hours), 2) AS "Total Hours",
-         count() AS "Line Count"
+         round(SUM(te.earn_hours), 2) AS "Total Hours"
   FROM
     (SELECT employee_code,
             punch_date,
@@ -61,5 +60,3 @@ column_formats:
     kind: number
     unit: hours
     precision: 2
-  Line Count:
-    kind: integer

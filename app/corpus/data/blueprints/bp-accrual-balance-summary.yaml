@@ -3,7 +3,7 @@ intent: 'Recorded beginning, accrued, awarded and taken plan balances by company
   plan code, employee status, department and employee. Uses taken_amount, never approved event hours. No implicit
   PTO filter: resolve plan code for PTO. No event-date restriction, current-balance formula or assumed units. Cross-plan
   sums require compatible units; otherwise use plan grouping/filter. Preaggregate balance rows by employee/plan
-  before LEFT JOIN; preserve source row count without assuming unique plan rows.'
+  before LEFT JOIN without assuming unique plan rows.'
 slots_summary: group_by, accrual_code, employee_status, department, employee, order_direction
 status: validated
 drift_status: clean
@@ -76,8 +76,7 @@ sql_template: |
             sum(beginning_balance) AS beginning,
             sum(accrued_amount) AS accrued,
             sum(awarded_amount) AS awarded,
-            sum(taken_amount) AS taken,
-            count(*) AS balance_rows
+            sum(taken_amount) AS taken
      FROM dbpcm_warehouse.time_off_balance
      WHERE accrual_code = {accrual_code}
      GROUP BY employee_code,
@@ -91,7 +90,6 @@ sql_template: |
          sum(CAST(b.accrued AS Nullable(Decimal(38, 6)))) AS "Accrued Amount",
          sum(CAST(b.awarded AS Nullable(Decimal(38, 6)))) AS "Awarded Amount",
          sum(CAST(b.taken AS Nullable(Decimal(38, 6)))) AS "Taken Amount",
-         sum(CAST(b.balance_rows AS Nullable(Decimal(20, 0)))) AS "Source Balance Rows",
          uniqExact(b.employee_code) AS "Employee Count"
   FROM b
   LEFT JOIN dbpcm_warehouse.employee AS e ON b.employee_code = e.employee_code
@@ -119,7 +117,5 @@ column_formats:
     kind: number
   Taken Amount:
     kind: number
-  Source Balance Rows:
-    kind: integer
   Employee Count:
     kind: integer

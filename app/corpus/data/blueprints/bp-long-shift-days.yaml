@@ -8,8 +8,7 @@ sql_template: |
   SELECT te.employee_code AS "Employee Code",
          any(e.employee_name) AS "Employee Name",
          te.punch_date AS "Punch Date",
-         round(SUM(te.earn_hours), 2) AS "Daily Hours",
-         count() AS "Line Count"
+         round(SUM(te.earn_hours), 2) AS "Daily Hours"
   FROM
     (SELECT employee_code,
             punch_date,
@@ -63,5 +62,3 @@ column_formats:
     kind: number
     unit: hours
     precision: 2
-  Line Count:
-    kind: integer

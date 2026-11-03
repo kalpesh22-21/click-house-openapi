@@ -5,7 +5,7 @@ drift_status: clean
 catalog_sha: ''
 sql_template: |
   SELECT formatDateTime(toStartOfMonth(expense_paid_date), '%Y-%m') AS "Month",
-         count() AS "Line Count",
+         count() AS "Expense Count",
          round((quantileExactLow(0.5)(dateDiff('day', date_time_submitted, approved_date)) + quantileExactHigh(0.5)(dateDiff('day', date_time_submitted, approved_date))) / 2, 1) AS "Median Submission To Approval",
          round((quantileExactLow(0.5)(dateDiff('day', approved_date, expense_paid_date)) + quantileExactHigh(0.5)(dateDiff('day', approved_date, expense_paid_date))) / 2, 1) AS "Median Approval To Payment"
   FROM dbpcm_warehouse.expense
@@ -53,7 +53,7 @@ uses:
 column_formats:
   Month:
     kind: text
-  Line Count:
+  Expense Count:
     kind: integer
   Median Submission To Approval:
     kind: number

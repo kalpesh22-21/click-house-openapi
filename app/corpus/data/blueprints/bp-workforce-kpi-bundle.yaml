@@ -8,7 +8,6 @@ sql_template: |
                             WHEN employee_status = 'Active' THEN employee_code
                             ELSE NULL
                         END) AS "Active Headcount",
-         count() AS "Total Records",
          round(100 * count(DISTINCT CASE
                                         WHEN employee_status = 'Active'
                                              AND employment_type = 'W2' THEN employee_code
@@ -106,8 +105,6 @@ uses:
 - dbpcm_warehouse.employee.primary_emergency_contact_phone
 column_formats:
   Active Headcount:
-    kind: integer
-  Total Records:
     kind: integer
   W2 Share Pct:
     kind: percent

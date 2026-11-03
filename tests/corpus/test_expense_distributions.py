@@ -70,6 +70,6 @@ def test_line_size_distribution_can_narrow_to_one_account():
 def test_category_distribution_covers_every_account_with_shares_of_the_total():
     blueprint, rows = _run('bp-expense-category-distribution', order_direction="'DESC'", **WINDOW)
     assert 'top_n' not in blueprint['slots_summary'] and 'LIMIT' not in blueprint['sql_template']
-    # Line Count counts every line in scope; spend and share skip a line without an amount.
-    assert rows == [('T1', 'Travel', 350.0, 76.92, 3), ('M1', 'Meals', 104.99, 23.08, 2)]
+    # Spend and share skip an expense without an approved amount.
+    assert rows == [('T1', 'Travel', 350.0, 76.92), ('M1', 'Meals', 104.99, 23.08)]
     assert math.isclose(sum(row[3] for row in rows), 100.0)

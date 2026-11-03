@@ -1,6 +1,5 @@
 id: bp-termination-family
-intent: Employees with a recorded termination date in a half-open period, with total matching record count before
-  the display limit. Includes same-day/later rehires and employees no longer currently Terminated. Apply current
+intent: Employees with a recorded termination date in a half-open period, with the total matching employee count before the display limit. Includes same-day/later rehires and employees no longer currently Terminated. Apply current
   status only when explicitly requested. For counts/grouped summaries use bp-employee-date-summary with date_basis=termination.
 slots_summary: period, row_limit, employee_status, department, order_direction
 status: validated
@@ -63,7 +62,7 @@ sql_template: |
          e.department_name AS `Department`,
          e.employee_status AS `Current Status`,
          e.termination_date AS `Termination Date`,
-         count(*) OVER () AS `Total Matching Records`
+         count(*) OVER () AS `Total Matching Employees`
   FROM dbpcm_warehouse.employee e
   WHERE e.termination_date >= {period_start}
     AND e.termination_date < {period_end}
@@ -89,5 +88,5 @@ column_formats:
     kind: text
   Termination Date:
     kind: date
-  Total Matching Records:
+  Total Matching Employees:
     kind: integer

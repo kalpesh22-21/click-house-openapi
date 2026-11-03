@@ -7,7 +7,6 @@ catalog_sha: ''
 sql_template: |
   SELECT p.employee_code AS "Employee Code",
          any(e.employee_name) AS "Employee Name",
-         count() AS "Register Lines",
          round(SUM(p.amount), 2) AS "Total Earnings",
          any(e.termination_date) AS "Termination Date",
          max(p.pay_date) AS "Last Pay Date"
@@ -60,8 +59,6 @@ column_formats:
     kind: identifier
   Employee Name:
     kind: text
-  Register Lines:
-    kind: integer
   Total Earnings:
     kind: currency
     currency: USD

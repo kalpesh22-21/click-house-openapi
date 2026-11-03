@@ -5,7 +5,7 @@ drift_status: clean
 catalog_sha: ''
 sql_template: |
   SELECT employee_code AS "Employee Code",
-         count() AS "Pending Lines",
+         count() AS "Pending Expenses",
          round(toFloat64(SUM(amount_approved)), 2) AS "Pending Amount",
          round(AVG(dateDiff('day', date_time_submitted, today())), 1) AS "Avg Days Pending"
   FROM dbpcm_warehouse.expense
@@ -44,7 +44,7 @@ uses:
 column_formats:
   Employee Code:
     kind: identifier
-  Pending Lines:
+  Pending Expenses:
     kind: integer
   Pending Amount:
     kind: currency

@@ -1,5 +1,5 @@
 id: bp-avg-request-size
-intent: Average approved time-off request hours per row by leave type over a request-date window
+intent: Average approved time-off hours per request day by leave type over a request-date window
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -7,7 +7,7 @@ sql_template: |
   SELECT t.earn_description AS "Leave Type",
          t.earn_code AS "Earn Code",
          round(AVG(t.hours), 2) AS "Average Hours",
-         COUNT(*) AS "Request Rows"
+         COUNT(*) AS "Request Days"
   FROM dbpcm_warehouse.time_off_request AS t
   WHERE t.status = 'Approved'
     AND t.event_type = {event_type}
@@ -59,5 +59,5 @@ column_formats:
     kind: number
     unit: hours
     precision: 2
-  Request Rows:
+  Request Days:
     kind: integer

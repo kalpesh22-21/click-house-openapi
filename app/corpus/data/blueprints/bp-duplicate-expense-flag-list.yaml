@@ -1,12 +1,12 @@
 id: bp-duplicate-expense-flag-list
-intent: Expense lines flagged as potential duplicate for a payment date window
+intent: Expenses flagged as potential duplicates for a payment date window
 status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
   SELECT employee_code AS "Employee Code",
          round(toFloat64(SUM(amount_approved)), 2) AS "Flagged Amount",
-         count() AS "Flagged Lines"
+         count() AS "Flagged Expenses"
   FROM dbpcm_warehouse.expense
   WHERE potential_duplicate_expense = 'Yes'
     AND expense_paid_date >= {expense_window_start}
@@ -47,5 +47,5 @@ column_formats:
     kind: currency
     currency: USD
     precision: 2
-  Flagged Lines:
+  Flagged Expenses:
     kind: integer

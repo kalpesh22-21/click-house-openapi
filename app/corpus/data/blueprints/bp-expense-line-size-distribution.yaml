@@ -1,12 +1,12 @@
 id: bp-expense-line-size-distribution
-intent: Size distribution of approved expense line amounts in fixed amount bands for a payment date window, one row per
-  band in amount order. Lines without an approved amount are excluded. Optional single-account filter.
+intent: Size distribution of approved expense amounts in fixed amount bands for a payment date window, one row per
+  band in amount order. Expenses without an approved amount are excluded. Optional single-account filter.
 status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
   SELECT concat('$', toString(toInt32(floor(toFloat64(amount_approved) / {band}) * {band})), ' to under $', toString(toInt32(floor(toFloat64(amount_approved) / {band}) * {band} + {band}))) AS "Amount Band",
-         count() AS "Line Count"
+         count() AS "Expense Count"
   FROM dbpcm_warehouse.expense
   WHERE expense_status IN ('Approved',
                            'Paid',
@@ -55,5 +55,5 @@ uses:
 column_formats:
   Amount Band:
     kind: text
-  Line Count:
+  Expense Count:
     kind: integer

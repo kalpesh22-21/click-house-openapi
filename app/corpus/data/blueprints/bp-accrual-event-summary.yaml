@@ -1,5 +1,5 @@
 id: bp-accrual-event-summary
-intent: Accrual event/day row counts, event hours and distinct employees by company, department, workflow status,
+intent: Accrual event days, event hours and distinct employees by company, department, workflow status,
   event type, event-date month or department_status (department and status together). Includes all event types and
   leave categories unless explicitly filtered. Required half-open requested-for-date period [start,end); optional
   workflow status enum, resolved event_type and earn_code strings, employee status, department and employee. No
@@ -127,7 +127,7 @@ sql_template: |
              WHEN {group_by} = 'department_status' THEN a.status
              ELSE 'All selected statuses'
          END AS "Event Status",
-         sum(CAST(a.event_rows AS Nullable(Decimal(20, 0)))) AS "Event Day Rows",
+         sum(CAST(a.event_rows AS Nullable(Decimal(20, 0)))) AS "Event Days",
          sum(CAST(a.hours AS Nullable(Decimal(38, 6)))) AS "Event Hours",
          uniqExact(a.employee_code) AS "Employee Count"
   FROM a
@@ -157,7 +157,7 @@ column_formats:
     kind: text
   Event Status:
     kind: text
-  Event Day Rows:
+  Event Days:
     kind: integer
   Event Hours:
     kind: number

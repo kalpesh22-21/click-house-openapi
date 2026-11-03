@@ -6,8 +6,7 @@ drift_status: clean
 catalog_sha: ''
 sql_template: |
   SELECT punch_date AS "Punch Date",
-         round(SUM(earn_hours), 2) AS "Total Hours",
-         count() AS "Line Count"
+         round(SUM(earn_hours), 2) AS "Total Hours"
   FROM
     (SELECT punch_date,
             earn_hours
@@ -47,5 +46,3 @@ column_formats:
     kind: number
     unit: hours
     precision: 2
-  Line Count:
-    kind: integer

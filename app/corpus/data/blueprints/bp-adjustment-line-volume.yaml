@@ -1,12 +1,12 @@
 id: bp-adjustment-line-volume
-intent: Volume of negative payroll register earnings lines per month, counting adjustment and reversal activity
+intent: Volume of negative payroll earnings pay items per month, counting adjustment and reversal activity
   over the last N pay periods
 status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
   SELECT formatDateTime(toStartOfMonth(pay_period_end_date), '%Y-%m') AS "Month",
-         count() AS "Adjustment Lines",
+         count() AS "Adjustment Pay Items",
          round(SUM(amount), 2) AS "Adjustment Amount"
   FROM dbpcm_warehouse.payroll
   WHERE register_type = 'EARN'
@@ -40,7 +40,7 @@ uses:
 column_formats:
   Month:
     kind: text
-  Adjustment Lines:
+  Adjustment Pay Items:
     kind: integer
   Adjustment Amount:
     kind: currency

@@ -5,8 +5,7 @@ drift_status: clean
 catalog_sha: ''
 sql_template: |
   SELECT expense_policy_description AS "Policy",
-         round(toFloat64(SUM(amount_approved)), 2) AS "Approved Spend",
-         count() AS "Line Count"
+         round(toFloat64(SUM(amount_approved)), 2) AS "Approved Spend"
   FROM dbpcm_warehouse.expense
   WHERE expense_status IN ('Approved',
                            'Paid',
@@ -49,5 +48,3 @@ column_formats:
     kind: currency
     currency: USD
     precision: 2
-  Line Count:
-    kind: integer

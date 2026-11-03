@@ -1,5 +1,5 @@
 id: bp-payroll-summary
-intent: Payroll amount, source line count and distinct employee count by company, department or pay-date month.
+intent: Payroll amount and distinct employee count by company, department or pay-date month.
   Required register_type enum and half-open pay-date period [start,end); select EARN for gross earnings. Optional
   type_code, employee status, department and employee. Earnings represent finalized total_earning after period close;
   use total_earning for in-progress earnings and never add both for the same covered earnings. Preaggregate payroll
@@ -88,8 +88,7 @@ sql_template: |
   WITH p AS
     (SELECT employee_code,
             substring(toString(pay_date), 1, 7) AS month,
-            sum(amount) AS amount,
-            count(*) AS line_count
+            sum(amount) AS amount
      FROM dbpcm_warehouse.payroll
      WHERE register_type = {register_type}
        AND type_code = {type_code}
@@ -103,7 +102,6 @@ sql_template: |
              ELSE 'Company'
          END AS `Group`,
          sum(CAST(p.amount AS Nullable(Decimal(38, 2)))) AS `Payroll Amount`,
-         sum(CAST(p.line_count AS Nullable(Decimal(20, 0)))) AS `Source Line Count`,
          uniqExact(p.employee_code) AS `Employee Count`
   FROM p
   LEFT JOIN dbpcm_warehouse.employee e ON p.employee_code = e.employee_code
@@ -127,7 +125,5 @@ column_formats:
     kind: currency
     currency: USD
     precision: 2
-  Source Line Count:
-    kind: integer
   Employee Count:
     kind: integer

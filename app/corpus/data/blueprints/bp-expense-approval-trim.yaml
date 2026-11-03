@@ -7,8 +7,7 @@ sql_template: |
   SELECT expense_rule_description AS "Expense Rule",
          round(toFloat64(SUM(amount_approved)), 2) AS "Approved Total",
          round(toFloat64(SUM(amount_requested)), 2) AS "Submitted Total",
-         round(toFloat64(SUM(amount_requested - amount_approved)), 2) AS "Trimmed Total",
-         count() AS "Line Count"
+         round(toFloat64(SUM(amount_requested - amount_approved)), 2) AS "Trimmed Total"
   FROM dbpcm_warehouse.expense
   WHERE expense_status IN ('Approved',
                            'Paid',
@@ -60,5 +59,3 @@ column_formats:
     kind: currency
     currency: USD
     precision: 2
-  Line Count:
-    kind: integer

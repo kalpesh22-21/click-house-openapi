@@ -5,7 +5,7 @@ drift_status: clean
 catalog_sha: ''
 sql_template: |
   SELECT expense_status AS "Expense Status",
-         count() AS "Line Count",
+         count() AS "Expense Count",
          round(toFloat64(SUM(amount_approved)), 2) AS "Total Amount"
   FROM dbpcm_warehouse.expense
   WHERE expense_status = 'Paid'
@@ -44,7 +44,7 @@ uses:
 column_formats:
   Expense Status:
     kind: text
-  Line Count:
+  Expense Count:
     kind: integer
   Total Amount:
     kind: currency

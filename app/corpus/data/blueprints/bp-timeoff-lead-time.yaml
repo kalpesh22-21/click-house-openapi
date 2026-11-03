@@ -7,7 +7,7 @@ sql_template: |
   SELECT t.earn_description AS "Leave Type",
          t.earn_code AS "Earn Code",
          round((quantileExactLow(0.5)(t.lead_days) + quantileExactHigh(0.5)(t.lead_days)) / 2, 1) AS "Median Lead Days",
-         COUNT(*) AS "Request Rows"
+         COUNT(*) AS "Request Days"
   FROM
     (SELECT earn_description,
             earn_code,
@@ -64,5 +64,5 @@ column_formats:
     kind: number
     unit: days
     precision: 2
-  Request Rows:
+  Request Days:
     kind: integer

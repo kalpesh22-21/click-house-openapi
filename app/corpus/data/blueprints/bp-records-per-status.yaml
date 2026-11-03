@@ -1,18 +1,18 @@
 id: bp-records-per-status
-intent: Record counts per employee status including Not Hired records
+intent: Employee record counts per employee status including Not Hired records
 status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
   SELECT employee_status AS "Employee Status",
-         count() AS "Records"
+         count() AS "Employee Records"
   FROM dbpcm_warehouse.employee
   WHERE department_name = {department}
   GROUP BY employee_status
   ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Records"
+               WHEN {order_direction} = 'DESC' THEN "Employee Records"
            END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Records"
+                         WHEN {order_direction} = 'ASC' THEN "Employee Records"
                      END ASC
 slots:
 - name: department
@@ -35,5 +35,5 @@ uses:
 column_formats:
   Employee Status:
     kind: text
-  Records:
+  Employee Records:
     kind: integer

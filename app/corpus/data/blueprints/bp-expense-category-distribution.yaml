@@ -1,6 +1,5 @@
 id: bp-expense-category-distribution
-intent: Distribution of approved expense spend across every expense account category for a payment date window, one
-  row per account with approved spend, share of total approved spend and line count. Complete, not a top-N ranking.
+intent: Distribution of approved expense spend across every expense account category for a payment date window, one row per account with approved spend and its share of total approved spend. Complete, not a top-N ranking.
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -8,8 +7,7 @@ sql_template: |
   SELECT expense_account_code AS "Account Code",
          any(expense_account_description) AS "Account Description",
          round(toFloat64(sum(amount_approved)), 2) AS "Approved Spend",
-         round(100.0 * toFloat64(sum(amount_approved)) / nullIf(toFloat64(sum(sum(amount_approved)) OVER ()), 0), 2) AS "Share Of Approved Spend Pct",
-         count() AS "Line Count"
+         round(100.0 * toFloat64(sum(amount_approved)) / nullIf(toFloat64(sum(sum(amount_approved)) OVER ()), 0), 2) AS "Share Of Approved Spend Pct"
   FROM dbpcm_warehouse.expense
   WHERE expense_status IN ('Approved',
                            'Paid',
@@ -57,5 +55,3 @@ column_formats:
     kind: percent
     scale: percent
     precision: 2
-  Line Count:
-    kind: integer
