@@ -9,12 +9,13 @@ sql_template: |
          round(SUMIf(amount, register_type = 'NETPAYDIST'), 2) AS "Net Pay"
   FROM dbpcm_warehouse.payroll
   WHERE pay_period_start_date >= {quarter_start}
-    AND pay_period_end_date <= {quarter_end}
+    AND pay_period_end_date < {quarter_end}
 slots:
 - name: quarter
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 slots_summary: quarter
 uses:
 - dbpcm_warehouse.payroll.amount

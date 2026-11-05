@@ -15,7 +15,7 @@ sql_template: |
             out_punch_time
      FROM dbpcm_warehouse.punch_pair) AS pp
   JOIN dbpcm_warehouse.employee e ON e.employee_code = pp.employee_code
-  WHERE pp.punch_date BETWEEN {window_start} AND {window_end}
+  WHERE (pp.punch_date >= {window_start} AND pp.punch_date < {window_end})
     AND pp.in_punch_time IS NOT NULL
     AND toDate32(pp.in_punch_time) > toDate32('1900-01-01')
     AND pp.out_punch_time IS NOT NULL
@@ -32,6 +32,7 @@ slots:
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 - name: max_rows
   type: positive_integer
   required: true

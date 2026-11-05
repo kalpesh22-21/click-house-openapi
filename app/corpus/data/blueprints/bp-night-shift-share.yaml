@@ -13,7 +13,7 @@ sql_template: |
                punch_date,
                in_punch_time
         FROM dbpcm_warehouse.punch_pair) pp
-     WHERE pp.punch_date BETWEEN {window_start} AND {window_end}
+     WHERE (pp.punch_date >= {window_start} AND pp.punch_date < {window_end})
        AND pp.in_punch_time IS NOT NULL
        AND toDate32(pp.in_punch_time) > toDate32('1900-01-01')
        AND (toHour(pp.in_punch_time) >= {night_start}
@@ -27,7 +27,7 @@ sql_template: |
                earn_hours
         FROM dbpcm_warehouse.total_earning) te
      JOIN dbpcm_warehouse.employee e ON e.employee_code = te.employee_code
-     WHERE te.punch_date BETWEEN {window_start} AND {window_end}
+     WHERE (te.punch_date >= {window_start} AND te.punch_date < {window_end})
      GROUP BY e.department_name),
        dept_night AS
     (SELECT e.department_name AS dept,
@@ -58,6 +58,7 @@ slots:
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 - name: night_start
   type: positive_integer
   required: true

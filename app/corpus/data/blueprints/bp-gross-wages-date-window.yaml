@@ -8,13 +8,14 @@ sql_template: |
   SELECT round(SUM(amount), 2) AS "Total Gross Wages"
   FROM dbpcm_warehouse.payroll
   WHERE register_type = 'EARN'
-    AND pay_period_start_date <= {window_end}
+    AND pay_period_start_date < {window_end}
     AND pay_period_end_date >= {window_start}
 slots:
 - name: window
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 slots_summary: window
 uses:
 - dbpcm_warehouse.payroll.amount

@@ -9,7 +9,7 @@ sql_template: |
     (SELECT DISTINCT employee_code,
                      punch_date
      FROM dbpcm_warehouse.punch_pair
-     WHERE punch_date BETWEEN {window_start} AND {window_end}),
+     WHERE (punch_date >= {window_start} AND punch_date < {window_end})),
        overlap AS
     (SELECT pd.employee_code,
             pd.punch_date AS overlap_date
@@ -39,6 +39,7 @@ slots:
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 - name: threshold
   type: positive_integer
   required: true

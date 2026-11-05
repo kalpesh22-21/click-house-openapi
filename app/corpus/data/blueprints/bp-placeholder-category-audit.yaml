@@ -19,12 +19,13 @@ sql_template: |
             category_name
      FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
   WHERE ec.category_name = 'Select Category'
-    AND te.punch_date BETWEEN {window_start} AND {window_end}
+    AND (te.punch_date >= {window_start} AND te.punch_date < {window_end})
 slots:
 - name: window
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 slots_summary: window
 uses:
 - dbpcm_warehouse.total_earning.earn_amount

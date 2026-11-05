@@ -17,7 +17,7 @@ sql_template: |
      WHERE t.status IN ('Approved',
                         'Denied')
        AND t.event_type = {event_type}
-       AND toDate32(t.request_date) BETWEEN {window_start} AND {window_end}
+       AND (toDate32(t.request_date) >= {window_start} AND toDate32(t.request_date) < {window_end})
      GROUP BY e.department_name) AS d
   ORDER BY CASE
                WHEN {order_direction} = 'DESC' THEN "Denial Rate Pct"
@@ -29,6 +29,7 @@ slots:
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 - name: order_direction
   type: enum
   required: false

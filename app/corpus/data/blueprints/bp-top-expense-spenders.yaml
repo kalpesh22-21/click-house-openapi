@@ -13,7 +13,7 @@ sql_template: |
                              'Paid',
                              'Marked as Paid')
     AND x.expense_paid_date >= {expense_window_start}
-    AND x.expense_paid_date <= {expense_window_end}
+    AND x.expense_paid_date < {expense_window_end}
   GROUP BY e.employee_code
   ORDER BY CASE
                WHEN {order_direction} = 'DESC' THEN "Approved Spend"
@@ -29,6 +29,7 @@ slots:
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 - name: order_direction
   type: enum
   required: false

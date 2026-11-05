@@ -17,7 +17,7 @@ sql_template: |
        AND event_type = {event_type}
        AND request_date IS NOT NULL
        AND toDate32(request_date) > toDate32('1900-01-01')
-       AND toDate32(request_date) BETWEEN {window_start} AND {window_end}) AS t
+       AND (toDate32(request_date) >= {window_start} AND toDate32(request_date) < {window_end})) AS t
   GROUP BY t.earn_description,
            t.earn_code
   ORDER BY CASE
@@ -30,6 +30,7 @@ slots:
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 - name: order_direction
   type: enum
   required: false

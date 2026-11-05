@@ -11,12 +11,13 @@ sql_template: |
   FROM dbpcm_warehouse.time_off_request AS t
   WHERE t.event_type = 'Payout Request'
     AND t.status = 'Approved'
-    AND toDate32(t.request_date) BETWEEN {window_start} AND {window_end}
+    AND (toDate32(t.request_date) >= {window_start} AND toDate32(t.request_date) < {window_end})
 slots:
 - name: window
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 slots_summary: window
 uses:
 - dbpcm_warehouse.time_off_request.event_type

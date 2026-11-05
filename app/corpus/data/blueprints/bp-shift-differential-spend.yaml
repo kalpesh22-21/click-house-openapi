@@ -13,12 +13,13 @@ sql_template: |
       (SELECT earn_code
        FROM dbpcm_warehouse.earning_category FINAL
        WHERE category_name = {shift_category})
-    AND p.pay_period_end_date BETWEEN {window_start} AND {window_end}
+    AND (p.pay_period_end_date >= {window_start} AND p.pay_period_end_date < {window_end})
 slots:
 - name: window
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 - name: shift_category
   type: entity
   required: true

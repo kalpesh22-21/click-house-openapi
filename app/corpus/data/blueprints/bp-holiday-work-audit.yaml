@@ -14,7 +14,7 @@ sql_template: |
             earn_hours,
             earn_code
      FROM dbpcm_warehouse.total_earning) te
-  WHERE te.punch_date BETWEEN {window_start} AND {window_end}
+  WHERE (te.punch_date >= {window_start} AND te.punch_date < {window_end})
     AND te.earn_code = {concept}
   GROUP BY te.punch_date
   ORDER BY CASE
@@ -32,6 +32,7 @@ slots:
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 - name: max_rows
   type: positive_integer
   required: true

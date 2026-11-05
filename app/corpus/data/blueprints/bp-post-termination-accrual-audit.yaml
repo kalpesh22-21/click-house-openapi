@@ -21,7 +21,7 @@ sql_template: |
          OR e.most_recent_hire_date <= e.termination_date)
     AND b.accrued_amount > 0
     AND b.accrual_date >= {accrual_window_start}
-    AND b.accrual_date <= {accrual_window_end}
+    AND b.accrual_date < {accrual_window_end}
   GROUP BY b.employee_code,
            e.employee_name,
            b.accrual_code,
@@ -38,6 +38,7 @@ slots:
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 - name: max_rows
   type: positive_integer
   required: true

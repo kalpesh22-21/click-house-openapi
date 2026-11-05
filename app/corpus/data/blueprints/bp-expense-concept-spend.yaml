@@ -11,7 +11,7 @@ sql_template: |
                            'Paid',
                            'Marked as Paid')
     AND expense_paid_date >= {expense_window_start}
-    AND expense_paid_date <= {expense_window_end}
+    AND expense_paid_date < {expense_window_end}
     AND (expense_rule_description ILIKE concat('%', {concept}, '%')
          OR expense_account_description ILIKE concat('%', {concept}, '%'))
   GROUP BY coalesce(expense_rule_description, expense_account_description)
@@ -29,6 +29,7 @@ slots:
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 - name: max_rows
   type: positive_integer
   required: true

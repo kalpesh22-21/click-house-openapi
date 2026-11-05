@@ -29,6 +29,7 @@ slots:
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 slots_summary: concept, period
 uses:
 - dbpcm_warehouse.total_earning.earn_amount

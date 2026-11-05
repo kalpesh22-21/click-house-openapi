@@ -20,7 +20,7 @@ sql_template: |
      FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
   LEFT JOIN dbpcm_warehouse.employee AS e ON e.employee_code = te.employee_code
   WHERE ec.category_name = 'Commission'
-    AND te.punch_date BETWEEN {period_start} AND {period_end}
+    AND (te.punch_date >= {period_start} AND te.punch_date < {period_end})
   GROUP BY te.employee_code
   ORDER BY CASE
                WHEN {order_direction} = 'DESC' THEN "Total Commission"
@@ -33,6 +33,7 @@ slots:
   type: period_range
   required: true
   temporal_type: date
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
 - name: top_n
   type: positive_integer
   required: true
