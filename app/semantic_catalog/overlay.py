@@ -72,6 +72,7 @@ reverse), so no literal-stripping pre-pass is applied.
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from typing import Any
 
 import sqlglot
@@ -633,6 +634,109 @@ def _filter_temporal(
 
 
 # ---------------------------------------------------------------------------
+# Similar column names for a narrowed fetch
+# ---------------------------------------------------------------------------
+
+# Words too common to make two names similar on their own: `client_code` is not
+# like `code`, and `zip_code` is not like `employee_code`.
+_GENERIC_NAME_TOKENS = frozenset({
+    "code", "codes", "id", "ids", "key", "name", "type", "date", "time", "status",
+    "description", "desc", "value", "amount", "number", "num", "no", "flag", "count",
+    "total", "is", "has", "of", "in", "the",
+})
+_MAX_SIMILAR_PER_NAME = 5
+# The typo rule compares whole names character by character. The MCP is internet-facing,
+# so it runs only on short names of close length, and not at all for a wide request
+# against a wide table: every other rule is a cheap token comparison.
+_TYPO_RATIO = 0.85
+_TYPO_MAX_CHARS = 40
+_TYPO_MAX_LENGTH_GAP = 3
+_TYPO_MAX_PAIRS = 10_000
+# No column is named this long; a longer request is answered with no suggestions.
+_MAX_SIMILAR_NAME_CHARS = 256
+
+
+def _name_tokens(name: str) -> list[str]:
+    """`primary_address_line_1` -> primary/address/line/1; `EmployeeCode` -> employee/code;
+    `addressLine1` -> address/line/1."""
+    spaced = re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])|(?<=[a-z0-9])(?=[A-Z])", "_", name.strip())
+    return [token for token in re.split(r"[^a-z0-9]+", spaced.lower()) if token]
+
+
+def _is_generic(token: str, generic: frozenset[str]) -> bool:
+    return token in generic or token.isdigit()
+
+
+def _contains_run(tokens: list[str], run: list[str]) -> bool:
+    return any(tokens[i:i + len(run)] == run for i in range(len(tokens) - len(run) + 1))
+
+
+def _is_typo(requested: str, candidate: str) -> bool:
+    if (len(requested) > _TYPO_MAX_CHARS or len(candidate) > _TYPO_MAX_CHARS
+            or abs(len(requested) - len(candidate)) > _TYPO_MAX_LENGTH_GAP):
+        return False
+    matcher = SequenceMatcher(None, requested, candidate)
+    return (matcher.real_quick_ratio() >= _TYPO_RATIO and matcher.quick_ratio() >= _TYPO_RATIO
+            and matcher.ratio() >= _TYPO_RATIO)
+
+
+def _name_similarity(requested: list[str], candidate: list[str], *,
+                     generic: frozenset[str] = _GENERIC_NAME_TOKENS, typos: bool = True) -> float:
+    """0 when not similar; otherwise higher is closer. Name evidence only."""
+    if not requested or not candidate:
+        return 0.0
+    req_flat, cand_flat = "".join(requested), "".join(candidate)
+    if req_flat == cand_flat:
+        return 100.0  # case, separator or whitespace differs
+    req_set, cand_set = set(requested), set(candidate)
+    if {t for t in req_set if t.isdigit()} - cand_set:
+        return 0.0  # `address_line_1` is not `address_line_2`
+    # Each tier spans under 10 points, so a longer candidate never outranks a better rule.
+    extra = min(max(0, len(candidate) - len(requested)), 9)
+    if _contains_run(candidate, requested):
+        return 90.0 - extra  # `city` in `primary_city_municipality`
+    if req_set <= cand_set:
+        return 80.0 - extra  # `zip_code` in `primary_zip_postal_code`
+    meaningful = {t for t in req_set if not _is_generic(t, generic)}
+    shared = meaningful & cand_set
+    if shared and cand_set <= req_set:
+        return 70.0  # over-specified: `employee_pay_type` for `pay_type`
+    if typos and _is_typo(req_flat, cand_flat):
+        return 60.0  # a typo: `anual_salary`
+    if meaningful and shared == meaningful:
+        return 50.0  # every meaningful word present: `zip_code` and `work_location_zip`
+    return 0.0
+
+
+def _similar_columns(missing: list[str], available: list[str], table: str = "") -> dict[str, list[str]]:
+    """Authorized columns whose names resemble each requested name that has no exact match.
+
+    Drawn ONLY from `available` (the already-authorized column list), so a suggestion
+    never depends on whether a hidden or out-of-scope column exists: a name that is
+    hidden and the same name that does not exist get identical suggestions.
+
+    The table's own name is a generic word inside it: in `employee`, `employee_ssn` is not
+    like every `employee_*` column. Equal scores rank by shared meaningful words.
+    """
+    generic = _GENERIC_NAME_TOKENS | frozenset(_name_tokens(table))
+    typos = len(missing) * len(available) <= _TYPO_MAX_PAIRS
+    tokens = {name: _name_tokens(name) for name in available}
+    similar: dict[str, list[str]] = {}
+    for name in missing:
+        if len(name) > _MAX_SIMILAR_NAME_CHARS:
+            continue
+        wanted = _name_tokens(name)
+        meaningful = {t for t in wanted if not _is_generic(t, generic)}
+        scored = [(score, len(meaningful & set(tokens[column])), index, column)
+                  for index, column in enumerate(available)
+                  if (score := _name_similarity(wanted, tokens[column], generic=generic, typos=typos)) > 0]
+        if scored:
+            scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+            similar[name] = [column for *_, column in scored[:_MAX_SIMILAR_PER_NAME]]
+    return similar
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -689,6 +793,13 @@ def build_table_schema_response(
       * Matching is exact and CASE-SENSITIVE against the catalog's own spelling,
         matching the D70 merge join — the model copies names out of the schema
         skeleton, which carries that spelling.
+      * A requested name with no exact match is still reported in
+        `columns_not_found`, and the authorized columns named like it (another
+        case or separator, a prefix such as `primary_`, a typo) are returned too,
+        listed under `similar_columns` by the requested name. They are drawn from
+        the authorized column list only, so they never depend on a hidden or
+        out-of-scope column existing. `similar_columns` is present only when some
+        name has a suggestion.
       * `None` and `[]` BOTH mean "all columns". An empty list is what a
         confused model sends when it means "no narrowing"; reading it as "no
         columns" would return a husk (base sections with an empty column array)
@@ -859,17 +970,22 @@ def build_table_schema_response(
     # has already run, so this can only remove entries, never restore one.
     # `None` and `[]` alike mean "all columns" (see the docstring).
     columns_not_found: list[str] | None = None
+    similar_columns: dict[str, list[str]] = {}
     if columns_filter:
         requested: list[str] = []
         for name in columns_filter:
             if name not in requested:
                 requested.append(name)
-        available = {c["name"] for c in merged_columns}
+        available = [c["name"] for c in merged_columns]
+        columns_not_found = [name for name in requested if name not in available]
+        # A name with no exact match still brings back the authorized columns named
+        # like it, so `city` finds `primary_city_municipality` in the same call.
+        similar_columns = _similar_columns(columns_not_found, available, table)
+        kept = set(requested).union(*similar_columns.values())
         # Preserve the merged (introspection position) order rather than the
         # caller's argument order, so the narrowed array reads like a slice of
         # the full response.
-        merged_columns = [c for c in merged_columns if c["name"] in requested]
-        columns_not_found = [name for name in requested if name not in available]
+        merged_columns = [c for c in merged_columns if c["name"] in kept]
 
     response = {
         "database": database,
@@ -893,6 +1009,8 @@ def build_table_schema_response(
         response["notes"] = notes
     if columns_not_found is not None:
         response["columns_not_found"] = columns_not_found
+        if similar_columns:
+            response["similar_columns"] = similar_columns
         response["column_check"] = {
             "coverage": "complete_authorized_table_schema",
             "matching": "exact_names",

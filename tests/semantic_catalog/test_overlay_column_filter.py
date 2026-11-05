@@ -21,8 +21,9 @@ confirm an RLS column's existence that no other surface confirms.
 
 from __future__ import annotations
 
-from app.semantic_catalog.overlay import build_table_schema_response
+import pytest
 
+from app.semantic_catalog.overlay import build_table_schema_response
 from tests.semantic_catalog.test_overlay import (
     _CATALOG,
     _FULL_SCOPE,
@@ -208,20 +209,23 @@ class TestColumnsNotFoundEcho:
 # ===========================================================================
 
 class TestCaseSensitivity:
-    def test_wrong_case_does_not_match(self):
+    def test_wrong_case_is_not_an_exact_match_but_returns_the_column_as_similar(self):
         result = _employee(columns_filter=["annualsalary", "ANNUALSALARY"])
-        assert result["columns"] == []
         assert result["columns_not_found"] == ["annualsalary", "ANNUALSALARY"]
+        assert result["similar_columns"] == {"annualsalary": ["AnnualSalary"], "ANNUALSALARY": ["AnnualSalary"]}
+        assert _col_names(result) == {"AnnualSalary"}
 
     def test_exact_case_matches(self):
-        assert _col_names(_employee(columns_filter=["AnnualSalary"])) == {"AnnualSalary"}
+        result = _employee(columns_filter=["AnnualSalary"])
+        assert _col_names(result) == {"AnnualSalary"}
+        assert "similar_columns" not in result
 
-    def test_surrounding_whitespace_does_not_match(self):
-        """Exact match, no normalization — a padded name reads as a miss and the
-        model retries with the spelling the skeleton gave it."""
+    def test_surrounding_whitespace_is_not_an_exact_match_but_returns_the_column_as_similar(self):
+        """No normalization of the exact match: a padded name is still a miss, and the
+        column the model meant comes back as a candidate under its real spelling."""
         result = _employee(columns_filter=[" AnnualSalary"])
-        assert result["columns"] == []
         assert result["columns_not_found"] == [" AnnualSalary"]
+        assert result["similar_columns"] == {" AnnualSalary": ["AnnualSalary"]}
 
 
 # ===========================================================================
@@ -328,3 +332,143 @@ def test_targeted_check_certifies_complete_authorized_exact_names():
     assert result["columns_not_found"] == ["ssn"]
     assert [c["name"] for c in result["columns"]] == ["EmployeeCode"]
     assert "column_check" not in _employee()
+
+
+
+# ===========================================================================
+# Similar names — a miss still brings back the columns named like it
+# ===========================================================================
+
+_CONTACT_COLUMNS = [
+    "employee_code", "primary_address_line_1", "primary_address_line_2", "primary_city_municipality",
+    "primary_state_province", "primary_zip_postal_code", "work_location_address", "work_location_city",
+    "work_location_state", "work_location_zip", "lives_in_state", "works_in_state", "sui_state",
+    "annual_salary", "hourly_salary", "pay_type", "pay_frequency", "pay_basis", "department_code",
+]
+
+
+def _contacts(columns_filter, scope=None, introspected=None):
+    return build_table_schema_response(
+        database="wh", table="contacts", catalog=_CATALOG, scope=scope, columns_filter=columns_filter,
+        introspected_columns=introspected if introspected is not None else [
+            {"name": n, "type": "Nullable(String)", "comment": ""} for n in _CONTACT_COLUMNS],
+    )
+
+
+class TestSimilarNames:
+    def test_the_address_and_pay_request_that_came_back_empty(self):
+        """A live model asked for these names; only the pay fields matched exactly, and the
+        address fields were reported missing although every one of them exists."""
+        result = _contacts(["address_line_1", "address_line_2", "city", "state", "zip_code", "postal_code",
+                            "annual_salary", "hourly_salary", "pay_type", "pay_frequency"])
+        assert result["columns_not_found"] == ["address_line_1", "address_line_2", "city", "state",
+                                               "zip_code", "postal_code"]
+        similar = result["similar_columns"]
+        assert similar["address_line_1"] == ["primary_address_line_1"]
+        assert similar["address_line_2"] == ["primary_address_line_2"]
+        assert similar["city"] == ["primary_city_municipality", "work_location_city"]
+        assert set(similar["state"]) == {"primary_state_province", "work_location_state", "lives_in_state",
+                                         "works_in_state", "sui_state"}
+        assert similar["zip_code"] == ["primary_zip_postal_code", "work_location_zip"]
+        assert similar["postal_code"] == ["primary_zip_postal_code"]
+        assert {"annual_salary", "hourly_salary", "pay_type", "pay_frequency"} <= _col_names(result)
+        assert _col_names(result) == {"annual_salary", "hourly_salary", "pay_type", "pay_frequency",
+                                      *(name for names in similar.values() for name in names)}
+
+    def test_a_returned_similar_column_carries_its_full_entry(self):
+        result = _contacts(["city"])
+        assert [c for c in result["columns"] if c["name"] == "work_location_city"] == [
+            c for c in _contacts(None)["columns"] if c["name"] == "work_location_city"]
+
+    def test_an_old_or_over_specified_name_finds_the_current_one(self):
+        assert _contacts(["employee_pay_type"])["similar_columns"] == {"employee_pay_type": ["pay_type"]}
+
+    def test_a_typo_finds_the_column(self):
+        assert _contacts(["anual_salary"])["similar_columns"] == {"anual_salary": ["annual_salary"]}
+
+    @pytest.mark.parametrize("name", ["client_code", "status_code", "xyz"])
+    def test_a_shared_generic_word_alone_is_not_similar(self, name):
+        """`client_code` is not like `employee_code` or `department_code`."""
+        result = _contacts([name])
+        assert "similar_columns" not in result and result["columns"] == []
+
+    def test_at_most_five_suggestions_per_name(self):
+        wide = [{"name": f"region_{i}_state", "type": "String", "comment": ""} for i in range(9)]
+        assert len(_contacts(["state"], introspected=wide)["similar_columns"]["state"]) == 5
+
+    def test_the_table_s_own_name_is_a_generic_word_inside_it(self):
+        """In `employee`, `employee_ssn` is not like every other `employee_*` column."""
+        names = ["employee_code", "employee_name", "employee_status", "hire_date"]
+        result = build_table_schema_response(
+            database="wh", table="employee", catalog=_CATALOG, scope=None,
+            columns_filter=["employee_ssn", "employee_stauts"],
+            introspected_columns=[{"name": n, "type": "String", "comment": ""} for n in names])
+        assert result["similar_columns"] == {"employee_stauts": ["employee_status"]}
+
+    def test_digits_split_from_letters_in_camel_case(self):
+        result = _contacts(["addressLine1", "address_line1"])
+        assert result["similar_columns"] == {"addressLine1": ["primary_address_line_1"],
+                                             "address_line1": ["primary_address_line_1"]}
+
+    def test_equal_scores_rank_by_shared_words(self):
+        introspected = [{"name": n, "type": "String", "comment": ""} for n in ("city_name", "work_city")]
+        result = _contacts(["work_city_name"], introspected=introspected)
+        assert result["similar_columns"] == {"work_city_name": ["work_city", "city_name"]}
+
+    def test_a_longer_candidate_never_drops_into_a_lower_tier(self):
+        from app.semantic_catalog.overlay import _name_similarity
+
+        long_run = _name_similarity(["city"], ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "city"])
+        assert long_run > _name_similarity(["zip", "code"], ["code", "zip"])
+        assert _name_similarity(["id", "id"], ["id"]) <= 80
+
+    def test_wide_and_oversized_requests_stay_cheap(self):
+        """The MCP is internet-facing: no request may make similarity scoring slow."""
+        import time
+
+        wide = [{"name": f"{'a' * 37}{i:03d}", "type": "String", "comment": ""} for i in range(400)]
+        names = [f"{'a' * 36}b{i:03d}" for i in range(63)] + ["x_" * 100_000]
+        started = time.perf_counter()
+        _contacts(names, introspected=wide)
+        assert time.perf_counter() - started < 1.0
+
+    def test_no_suggestion_leaves_the_response_shape_unchanged(self):
+        result = _employee(columns_filter=["EmployeeCode", "Nope"])
+        assert "similar_columns" not in result
+
+
+class TestSimilarNamesNeverLeak:
+    def test_suggestions_come_only_from_authorized_columns(self):
+        """AnnualSalary is out of scope: a request close to it must not bring it back."""
+        result = _employee(scope=_RESTRICTED_SCOPE, columns_filter=["annualsalary", "Annual_Salary"])
+        assert "AnnualSalary" not in _col_names(result)
+        assert "AnnualSalary" not in repr(result.get("similar_columns", {}))
+
+    def test_a_hidden_name_gets_the_suggestions_of_a_name_that_does_not_exist(self):
+        """The suggestions for a name depend only on the authorized list, so they cannot
+        reveal whether a hidden or out-of-scope column of that name exists.
+
+        `client_join_key` is hidden in one table and absent from the other, and it does
+        have a suggestion (`join_key`), so the comparison is not two empty answers."""
+        entry = _HIDDEN_CATALOG["wh.labor_allocation"]
+        catalog = {"wh.labor_allocation": {**entry, "mcp_projection": {
+            "hidden_columns": [*entry["mcp_projection"]["hidden_columns"], "client_join_key"]}}}
+        requested = ["client_join_key", "client_code"]
+
+        def response(introspected):
+            return build_table_schema_response(
+                database="wh", table="labor_allocation", introspected_columns=introspected,
+                catalog=catalog, scope=None, columns_filter=requested)
+
+        hidden = response([*_INTROSPECTED_HIDDEN, {"name": "client_join_key", "type": "String", "comment": ""}])
+        absent = response([c for c in _INTROSPECTED_HIDDEN if c["name"] in {"code", "join_key"}])
+        assert hidden["similar_columns"] == {"client_join_key": ["join_key"]}
+        assert hidden["similar_columns"] == absent["similar_columns"]
+        assert hidden["columns"] == absent["columns"]
+        assert hidden["columns_not_found"] == absent["columns_not_found"] == requested
+
+    @pytest.mark.parametrize("name", ["Annual", "salary", "employee", "Status", "code", "EmployeeCode_x"])
+    def test_similar_names_never_widen_the_authorized_column_set(self, name):
+        for scope in (None, frozenset(), _FULL_SCOPE, _RESTRICTED_SCOPE):
+            allowed = _col_names(_employee(scope=scope))
+            assert _col_names(_employee(scope=scope, columns_filter=[name])) <= allowed, (scope, name)

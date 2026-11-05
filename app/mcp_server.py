@@ -342,7 +342,12 @@ def list_tables(
         "sections (description, grain, rules, ambiguities, join keys, measures, temporal, "
         "primary key) are always returned in full — 'columns' narrows the column list only. "
         "Omit 'columns' (or pass an empty list) to get every column. Requested names that are "
-        "not available to you are omitted and echoed back under 'columns_not_found'. "
+        "not available to you are omitted and echoed back under 'columns_not_found'. When available "
+        "columns have similar names (another case or separator, a prefix such as primary_ or "
+        "work_location_, a typo), those columns are returned too and listed under 'similar_columns' "
+        "by the name you asked for. A similar column is a candidate, not the same field: read its "
+        "description before using it. If none of them holds the field, the field is unavailable: "
+        "to confirm it, request the name together with each of its similar columns. "
         "Check missing requested fields with this narrowed lookup instead of speculative SQL. "
         "'column_check' confirms these exact names were checked against the complete authorized "
         "table schema before response trimming. This is not a permission-denial or global-absence "
@@ -359,8 +364,9 @@ def get_table_schema(
         Field(
             description=(
                 "Optional: return only these columns, with their full documentation. "
-                "Exact, case-sensitive column names as spelled in the schema. Omit or "
-                "pass an empty list for all columns. Maximum 64 names."
+                "Exact, case-sensitive column names as spelled in the schema; a name with no "
+                "exact match also returns similarly named columns. Omit or pass an empty list "
+                "for all columns. Maximum 64 names."
             ),
             max_length=64,
         ),
