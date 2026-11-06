@@ -3,67 +3,88 @@ intent: Missing-payroll-setup flags and gap count per active employee
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT employee_code AS "Employee Code",
-         employee_name AS "Name",
-         department_name AS "Department",
-         toUInt8(badge_number IS NULL
-                 OR badge_number = '') AS "No Badge",
-         toUInt8(employee_gl_code IS NULL
-                 OR employee_gl_code = '') AS "No GL Code",
-         toUInt8(paycode_profile_code IS NULL
-                 OR paycode_profile_code = '') AS "No Paycode Profile",
-         toUInt8(earning_profile IS NULL
-                 OR earning_profile = '') AS "No Earning Profile",
-         toUInt8(pay_class IS NULL
-                 OR pay_class = '') AS "No Pay Class",
-         toUInt8(pay_frequency IS NULL
-                 OR pay_frequency = '') AS "No Pay Frequency",
-         toUInt8(schedule_group IS NULL
-                 OR schedule_group = '') AS "No Schedule Group",
-         toUInt8((badge_number IS NULL
-                  OR badge_number = '')) + toUInt8((employee_gl_code IS NULL
-                                                    OR employee_gl_code = '')) + toUInt8((paycode_profile_code IS NULL
-                                                                                          OR paycode_profile_code = '')) + toUInt8((earning_profile IS NULL
-                                                                                                                                    OR earning_profile = '')) + toUInt8((pay_class IS NULL
-                                                                                                                                                                         OR pay_class = '')) + toUInt8((pay_frequency IS NULL
-                                                                                                                                                                                                        OR pay_frequency = '')) + toUInt8((schedule_group IS NULL
-                                                                                                                                                                                                                                           OR schedule_group = '')) AS "Gap Count"
+sql_template: |+
+  SELECT
+    employee_code AS "Employee Code",
+    employee_name AS "Name",
+    department_name AS "Department",
+    toUInt8(badge_number IS NULL OR badge_number = '') AS "No Badge",
+    toUInt8(employee_gl_code IS NULL OR employee_gl_code = '') AS "No GL Code",
+    toUInt8(paycode_profile_code IS NULL OR paycode_profile_code = '') AS "No Paycode Profile",
+    toUInt8(earning_profile IS NULL OR earning_profile = '') AS "No Earning Profile",
+    toUInt8(pay_class IS NULL OR pay_class = '') AS "No Pay Class",
+    toUInt8(pay_frequency IS NULL OR pay_frequency = '') AS "No Pay Frequency",
+    toUInt8(schedule_group IS NULL OR schedule_group = '') AS "No Schedule Group",
+    toUInt8((
+      badge_number IS NULL OR badge_number = ''
+    )) + toUInt8((
+      employee_gl_code IS NULL OR employee_gl_code = ''
+    )) + toUInt8((
+      paycode_profile_code IS NULL OR paycode_profile_code = ''
+    )) + toUInt8((
+      earning_profile IS NULL OR earning_profile = ''
+    )) + toUInt8((
+      pay_class IS NULL OR pay_class = ''
+    )) + toUInt8((
+      pay_frequency IS NULL OR pay_frequency = ''
+    )) + toUInt8((
+      schedule_group IS NULL OR schedule_group = ''
+    )) AS "Gap Count"
   FROM dbpcm_warehouse.employee
-  WHERE employee_status = 'Active'
-    AND department_name = {department}
-    AND (toUInt8((badge_number IS NULL
-                  OR badge_number = '')) + toUInt8((employee_gl_code IS NULL
-                                                    OR employee_gl_code = '')) + toUInt8((paycode_profile_code IS NULL
-                                                                                          OR paycode_profile_code = '')) + toUInt8((earning_profile IS NULL
-                                                                                                                                    OR earning_profile = '')) + toUInt8((pay_class IS NULL
-                                                                                                                                                                         OR pay_class = '')) + toUInt8((pay_frequency IS NULL
-                                                                                                                                                                                                        OR pay_frequency = '')) + toUInt8((schedule_group IS NULL
-                                                                                                                                                                                                                                           OR schedule_group = ''))) > 0
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Gap Count"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Gap Count"
-                     END ASC, employee_code
+  WHERE
+    employee_status = 'Active'
+    AND department_name IN ({department})
+    AND (
+      toUInt8((
+        badge_number IS NULL OR badge_number = ''
+      )) + toUInt8((
+        employee_gl_code IS NULL OR employee_gl_code = ''
+      )) + toUInt8((
+        paycode_profile_code IS NULL OR paycode_profile_code = ''
+      )) + toUInt8((
+        earning_profile IS NULL OR earning_profile = ''
+      )) + toUInt8((
+        pay_class IS NULL OR pay_class = ''
+      )) + toUInt8((
+        pay_frequency IS NULL OR pay_frequency = ''
+      )) + toUInt8((
+        schedule_group IS NULL OR schedule_group = ''
+      ))
+    ) > 0
+  ORDER BY {order_by}
   LIMIT {max_rows}
+
 slots:
 - name: department
   type: string
   required: false
   binds_to: dbpcm_warehouse.employee.department_name
   optional_pattern: 'TRUE'
+  multiple: true
 - name: max_rows
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: department, max_rows, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Gap Count DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Gap Count
+    direction: DESC
+  allowed_columns:
+  - Employee Code
+  - Name
+  - Department
+  - No Badge
+  - No GL Code
+  - No Paycode Profile
+  - No Earning Profile
+  - No Pay Class
+  - No Pay Frequency
+  - No Schedule Group
+  - Gap Count
+slots_summary: department, max_rows, order_by
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name

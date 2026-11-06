@@ -1,7 +1,7 @@
 id: bp-hires-projection
 intent: Projected number of hires over the next N months at the current hiring pace (run-rate over a trailing window)
   — counts by original hire date; rehires are not re-counted
-slots_summary: window_months, horizon_months
+slots_summary: window_months, horizon_months, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -20,20 +20,43 @@ slots:
   required: true
   min_value: 1
   max_value: 24
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Hires In Window ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Hires In Window
+    direction: ASC
+  allowed_columns:
+  - Hires In Window
+  - Average Monthly Hires
+  - Projected Hires
 result_grain: []
 window_anchor: data
 sql_template: |
-  SELECT COUNT(DISTINCT employee_code) AS "Hires In Window",
-         round(COUNT(DISTINCT employee_code) / {window_months}, 1) AS "Average Monthly Hires",
-         round(COUNT(DISTINCT employee_code) / {window_months} * {horizon_months}) AS "Projected Hires"
+  SELECT
+    COUNT(DISTINCT employee_code) AS "Hires In Window",
+    round(COUNT(DISTINCT employee_code) / {window_months}, 1) AS "Average Monthly Hires",
+    round(COUNT(DISTINCT employee_code) / {window_months} * {horizon_months}) AS "Projected Hires"
   FROM dbpcm_warehouse.employee
-  WHERE hire_date >= addMonths(
-                                 (SELECT toStartOfMonth(max(hire_date))
-                                  FROM dbpcm_warehouse.employee
-                                  WHERE employee_status != 'N'
-                                    OR employee_status IS NULL), 1) - INTERVAL {window_months} MONTH
-    AND (employee_status != 'N'
-         OR employee_status IS NULL)
+  WHERE
+    hire_date >= addMonths(
+      (
+        SELECT
+          dateTrunc('MONTH', max(hire_date))
+        FROM dbpcm_warehouse.employee
+        WHERE
+          employee_status <> 'N' OR employee_status IS NULL
+      ),
+      1
+    ) - INTERVAL (
+      {window_months}
+    ) MONTH
+    AND (
+      employee_status <> 'N' OR employee_status IS NULL
+    )
+  ORDER BY {order_by}
 column_formats:
   Hires In Window:
     kind: integer

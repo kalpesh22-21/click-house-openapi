@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.corpus.native_sort import bind_sort
+
 BLUEPRINTS = Path(__file__).parents[2] / 'app/corpus/data/blueprints'
 EVENT_TYPE_USE = 'dbpcm_warehouse.time_off_request.event_type'
 FIXED = re.compile(r"\bevent_type\s*=\s*'(Time Off Request|Payout Request)'")
@@ -29,15 +31,16 @@ def test_time_off_blueprint_constrains_event_type(bp):
     if slot is None:
         assert FIXED.search(bp['sql_template']), 'filter event_type or declare an event_type slot'
         return
-    assert re.search(r'\bevent_type\s*=\s*\{event_type\}', bp['sql_template'])
+    assert re.search(r'\bevent_type\s+IN\s*\(\{event_type\}\)', bp['sql_template'])
     assert slot['type'] == 'enum' and not slot['required']
-    assert slot['default'] == 'Time Off Request'
+    assert slot['multiple'] is True
+    assert slot['default'] == ['Time Off Request']
     assert set(slot['enum_values']) == {'Time Off Request', 'Payout Request'}
 
 
 def _leave_type_hours(event_type):
     bp = yaml.safe_load((BLUEPRINTS / 'bp-timeoff-by-leave-type.yaml').read_text())
-    sql = bp['sql_template'].format(window_start="'2026-01-01'", window_end="'2026-12-31'",
+    sql = bind_sort(bp).format(top_n=1000, window_start="'2026-01-01'", window_end="'2026-12-31'",
                                     concept="'Vacation'", order_direction="'DESC'",
                                     event_type=f"'{event_type}'")
     with sqlite3.connect(':memory:') as db:
@@ -57,5 +60,6 @@ def _leave_type_hours(event_type):
 def test_leave_type_hours_default_excludes_payouts():
     bp = yaml.safe_load((BLUEPRINTS / 'bp-timeoff-by-leave-type.yaml').read_text())
     default = next(s['default'] for s in bp['slots'] if s['name'] == 'event_type')
-    assert _leave_type_hours(default) == [('Vacation', 'VAC', 40)]
+    assert default == ['Time Off Request']
+    assert _leave_type_hours(default[0]) == [('Vacation', 'VAC', 40)]
     assert _leave_type_hours('Payout Request') == [('Vacation', 'VAC', 1000)]

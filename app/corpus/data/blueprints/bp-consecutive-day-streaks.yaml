@@ -4,34 +4,40 @@ intent: Employees with N or more consecutive calendar days containing at least o
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  WITH distinct_days AS
-    (SELECT DISTINCT employee_code,
-                     toDate(punch_date) AS punch_date
-     FROM dbpcm_warehouse.punch_pair
-     WHERE (punch_date >= {window_start} AND punch_date < {window_end})),
-       streak_groups AS
-    (SELECT employee_code,
-            punch_date,
-            dateDiff('day', toDate('1970-01-01'), punch_date) - row_number() OVER (PARTITION BY employee_code
-                                                                                   ORDER BY punch_date) AS grp
-     FROM distinct_days)
-  SELECT sg.employee_code AS "Employee Code",
-         any(e.employee_name) AS "Employee Name",
-         min(sg.punch_date) AS "Streak Start",
-         max(sg.punch_date) AS "Streak End",
-         count() AS "Streak Length"
-  FROM streak_groups sg
-  LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = sg.employee_code
-  GROUP BY sg.employee_code,
-           sg.grp
-  HAVING count() >= {streak}
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Streak Length"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Streak Length"
-                     END ASC, "Employee Code"
+sql_template: |+
+  WITH distinct_days AS (
+    SELECT DISTINCT
+      employee_code,
+      toDate(punch_date) AS punch_date
+    FROM dbpcm_warehouse.punch_pair
+    WHERE
+      (
+        punch_date >= {window_start} AND punch_date < {window_end}
+      )
+  ), streak_groups AS (
+    SELECT
+      employee_code,
+      punch_date,
+      DATE_DIFF(DAY, toDate('1970-01-01'), punch_date) - row_number() OVER (PARTITION BY employee_code ORDER BY punch_date) AS grp
+    FROM distinct_days
+  )
+  SELECT
+    sg.employee_code AS "Employee Code",
+    any(e.employee_name) AS "Employee Name",
+    min(sg.punch_date) AS "Streak Start",
+    max(sg.punch_date) AS "Streak End",
+    count() AS "Streak Length"
+  FROM streak_groups AS sg
+  LEFT JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = sg.employee_code
+  GROUP BY
+    sg.employee_code,
+    sg.grp
+  HAVING
+    count() >= {streak}
+  ORDER BY {order_by}
   LIMIT {max_rows}
+
 slots:
 - name: streak
   type: positive_integer
@@ -40,19 +46,26 @@ slots:
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: max_rows
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: streak, window, max_rows, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Streak Length DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Streak Length
+    direction: DESC
+  allowed_columns:
+  - Employee Code
+  - Employee Name
+  - Streak Start
+  - Streak End
+  - Streak Length
+slots_summary: streak, window, max_rows, order_by
 uses:
 - dbpcm_warehouse.punch_pair.employee_code
 - dbpcm_warehouse.punch_pair.punch_date

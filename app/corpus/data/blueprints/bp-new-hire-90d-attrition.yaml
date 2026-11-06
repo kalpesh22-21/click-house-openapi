@@ -4,35 +4,68 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT count(DISTINCT employee_code) AS "Hires In Window",
-         COUNT(DISTINCT CASE
-                            WHEN NOT (termination_date IS NULL)
-                                 AND toDate32(termination_date) > toDate32('1900-01-01')
-                                 AND DATE_DIFF(DAY, hire_date, termination_date) <= 90
-                                 AND (most_recent_hire_date IS NULL
-                                      OR most_recent_hire_date < termination_date) THEN employee_code
-                            ELSE NULL
-                        END) AS "Terms Within 90 Days",
-         round(100 * COUNT(DISTINCT CASE
-                                        WHEN NOT (termination_date IS NULL)
-                                             AND toDate32(termination_date) > toDate32('1900-01-01')
-                                             AND DATE_DIFF(DAY, hire_date, termination_date) <= 90
-                                             AND (most_recent_hire_date IS NULL
-                                                  OR most_recent_hire_date < termination_date) THEN employee_code
-                                        ELSE NULL
-                                    END) / nullIf(count(DISTINCT employee_code), 0), 2) AS "90-Day Attrition Pct"
+  SELECT
+    count(DISTINCT employee_code) AS "Hires In Window",
+    COUNT(
+      DISTINCT CASE
+        WHEN NOT (
+          termination_date IS NULL
+        )
+        AND toDate32(termination_date) > toDate32('1900-01-01')
+        AND DATE_DIFF(DAY, hire_date, termination_date) <= 90
+        AND (
+          most_recent_hire_date IS NULL OR most_recent_hire_date < termination_date
+        )
+        THEN employee_code
+        ELSE NULL
+      END
+    ) AS "Terms Within 90 Days",
+    round(
+      100 * COUNT(
+        DISTINCT CASE
+          WHEN NOT (
+            termination_date IS NULL
+          )
+          AND toDate32(termination_date) > toDate32('1900-01-01')
+          AND DATE_DIFF(DAY, hire_date, termination_date) <= 90
+          AND (
+            most_recent_hire_date IS NULL OR most_recent_hire_date < termination_date
+          )
+          THEN employee_code
+          ELSE NULL
+        END
+      ) / nullIf(count(DISTINCT employee_code), 0),
+      2
+    ) AS "90-Day Attrition Pct"
   FROM dbpcm_warehouse.employee
-  WHERE NOT (hire_date IS NULL)
+  WHERE
+    NOT (
+      hire_date IS NULL
+    )
     AND toDate32(hire_date) > toDate32('1900-01-01')
     AND hire_date >= {window_start}
     AND hire_date < {window_end}
+  ORDER BY {order_by}
 slots:
 - name: window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
-slots_summary: window
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Hires In Window ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Hires In Window
+    direction: ASC
+  allowed_columns:
+  - Hires In Window
+  - Terms Within 90 Days
+  - 90-Day Attrition Pct
+slots_summary: window, order_by
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.hire_date

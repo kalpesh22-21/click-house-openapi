@@ -1,6 +1,6 @@
 id: bp-overtime-by-department
 intent: Earnings by department for a given pay period, filtered to a specific pay type (type_code) such as overtime
-slots_summary: department, pay_period, type_code, order_direction
+slots_summary: top_n, department, pay_period, type_code, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -14,20 +14,22 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.department.department_name
 slots:
-- name: order_direction
-  type: enum
+- name: top_n
+  type: positive_integer
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort by earnings; defaults to highest first.
+  min_value: 1
+  max_value: 1000
+  optional_pattern: 'TRUE'
+  description: Optional maximum number of output rows after aggregation and the declared ordering; omit for the
+    full result. Bind only when the user requests a limited list. Returns at most N rows; does not include all tied
+    ranks or change the measured population. Applies to the whole result, not per group.
 - name: department
   type: string
   required: true
   binds_to: dbpcm_warehouse.department.department_name
   description: Resolve department names/abbreviations against the directory; a known department may have no matching
     employees.
+  multiple: true
 - name: pay_period
   type: period
   temporal_type: date
@@ -37,23 +39,39 @@ slots:
   type: string
   required: true
   binds_to: dbpcm_warehouse.payroll.type_code
+  multiple: true
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Earnings DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Earnings
+    direction: DESC
+  allowed_columns:
+  - Department
+  - Earnings
 uses_rules:
 - gross_earnings
 result_grain:
 - Department
-sql_template: |
-  SELECT e.department_name AS "Department",
-         SUM(p.amount) AS "Earnings"
+sql_template: |+
+  SELECT
+    e.department_name AS "Department",
+    SUM(p.amount) AS "Earnings"
   FROM dbpcm_warehouse.payroll AS p
-  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
-  WHERE p.register_type = 'EARN'
-    AND p.type_code = {type_code}
-    AND e.department_name = {department}
+  JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = p.employee_code
+  WHERE
+    p.register_type = 'EARN'
+    AND p.type_code IN ({type_code})
+    AND e.department_name IN ({department})
     AND p.pay_period_end_date = {pay_period}
-  GROUP BY e.department_name
-  ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Earnings" END DESC NULLS LAST,
-           CASE WHEN {order_direction} = 'ASC' THEN "Earnings" END ASC NULLS LAST,
-           "Department" ASC
+  GROUP BY
+    e.department_name
+  ORDER BY {order_by}
+  LIMIT {top_n}
+
 column_formats:
   Department:
     kind: text

@@ -5,28 +5,68 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT multiIf(age < 25, 'Under 25', age < 35, '25-34', age < 45, '35-44', age < 55, '45-54', age < 65, '55-64', '65+') AS "Age Band",
-         count(DISTINCT employee_code) AS "Headcount",
-         round(avg(age), 1) AS "Avg Age In Band",
-         round((quantileExactLow(0.5)(toFloat64(age)) + quantileExactHigh(0.5)(toFloat64(age))) / 2, 1) AS "Median Age In Band"
-  FROM
-    (SELECT employee_code,
-            department_name,
-            date_diff('year', date_of_birth, now()) AS age
-     FROM dbpcm_warehouse.employee
-     WHERE employee_status = 'Active'
-       AND date_of_birth IS NOT NULL
-       AND toDate32(date_of_birth) > toDate32('1900-01-01')
-       AND department_name = {department})
-  GROUP BY "Age Band"
-  ORDER BY min(age) ASC
+  SELECT
+    multiIf(
+      age < 25,
+      'Under 25',
+      age < 35,
+      '25-34',
+      age < 45,
+      '35-44',
+      age < 55,
+      '45-54',
+      age < 65,
+      '55-64',
+      '65+'
+    ) AS "Age Band",
+    count(DISTINCT employee_code) AS "Headcount",
+    round(avg(age), 1) AS "Avg Age In Band",
+    round(
+      (
+        quantileExactLow(0.5)(toFloat64(age)) + quantileExactHigh(0.5)(toFloat64(age))
+      ) / 2,
+      1
+    ) AS "Median Age In Band",
+    MIN(age) AS "Band Start"
+  FROM (
+    SELECT
+      employee_code,
+      department_name,
+      DATE_DIFF(YEAR, date_of_birth, now()) AS age
+    FROM dbpcm_warehouse.employee
+    WHERE
+      employee_status = 'Active'
+      AND NOT (
+        date_of_birth IS NULL
+      )
+      AND toDate32(date_of_birth) > toDate32('1900-01-01')
+      AND department_name IN ({department})
+  )
+  GROUP BY
+    "Age Band"
+  ORDER BY {order_by}
 slots:
 - name: department
   type: string
   required: false
   binds_to: dbpcm_warehouse.employee.department_name
   optional_pattern: 'TRUE'
-slots_summary: department
+  multiple: true
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Band Start ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Band Start
+    direction: ASC
+  allowed_columns:
+  - Age Band
+  - Headcount
+  - Avg Age In Band
+  - Median Age In Band
+  - Band Start
+slots_summary: department, order_by
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.date_of_birth
@@ -45,6 +85,9 @@ column_formats:
     kind: number
     unit: years
     precision: 2
+  Band Start:
+    kind: number
+    unit: years
 presentation:
   kind: bars
   category_columns:

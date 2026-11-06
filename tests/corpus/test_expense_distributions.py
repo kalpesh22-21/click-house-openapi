@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from tests.corpus.native_sort import bind_sort
+
 BLUEPRINTS = Path(__file__).parents[2] / 'app/corpus/data/blueprints'
 ROWS = [
     # account code, account description, status, paid date, approved amount
@@ -32,7 +34,7 @@ class _Any:
 
 def _run(blueprint_id, replacements=(), **binds):
     blueprint = yaml.safe_load((BLUEPRINTS / f'{blueprint_id}.yaml').read_text())
-    sql = blueprint['sql_template']
+    sql = bind_sort(blueprint, direction=binds.get('order_direction'))
     for old, new in replacements:
         assert sql.count(old) == 1, old
         sql = sql.replace(old, new)
@@ -56,15 +58,15 @@ WINDOW = {'expense_window_start': "'2026-09-01'", 'expense_window_end': "'2026-0
 
 def test_line_size_distribution_is_one_row_per_labelled_band():
     # The omitted optional `account` slot: its optional_pattern replaces the whole predicate.
-    omitted = [('expense_account_description = {account}', 'TRUE')]
+    omitted = [('expense_account_description IN ({account})', 'TRUE')]
     blueprint, rows = _run('bp-expense-line-size-distribution', omitted, band='100', order_direction="'ASC'", **WINDOW)
     assert blueprint['result_grain'] == ['Amount Band']
-    assert rows == [('$0 to under $100', 2), ('$100 to under $200', 1), ('$200 to under $300', 1)]
+    assert rows == [('$0 to under $100', 2, 0), ('$100 to under $200', 1, 100), ('$200 to under $300', 1, 200)]
 
 
 def test_line_size_distribution_can_narrow_to_one_account():
     _, rows = _run('bp-expense-line-size-distribution', band='100', order_direction="'DESC'", account="'Travel'", **WINDOW)
-    assert rows == [('$200 to under $300', 1), ('$100 to under $200', 1)]
+    assert rows == [('$200 to under $300', 1, 200), ('$100 to under $200', 1, 100)]
 
 
 def test_category_distribution_covers_every_account_with_shares_of_the_total():
@@ -73,3 +75,13 @@ def test_category_distribution_covers_every_account_with_shares_of_the_total():
     # Spend and share skip an expense without an approved amount.
     assert rows == [('T1', 'Travel', 350.0, 76.92), ('M1', 'Meals', 104.99, 23.08)]
     assert math.isclose(sum(row[3] for row in rows), 100.0)
+
+
+def test_band_default_uses_numeric_amount_not_lexicographic_label(monkeypatch):
+    monkeypatch.setattr(__import__(__name__, fromlist=['ROWS']), 'ROWS', [
+        ('M1', 'Meals', 'Paid', '2026-09-05', amount)
+        for amount in (200, 1000, 100)
+    ])
+    _, rows = _run('bp-expense-line-size-distribution',
+                   [('expense_account_description IN ({account})', 'TRUE')], band='100', **WINDOW)
+    assert [row[2] for row in rows] == [100, 200, 1000]

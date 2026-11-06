@@ -1,42 +1,49 @@
 id: bp-expense-category-distribution
-intent: Distribution of approved expense spend across every expense account category for a payment date window, one row per account with approved spend and its share of total approved spend. Complete, not a top-N ranking.
+intent: Distribution of approved expense spend across every expense account category for a payment date window,
+  one row per account with approved spend and its share of total approved spend. Complete, not a top-N ranking.
 status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT expense_account_code AS "Account Code",
-         any(expense_account_description) AS "Account Description",
-         round(toFloat64(sum(amount_approved)), 2) AS "Approved Spend",
-         round(100.0 * toFloat64(sum(amount_approved)) / nullIf(toFloat64(sum(sum(amount_approved)) OVER ()), 0), 2) AS "Share Of Approved Spend Pct"
+  SELECT
+    expense_account_code AS "Account Code",
+    any(expense_account_description) AS "Account Description",
+    round(toFloat64(sum(amount_approved)), 2) AS "Approved Spend",
+    round(
+      100.0 * toFloat64(sum(amount_approved)) / nullIf(toFloat64(sum(sum(amount_approved)) OVER ()), 0),
+      2
+    ) AS "Share Of Approved Spend Pct"
   FROM dbpcm_warehouse.expense
-  WHERE expense_status IN ('Approved',
-                           'Paid',
-                           'Marked as Paid')
+  WHERE
+    expense_status IN ('Approved', 'Paid', 'Marked as Paid')
     AND expense_paid_date >= {expense_window_start}
     AND expense_paid_date < {expense_window_end}
-  GROUP BY expense_account_code
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Approved Spend"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Approved Spend"
-                     END ASC, "Account Code"
+  GROUP BY
+    expense_account_code
+  ORDER BY {order_by}
 slots:
 - name: expense_window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
-- name: order_direction
-  type: enum
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for approved spend. Defaults to DESC (largest category first).
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Approved Spend DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Approved Spend
+    direction: DESC
+  allowed_columns:
+  - Account Code
+  - Account Description
+  - Approved Spend
+  - Share Of Approved Spend Pct
 result_grain:
 - Account Code
-slots_summary: expense_window, order_direction
+slots_summary: expense_window, order_by
 uses:
 - dbpcm_warehouse.expense.amount_approved
 - dbpcm_warehouse.expense.expense_account_code

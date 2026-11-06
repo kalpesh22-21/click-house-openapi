@@ -3,47 +3,70 @@ intent: Average approved time-off hours per request day by leave type over a req
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT t.earn_description AS "Leave Type",
-         t.earn_code AS "Earn Code",
-         round(AVG(t.hours), 2) AS "Average Hours",
-         COUNT(*) AS "Request Days"
+sql_template: |+
+  SELECT
+    t.earn_description AS "Leave Type",
+    t.earn_code AS "Earn Code",
+    round(AVG(t.hours), 2) AS "Average Hours",
+    COUNT(*) AS "Request Days"
   FROM dbpcm_warehouse.time_off_request AS t
-  WHERE t.status = 'Approved'
-    AND t.event_type = {event_type}
-    AND t.hours IS NOT NULL
-    AND (toDate32(t.request_date) >= {window_start} AND toDate32(t.request_date) < {window_end})
-  GROUP BY t.earn_description,
-           t.earn_code
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Average Hours"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Average Hours"
-                     END ASC
+  WHERE
+    t.status = 'Approved'
+    AND t.event_type IN ({event_type})
+    AND NOT (
+      t.hours IS NULL
+    )
+    AND (
+      toDate32(t.request_date) >= {window_start}
+      AND toDate32(t.request_date) < {window_end}
+    )
+  GROUP BY
+    t.earn_description,
+    t.earn_code
+  ORDER BY {order_by}
+  LIMIT {top_n}
+
 slots:
+- name: top_n
+  type: positive_integer
+  required: false
+  min_value: 1
+  max_value: 1000
+  optional_pattern: 'TRUE'
+  description: Optional maximum number of output rows after aggregation and the declared ordering; omit for the
+    full result. Bind only when the user requests a limited list. Returns at most N rows; does not include all tied
+    ranks or change the measured population. Applies to the whole result, not per group.
 - name: window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
-- name: order_direction
-  type: enum
-  required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: event_type
   type: enum
   required: false
   enum_values:
   - Time Off Request
   - Payout Request
-  default: Time Off Request
+  default:
+  - Time Off Request
   description: Accrual event category to count. Defaults to Time Off Request; use Payout Request only when payouts
     are explicitly requested.
-slots_summary: window, order_direction, event_type
+  multiple: true
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Average Hours DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Average Hours
+    direction: DESC
+  allowed_columns:
+  - Leave Type
+  - Earn Code
+  - Average Hours
+  - Request Days
+slots_summary: top_n, window, event_type, order_by
 uses:
 - dbpcm_warehouse.time_off_request.hours
 - dbpcm_warehouse.time_off_request.earn_code

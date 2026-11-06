@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.corpus.native_sort import bind_sort
+
 CORPUS = Path(__file__).parents[2] / 'app/corpus/data/blueprints'
 BLUEPRINTS = [(p.name, yaml.safe_load(p.read_text())) for p in sorted(CORPUS.glob('*.yaml'))]
 RANGES = [(name, bp, slot) for name, bp in BLUEPRINTS for slot in bp.get('slots', [])
@@ -15,7 +17,7 @@ RANGES = [(name, bp, slot) for name, bp in BLUEPRINTS for slot in bp.get('slots'
 @pytest.mark.parametrize('name,bp,slot', RANGES, ids=[f'{name}:{slot["name"]}' for name, _, slot in RANGES])
 def test_period_range_template_and_description_share_half_open_contract(name, bp, slot):
     end = re.escape('{' + slot['name'] + '_end}')
-    sql = bp['sql_template']
+    sql = bind_sort(bp)
     assert 'start is inclusive and end is exclusive' in slot['description'].lower()
     assert not re.search(r'BETWEEN[^\n]*' + end, sql, re.IGNORECASE), name
     assert not re.search(r'<=\s*(?:toDate\()?'+end, sql), name
@@ -30,7 +32,7 @@ def test_period_range_template_and_description_share_half_open_contract(name, bp
 ])
 def test_timeoff_executes_full_last_day_but_not_next_day(start, last, end):
     bp = yaml.safe_load((CORPUS / 'bp-approved-timeoff-hours.yaml').read_text())
-    sql = bp['sql_template'].format(window_start=repr(start), window_end=repr(end),
+    sql = bind_sort(bp).format(top_n=1000, window_start=repr(start), window_end=repr(end),
                                     dept="'Sales'", order_direction="'DESC'")
     with sqlite3.connect(':memory:') as db:
         db.execute("ATTACH DATABASE ':memory:' AS dbpcm_warehouse")
@@ -50,7 +52,7 @@ def test_timeoff_executes_full_last_day_but_not_next_day(start, last, end):
 
 def test_expense_distribution_excludes_next_midnight():
     bp = yaml.safe_load((CORPUS / 'bp-expense-category-distribution.yaml').read_text())
-    sql = bp['sql_template'].format(expense_window_start="'2026-01-01'",
+    sql = bind_sort(bp).format(expense_window_start="'2026-01-01'",
                                     expense_window_end="'2026-04-01'", order_direction="'DESC'")
     class AnyValue:
         def step(self, value):

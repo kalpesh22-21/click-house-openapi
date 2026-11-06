@@ -1,14 +1,17 @@
 """Execute earnings templates with opposing payment/work dates and register types."""
 import sqlite3
 from pathlib import Path
+
 import yaml
+
+from tests.corpus.native_sort import bind_sort
 
 ROOT = Path(__file__).parents[2] / 'app/corpus/data/blueprints'
 
 
 def test_default_gross_uses_payment_year_without_status_or_timecard_substitution():
     bp = yaml.safe_load((ROOT / 'bp-gross-earnings-summary.yaml').read_text())
-    sql = bp['sql_template'].replace('{period_start}', "'2026-01-01'").replace('{period_end}', "'2027-01-01'")
+    sql = bind_sort(bp).replace('{period_start}', "'2026-01-01'").replace('{period_end}', "'2027-01-01'")
     with sqlite3.connect(':memory:') as db:
         db.execute("ATTACH DATABASE ':memory:' AS dbpcm_warehouse")
         db.create_function('toDate', 1, lambda value: value[:10])
@@ -22,7 +25,7 @@ def test_default_gross_uses_payment_year_without_status_or_timecard_substitution
         ])
         assert db.execute(sql).fetchone()[0] == 120
         explicit = yaml.safe_load((ROOT / 'bp-gross-earnings-for-pay-period.yaml').read_text())
-        assert db.execute(explicit['sql_template'].replace('{period}', "'2026-12-28'")).fetchone()[0] == 200
+        assert db.execute(bind_sort(explicit).replace('{period}', "'2026-12-28'")).fetchone()[0] == 200
         assert explicit['slots'][0]['required'] is True
 
 
@@ -32,7 +35,7 @@ def test_timecard_grouping_uses_searched_case_and_leaves_dedup_to_mcp():
     import sqlglot
     from sqlglot import exp
     bp = yaml.safe_load((ROOT / 'bp-timecard-earnings-summary.yaml').read_text())
-    sql = bp['sql_template']
+    sql = bind_sort(bp)
     import re
     sql = re.sub(r'\{[a-z_]+\}', "'day'", sql)
     tree = sqlglot.parse_one(sql, dialect='clickhouse')

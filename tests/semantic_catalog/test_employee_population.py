@@ -3,8 +3,10 @@ import sqlite3
 from pathlib import Path
 
 import yaml
+from sqlglot import exp
 
 from app.semantic_catalog.loader import load_semantic_catalog
+from tools.format_blueprints import parse
 
 
 def test_active_and_current_populations_with_leave_and_terminated_employees():
@@ -15,14 +17,20 @@ def test_active_and_current_populations_with_leave_and_terminated_employees():
     ).read_text())
     status_slot = next(s for s in blueprint["slots"] if s["name"] == "employee_status")
     assert "Active" in status_slot["enum_values"]
-    assert status_slot["optional_pattern"] == rules["default_employee_population"]["predicate"]
+    assert status_slot["multiple"] is True
+    assert status_slot["default"] == ["Active", "On Leave"]
+    assert "optional_pattern" not in status_slot
     assert "active employees" in rules["active_employee"]["applies_when"]
     assert "current employees" in rules["default_employee_population"]["applies_when"]
 
     # Exercise the actual blueprint status predicate, not a copied implementation.
     sql = blueprint["sql_template"]
-    explicit_predicate = sql.split("WHERE (", 1)[1].split(")\n", 1)[0]
-    explicit_predicate = explicit_predicate.replace("{employee_status}", ":status")
+    predicate = next(node for node in parse(sql).find_all(exp.Or)
+                     if any(p.name == "employee_status" for p in node.find_all(exp.Placeholder)))
+    for placeholder in predicate.find_all(exp.Placeholder):
+        if placeholder.name == "employee_status":
+            placeholder.set("this", "status")
+    explicit_predicate = predicate.sql(dialect="sqlite")
     with sqlite3.connect(":memory:") as db:
         db.execute("CREATE TABLE employee(employee_status TEXT)")
         db.executemany("INSERT INTO employee VALUES (?)", [
@@ -33,5 +41,5 @@ def test_active_and_current_populations_with_leave_and_terminated_employees():
 
         assert count(rules["active_employee"]["predicate"]) == 2
         assert count(explicit_predicate, {"status": "Active"}) == 2
-        assert count(status_slot["optional_pattern"]) == 3
+        assert count(rules["default_employee_population"]["predicate"]) == 3
         assert count(explicit_predicate, {"status": "All"}) == 4

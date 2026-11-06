@@ -1,7 +1,7 @@
 id: bp-hires-per-month
 intent: New hires per month over a trailing window of the last N months — counts by original hire date; rehires
   are not re-counted
-slots_summary: window_months
+slots_summary: window_months, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -15,21 +15,41 @@ slots:
   required: true
   min_value: 1
   max_value: 36
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Month ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Month
+    direction: ASC
+  allowed_columns:
+  - Month
+  - Hires
 result_grain:
 - Month
 window_anchor: data
 sql_template: |
-  SELECT toStartOfMonth(hire_date) AS "Month",
-         COUNT(DISTINCT employee_code) AS "Hires"
+  SELECT
+    dateTrunc('MONTH', hire_date) AS "Month",
+    COUNT(DISTINCT employee_code) AS "Hires"
   FROM dbpcm_warehouse.employee
-  WHERE hire_date >=
-      (SELECT toStartOfMonth(max(hire_date))
-       FROM dbpcm_warehouse.employee
-       WHERE employee_status != 'N'
-         OR employee_status IS NULL) - INTERVAL {window_months} MONTH
-    AND (employee_status != 'N'
-         OR employee_status IS NULL)
-  GROUP BY toStartOfMonth(hire_date)
+  WHERE
+    hire_date >= (
+      SELECT
+        dateTrunc('MONTH', max(hire_date))
+      FROM dbpcm_warehouse.employee
+      WHERE
+        employee_status <> 'N' OR employee_status IS NULL
+    ) - INTERVAL (
+      {window_months}
+    ) MONTH
+    AND (
+      employee_status <> 'N' OR employee_status IS NULL
+    )
+  GROUP BY
+    dateTrunc('MONTH', hire_date)
+  ORDER BY {order_by}
 column_formats:
   Month:
     kind: date

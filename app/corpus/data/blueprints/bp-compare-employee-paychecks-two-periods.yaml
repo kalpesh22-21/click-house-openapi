@@ -5,25 +5,34 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT toString(register_type) AS "Pay Category",
-         toString(type_code) AS "Pay Code",
-         any(toString(type_code_description)) AS "Description",
-         round(toFloat64(sumIf(amount, pay_period_end_date = {period_b})), 2) AS "Recent Amount",
-         round(toFloat64(sumIf(type_hours, pay_period_end_date = {period_b})), 2) AS "Recent Hours",
-         round(toFloat64(sumIf(amount, pay_period_end_date = {period_a})), 2) AS "Prior Amount",
-         round(toFloat64(sumIf(type_hours, pay_period_end_date = {period_a})), 2) AS "Prior Hours",
-         round(toFloat64(sumIf(amount, pay_period_end_date = {period_b}) - sumIf(amount, pay_period_end_date = {period_a})), 2) AS "Amount Change",
-         round(toFloat64(sumIf(type_hours, pay_period_end_date = {period_b}) - sumIf(type_hours, pay_period_end_date = {period_a})), 2) AS "Hours Change"
+  SELECT
+    toString(register_type) AS "Pay Category",
+    toString(type_code) AS "Pay Code",
+    any(toString(type_code_description)) AS "Description",
+    round(toFloat64(sumIf(amount, pay_period_end_date = {period_b})), 2) AS "Recent Amount",
+    round(toFloat64(sumIf(type_hours, pay_period_end_date = {period_b})), 2) AS "Recent Hours",
+    round(toFloat64(sumIf(amount, pay_period_end_date = {period_a})), 2) AS "Prior Amount",
+    round(toFloat64(sumIf(type_hours, pay_period_end_date = {period_a})), 2) AS "Prior Hours",
+    round(
+      toFloat64(
+        sumIf(amount, pay_period_end_date = {period_b}) - sumIf(amount, pay_period_end_date = {period_a})
+      ),
+      2
+    ) AS "Amount Change",
+    round(
+      toFloat64(
+        sumIf(type_hours, pay_period_end_date = {period_b}) - sumIf(type_hours, pay_period_end_date = {period_a})
+      ),
+      2
+    ) AS "Hours Change"
   FROM dbpcm_warehouse.payroll
-  WHERE employee_code = {employee}
+  WHERE
+    employee_code = {employee}
     AND pay_period_end_date IN ({period_a}, {period_b})
-  GROUP BY register_type,
-           type_code
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN toString(register_type)
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN toString(register_type)
-                     END ASC, toString(type_code)
+  GROUP BY
+    register_type,
+    type_code
+  ORDER BY {order_by}
 slots:
 - name: employee
   type: string
@@ -39,15 +48,25 @@ slots:
   required: true
   binds_to: dbpcm_warehouse.payroll.pay_period_end_date
   temporal_type: date
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
-slots_summary: employee, period_a, period_b, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Pay Category ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Pay Category
+    direction: ASC
+  allowed_columns:
+  - Pay Category
+  - Pay Code
+  - Description
+  - Recent Amount
+  - Recent Hours
+  - Prior Amount
+  - Prior Hours
+  - Amount Change
+  - Hours Change
+slots_summary: employee, period_a, period_b, order_by
 uses:
 - dbpcm_warehouse.payroll.employee_code
 - dbpcm_warehouse.payroll.pay_period_end_date

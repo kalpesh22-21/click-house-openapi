@@ -3,7 +3,7 @@ intent: Average annual compensation by pay type, filtered by employee status. Sa
   uses hourly_salary and estimated annual compensation = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes
   overtime). Keep pay types separate. Defaults to Active + On Leave; employee_status overrides or All removes the
   filter.
-slots_summary: employee_status
+slots_summary: employee_status, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -14,7 +14,8 @@ uses:
 - dbpcm_warehouse.employee.hourly_salary
 slots:
 - name: employee_status
-  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
+  description: Defaults to Active and On Leave. Omit this slot or send [Active, On Leave] for both; send a list
+    of specific statuses to select another population. All removes the status filter and must be supplied alone.
   type: enum
   binds_to: dbpcm_warehouse.employee.employee_status
   required: false
@@ -29,27 +30,53 @@ slots:
   - Prehire
   - Unknown
   - All
-  optional_pattern: employee_status IN ('Active', 'On Leave')
+  multiple: true
+  default:
+  - Active
+  - On Leave
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Pay Type ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Pay Type
+    direction: ASC
+  allowed_columns:
+  - Pay Type
+  - Compensation Basis
+  - Average Annual Compensation
+  - Average Hourly Rate
 sql_template: |
-  SELECT pay_type AS `Pay Type`,
-         CASE
-             WHEN pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
-             WHEN pay_type = 'Salary' THEN 'Recorded annual salary'
-             ELSE 'Unknown compensation basis'
-         END AS `Compensation Basis`,
-         avg(CASE
-                 WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary
-                 WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary * 2080
-                 ELSE NULL
-             END) AS `Average Annual Compensation`,
-         avg(CASE
-                 WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary
-                 ELSE NULL
-             END) AS `Average Hourly Rate`
+  SELECT
+    pay_type AS "Pay Type",
+    CASE
+      WHEN pay_type = 'Hourly'
+      THEN 'Estimated annual compensation (2080 hours)'
+      WHEN pay_type = 'Salary'
+      THEN 'Recorded annual salary'
+      ELSE 'Unknown compensation basis'
+    END AS "Compensation Basis",
+    avg(
+      CASE
+        WHEN pay_type = 'Salary' AND annual_salary > 0
+        THEN annual_salary
+        WHEN pay_type = 'Hourly' AND hourly_salary > 0
+        THEN hourly_salary * 2080
+        ELSE NULL
+      END
+    ) AS "Average Annual Compensation",
+    avg(
+      CASE WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary ELSE NULL END
+    ) AS "Average Hourly Rate"
   FROM dbpcm_warehouse.employee
-  WHERE (employee_status = {employee_status}
-         OR {employee_status} = 'All')
-  GROUP BY pay_type
+  WHERE
+    (
+      employee_status IN ({employee_status}) OR 'All' IN ({employee_status})
+    )
+  GROUP BY
+    pay_type
+  ORDER BY {order_by}
 result_grain:
 - Pay Type
 uses_rules:

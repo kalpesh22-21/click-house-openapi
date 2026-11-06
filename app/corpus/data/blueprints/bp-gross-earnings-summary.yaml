@@ -1,24 +1,37 @@
 id: bp-gross-earnings-summary
-intent: Gross earnings for a year, month or date range from payroll register EARN lines, by payment date.
-  Default for unqualified gross earnings; includes payments for earlier work periods and all authorized
-  employee statuses. Not timecard or in-progress earnings. Explicit pay-period coverage uses the
-  pay-period earnings blueprint instead
+intent: Gross earnings for a year, month or date range from payroll register EARN lines, by payment date. Default
+  for unqualified gross earnings; includes payments for earlier work periods and all authorized employee statuses.
+  Not timecard or in-progress earnings. Explicit pay-period coverage uses the pay-period earnings blueprint instead
 status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT round(SUM(amount), 2) AS "Total Gross Earnings"
+  SELECT
+    round(SUM(amount), 2) AS "Total Gross Earnings"
   FROM dbpcm_warehouse.payroll
-  WHERE register_type = 'EARN'
+  WHERE
+    register_type = 'EARN'
     AND toDate(pay_date) >= toDate({period_start})
     AND toDate(pay_date) < toDate({period_end})
+  ORDER BY {order_by}
 slots:
 - name: period
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
-slots_summary: period
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Total Gross Earnings ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Total Gross Earnings
+    direction: ASC
+  allowed_columns:
+  - Total Gross Earnings
+slots_summary: period, order_by
 uses:
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.register_type

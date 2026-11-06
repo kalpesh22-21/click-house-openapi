@@ -4,23 +4,37 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT round(toFloat64(SUM(amount_approved)), 2) AS "Approved Amount",
-         round(toFloat64(SUM(approved_miles)), 2) AS "Approved Miles",
-         round(toFloat64(SUM(submitted_miles)), 2) AS "Submitted Miles"
+  SELECT
+    round(toFloat64(SUM(amount_approved)), 2) AS "Approved Amount",
+    round(toFloat64(SUM(approved_miles)), 2) AS "Approved Miles",
+    round(toFloat64(SUM(submitted_miles)), 2) AS "Submitted Miles"
   FROM dbpcm_warehouse.expense
-  WHERE (submitted_miles > 0
-         OR approved_miles > 0)
-    AND expense_status IN ('Approved',
-                           'Paid',
-                           'Marked as Paid')
+  WHERE
+    (
+      submitted_miles > 0 OR approved_miles > 0
+    )
+    AND expense_status IN ('Approved', 'Paid', 'Marked as Paid')
     AND expense_paid_date = {period}
+  ORDER BY {order_by}
 slots:
 - name: period
   type: period
   required: true
   binds_to: dbpcm_warehouse.expense.expense_paid_date
   temporal_type: date
-slots_summary: period
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Approved Amount ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Approved Amount
+    direction: ASC
+  allowed_columns:
+  - Approved Amount
+  - Approved Miles
+  - Submitted Miles
+slots_summary: period, order_by
 uses:
 - dbpcm_warehouse.expense.approved_miles
 - dbpcm_warehouse.expense.submitted_miles

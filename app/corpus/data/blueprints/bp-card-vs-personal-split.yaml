@@ -4,36 +4,35 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT expense_type AS "Expense Type",
-         round(toFloat64(SUM(amount_approved)), 2) AS "Approved Amount"
+  SELECT
+    expense_type AS "Expense Type",
+    round(toFloat64(SUM(amount_approved)), 2) AS "Approved Amount"
   FROM dbpcm_warehouse.expense
-  WHERE expense_type IN ('Personal',
-                         'Corporate Card')
-    AND expense_status IN ('Approved',
-                           'Paid',
-                           'Marked as Paid')
+  WHERE
+    expense_type IN ('Personal', 'Corporate Card')
+    AND expense_status IN ('Approved', 'Paid', 'Marked as Paid')
     AND expense_paid_date = {period}
-  GROUP BY expense_type
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Approved Amount"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Approved Amount"
-                     END ASC
+  GROUP BY
+    expense_type
+  ORDER BY {order_by}
 slots:
 - name: period
   type: period
   required: true
   binds_to: dbpcm_warehouse.expense.expense_paid_date
   temporal_type: date
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: period, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Approved Amount DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Approved Amount
+    direction: DESC
+  allowed_columns:
+  - Expense Type
+  - Approved Amount
+slots_summary: period, order_by
 uses:
 - dbpcm_warehouse.expense.expense_type
 - dbpcm_warehouse.expense.amount_approved

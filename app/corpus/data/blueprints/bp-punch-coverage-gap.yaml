@@ -5,21 +5,44 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT count(DISTINCT e.employee_code) AS "Active Employees",
-         count(DISTINCT pp.employee_code) AS "Employees With Punches",
-         count(DISTINCT e.employee_code) - count(DISTINCT pp.employee_code) AS "Employees Without Punches",
-         round(100.0 * count(DISTINCT pp.employee_code) / nullIf(count(DISTINCT e.employee_code), 0), 2) AS "Coverage Pct"
-  FROM dbpcm_warehouse.employee e
-  LEFT JOIN
-    (SELECT DISTINCT employee_code
-     FROM dbpcm_warehouse.punch_pair
-     WHERE punch_date >= today() - {win}) pp ON pp.employee_code = e.employee_code
-  WHERE e.employee_status = 'Active'
+  SELECT
+    count(DISTINCT e.employee_code) AS "Active Employees",
+    count(DISTINCT pp.employee_code) AS "Employees With Punches",
+    count(DISTINCT e.employee_code) - count(DISTINCT pp.employee_code) AS "Employees Without Punches",
+    round(
+      100.0 * count(DISTINCT pp.employee_code) / nullIf(count(DISTINCT e.employee_code), 0),
+      2
+    ) AS "Coverage Pct"
+  FROM dbpcm_warehouse.employee AS e
+  LEFT JOIN (
+    SELECT DISTINCT
+      employee_code
+    FROM dbpcm_warehouse.punch_pair
+    WHERE
+      punch_date >= today() - {win}
+  ) AS pp
+    ON pp.employee_code = e.employee_code
+  WHERE
+    e.employee_status = 'Active'
+  ORDER BY {order_by}
 slots:
 - name: win
   type: relative_window
   required: true
-slots_summary: win
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Active Employees ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Active Employees
+    direction: ASC
+  allowed_columns:
+  - Active Employees
+  - Employees With Punches
+  - Employees Without Punches
+  - Coverage Pct
+slots_summary: win, order_by
 uses:
 - dbpcm_warehouse.punch_pair.employee_code
 - dbpcm_warehouse.punch_pair.punch_date

@@ -2,7 +2,7 @@ id: bp-departments-above-company-average-salary
 intent: Departments above the corresponding company average, separately for Salary annual salaries and Hourly annual
   estimates (hourly rate * 2080, 40 hours/week, 52 weeks/year). Defaults to Active + On Leave; employee_status overrides
   or All removes the filter.
-slots_summary: employee_status
+slots_summary: employee_status, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -31,8 +31,8 @@ composes:
                    ELSE NULL
                END) AS company_hourly_avg
     FROM dbpcm_warehouse.employee
-    WHERE (employee_status = {employee_status}
-           OR {employee_status} = 'All')
+    WHERE (employee_status IN ({employee_status})
+           OR 'All' IN ({employee_status}))
 - order: 1
   feeds_from:
   - 0
@@ -41,38 +41,55 @@ composes:
     company_hourly_avg: $0.company_hourly_avg
   output: {}
   sql_template: |
-    SELECT department_name AS `Department`,
-           pay_type AS `Pay Type`,
-           CASE
-               WHEN pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
-               ELSE 'Recorded annual salary'
-           END AS `Compensation Basis`,
-           avg(CASE
-                   WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary
-                   WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary * 2080
-                   ELSE NULL
-               END) AS `Department Average Annual Compensation`,
-           avg(CASE
-                   WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary
-                   ELSE NULL
-               END) AS `Average Hourly Rate`
+    SELECT
+      department_name AS "Department",
+      pay_type AS "Pay Type",
+      CASE
+        WHEN pay_type = 'Hourly'
+        THEN 'Estimated annual compensation (2080 hours)'
+        ELSE 'Recorded annual salary'
+      END AS "Compensation Basis",
+      avg(
+        CASE
+          WHEN pay_type = 'Salary' AND annual_salary > 0
+          THEN annual_salary
+          WHEN pay_type = 'Hourly' AND hourly_salary > 0
+          THEN hourly_salary * 2080
+          ELSE NULL
+        END
+      ) AS "Department Average Annual Compensation",
+      avg(
+        CASE WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary ELSE NULL END
+      ) AS "Average Hourly Rate"
     FROM dbpcm_warehouse.employee
-    WHERE (employee_status = {employee_status}
-           OR {employee_status} = 'All')
-    GROUP BY department_name,
-             pay_type
-    HAVING avg(CASE
-                   WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary
-                   WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary * 2080
-                   ELSE NULL
-               END) > CASE
-                          WHEN pay_type = 'Salary' THEN {company_salary_avg}
-                          WHEN pay_type = 'Hourly' THEN {company_hourly_avg}
-                          ELSE NULL
-                      END
+    WHERE
+      (
+        employee_status IN ({employee_status}) OR 'All' IN ({employee_status})
+      )
+    GROUP BY
+      department_name,
+      pay_type
+    HAVING
+      avg(
+        CASE
+          WHEN pay_type = 'Salary' AND annual_salary > 0
+          THEN annual_salary
+          WHEN pay_type = 'Hourly' AND hourly_salary > 0
+          THEN hourly_salary * 2080
+          ELSE NULL
+        END
+      ) > CASE
+        WHEN pay_type = 'Salary'
+        THEN {company_salary_avg}
+        WHEN pay_type = 'Hourly'
+        THEN {company_hourly_avg}
+        ELSE NULL
+      END
+    ORDER BY {order_by}
 slots:
 - name: employee_status
-  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
+  description: Defaults to Active and On Leave. Omit this slot or send [Active, On Leave] for both; send a list
+    of specific statuses to select another population. All removes the status filter and must be supplied alone.
   type: enum
   binds_to: dbpcm_warehouse.employee.employee_status
   required: false
@@ -87,7 +104,25 @@ slots:
   - Prehire
   - Unknown
   - All
-  optional_pattern: employee_status IN ('Active', 'On Leave')
+  multiple: true
+  default:
+  - Active
+  - On Leave
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Department Average Annual Compensation DESC. Applies before LIMIT; no implicit secondary
+    sort.
+  default:
+  - column: Department Average Annual Compensation
+    direction: DESC
+  allowed_columns:
+  - Department
+  - Pay Type
+  - Compensation Basis
+  - Department Average Annual Compensation
+  - Average Hourly Rate
 uses_rules:
 - compensation_by_pay_type
 column_formats:

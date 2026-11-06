@@ -5,51 +5,82 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  WITH monthly AS
-    (SELECT toStartOfMonth(te.punch_date) AS month,
-            ifNull(ec.category_name, 'Uncategorized') AS category,
-            SUM(te.earn_amount) AS dollars
-     FROM
-       (SELECT punch_date,
-               earn_code,
-               earn_amount
-        FROM dbpcm_warehouse.total_earning) AS te
-     LEFT JOIN
-       (SELECT earn_code,
-               category_name
-        FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
-     WHERE te.punch_date >= addMonths(
-                                        (SELECT CASE
-                                                    WHEN count() = 0 THEN NULL
-                                                    ELSE max(punch_date)
-                                                END
-                                         FROM dbpcm_warehouse.total_earning), -2)
-     GROUP BY toStartOfMonth(te.punch_date),
-              ifNull(ec.category_name, 'Uncategorized'))
-  SELECT curr.category AS "Category",
-         round(curr.dollars, 2) AS "Current Month Dollars",
-         round(prior.dollars, 2) AS "Prior Month Dollars",
-         round((curr.dollars - prior.dollars), 2) AS "Dollar Change",
-         round((curr.dollars - prior.dollars) * 100.0 / nullIf(prior.dollars, 0), 2) AS "Pct Change"
+  WITH monthly AS (
+    SELECT
+      addDays(te.punch_date, 1 - toDayOfMonth(te.punch_date)) AS month,
+      ifNull(ec.category_name, 'Uncategorized') AS category,
+      SUM(te.earn_amount) AS dollars
+    FROM (
+      SELECT
+        punch_date,
+        earn_code,
+        earn_amount
+      FROM dbpcm_warehouse.total_earning
+    ) AS te
+    LEFT JOIN (
+      SELECT
+        earn_code,
+        category_name
+      FROM dbpcm_warehouse.earning_category
+    ) AS ec
+      ON ec.earn_code = te.earn_code
+    WHERE
+      te.punch_date >= addMonths(
+        (
+          SELECT
+            CASE WHEN count() = 0 THEN NULL ELSE max(punch_date) END
+          FROM dbpcm_warehouse.total_earning
+        ),
+        -2
+      )
+    GROUP BY
+      addDays(te.punch_date, 1 - toDayOfMonth(te.punch_date)),
+      ifNull(ec.category_name, 'Uncategorized')
+  )
+  SELECT
+    curr.category AS "Category",
+    round(curr.dollars, 2) AS "Current Month Dollars",
+    round(prior.dollars, 2) AS "Prior Month Dollars",
+    round((
+      curr.dollars - prior.dollars
+    ), 2) AS "Dollar Change",
+    round((
+      curr.dollars - prior.dollars
+    ) * 100.0 / nullIf(prior.dollars, 0), 2) AS "Pct Change",
+    ABS(round((
+      curr.dollars - prior.dollars
+    ) * 100.0 / nullIf(prior.dollars, 0), 2)) AS "Absolute Pct Change"
   FROM monthly AS curr
-  JOIN monthly AS
-  prior ON curr.category = prior.category
-  AND prior.month = date_add(month, -1, curr.month)
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN abs(round((curr.dollars - prior.dollars) * 100.0 / nullIf(prior.dollars, 0), 2))
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN abs(round((curr.dollars - prior.dollars) * 100.0 / nullIf(prior.dollars, 0), 2))
-                     END ASC, "Category"
+  JOIN monthly AS prior
+    ON curr.category = prior.category AND prior.month = DATE_ADD(MONTH, -1, curr.month)
+  ORDER BY {order_by}
+  LIMIT {top_n}
 slots:
-- name: order_direction
-  type: enum
+- name: top_n
+  type: positive_integer
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: order_direction
+  min_value: 1
+  max_value: 1000
+  optional_pattern: 'TRUE'
+  description: Optional maximum number of output rows after aggregation and the declared ordering; omit for the
+    full result. Bind only when the user requests a limited list. Returns at most N rows; does not include all tied
+    ranks or change the measured population. Applies to the whole result, not per group.
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Absolute Pct Change DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Absolute Pct Change
+    direction: DESC
+  allowed_columns:
+  - Category
+  - Current Month Dollars
+  - Prior Month Dollars
+  - Dollar Change
+  - Pct Change
+  - Absolute Pct Change
+slots_summary: top_n, order_by
 uses:
 - dbpcm_warehouse.total_earning.earn_amount
 - dbpcm_warehouse.total_earning.punch_date
@@ -72,6 +103,8 @@ column_formats:
     kind: percent
     scale: percent
     precision: 2
+  Absolute Pct Change:
+    kind: number
 presentation:
   kind: bars
   category_columns:

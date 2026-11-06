@@ -4,19 +4,19 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  -- Output aliases are Title-Case display names; consumers keying on column names
-  -- must use the quoted aliases.
-
-  SELECT changed_field AS "Changed Field",
-         count() AS "Change Events"
+  /* Output aliases are Title-Case display names; consumers keying on column names */
+  /* must use the quoted aliases. */
+  SELECT
+    changed_field AS "Changed Field",
+    count() AS "Change Events"
   FROM dbpcm_warehouse.employee_change
-  WHERE change_time_added >= addMonths(today(), -{win})
-  GROUP BY changed_field
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Change Events"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Change Events"
-                     END ASC, "Changed Field"
+  WHERE
+    change_time_added >= addMonths(today(), -{win})
+  GROUP BY
+    changed_field
+  ORDER BY
+    "Change Events" DESC,
+    "Changed Field"
   LIMIT {max_rows}
 slots:
 - name: win
@@ -25,15 +25,9 @@ slots:
 - name: max_rows
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
-  required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: win, max_rows, order_direction
+  description: This blueprint has a fixed ranking defined by its purpose; this slot only limits that ranking. It
+    does not accept order_by or order_direction. A different selection or display order requires a separate query.
+slots_summary: win, max_rows
 uses:
 - dbpcm_warehouse.employee_change.changed_field
 - dbpcm_warehouse.employee_change.change_time_added

@@ -3,36 +3,54 @@ intent: Active headcount per works-in state with a lives-elsewhere breakdown
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT works_in_state AS "Works In State",
-         count(DISTINCT employee_code) AS "Headcount",
-         countIf(lives_in_state IS NOT NULL
-                 AND lives_in_state != ''
-                 AND lives_in_state != works_in_state) AS "Lives Elsewhere"
+sql_template: |+
+  SELECT
+    works_in_state AS "Works In State",
+    count(DISTINCT employee_code) AS "Headcount",
+    countIf(
+      NOT (
+        lives_in_state IS NULL
+      )
+      AND lives_in_state <> ''
+      AND lives_in_state <> works_in_state
+    ) AS "Lives Elsewhere"
   FROM dbpcm_warehouse.employee
-  WHERE employee_status = 'Active'
-    AND works_in_state = {work_state}
-  GROUP BY works_in_state
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Headcount"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Headcount"
-                     END ASC
+  WHERE
+    employee_status = 'Active' AND works_in_state IN ({work_state})
+  GROUP BY
+    works_in_state
+  ORDER BY {order_by}
+  LIMIT {top_n}
+
 slots:
+- name: top_n
+  type: positive_integer
+  required: false
+  min_value: 1
+  max_value: 1000
+  optional_pattern: 'TRUE'
+  description: Optional maximum number of output rows after aggregation and the declared ordering; omit for the
+    full result. Bind only when the user requests a limited list. Returns at most N rows; does not include all tied
+    ranks or change the measured population. Applies to the whole result, not per group.
 - name: work_state
   type: string
   required: false
   binds_to: dbpcm_warehouse.employee.works_in_state
   optional_pattern: 'TRUE'
-- name: order_direction
-  type: enum
+  multiple: true
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: work_state, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Headcount DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Headcount
+    direction: DESC
+  allowed_columns:
+  - Works In State
+  - Headcount
+  - Lives Elsewhere
+slots_summary: top_n, work_state, order_by
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.works_in_state

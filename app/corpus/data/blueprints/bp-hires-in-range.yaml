@@ -1,7 +1,7 @@
 id: bp-hires-in-range
 intent: New hires per month within an explicit start/end date range — counts by original hire date; rehires are
   not re-counted
-slots_summary: hire_window
+slots_summary: hire_window, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -14,19 +14,36 @@ slots:
   type: period_range
   temporal_type: date
   required: true
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Month ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Month
+    direction: ASC
+  allowed_columns:
+  - Month
+  - Hires
 result_grain:
 - Month
 window_anchor: calendar
 sql_template: |
-  SELECT toStartOfMonth(hire_date) AS "Month",
-         COUNT(DISTINCT employee_code) AS "Hires"
+  SELECT
+    dateTrunc('MONTH', hire_date) AS "Month",
+    COUNT(DISTINCT employee_code) AS "Hires"
   FROM dbpcm_warehouse.employee
-  WHERE hire_date >= {hire_window_start}
+  WHERE
+    hire_date >= {hire_window_start}
     AND hire_date < {hire_window_end}
-    AND (employee_status != 'Not Hired'
-         OR employee_status IS NULL)
-  GROUP BY toStartOfMonth(hire_date)
+    AND (
+      employee_status <> 'Not Hired' OR employee_status IS NULL
+    )
+  GROUP BY
+    dateTrunc('MONTH', hire_date)
+  ORDER BY {order_by}
 column_formats:
   Month:
     kind: date

@@ -4,10 +4,13 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT count() AS "Pay Items",
-         uniqExact(employee_code, pay_period_end_date) AS "Distinct Checks"
+  SELECT
+    count() AS "Pay Items",
+    uniqExact(employee_code, pay_period_end_date) AS "Distinct Checks"
   FROM dbpcm_warehouse.payroll
-  WHERE pay_period_end_date = {period}
+  WHERE
+    pay_period_end_date = {period}
+  ORDER BY {order_by}
 slots:
 - name: period
   type: period
@@ -15,7 +18,18 @@ slots:
   binds_to: dbpcm_warehouse.payroll.pay_period_end_date
   temporal_type: date
   optional_pattern: 'TRUE'
-slots_summary: period
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Pay Items ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Pay Items
+    direction: ASC
+  allowed_columns:
+  - Pay Items
+  - Distinct Checks
+slots_summary: period, order_by
 uses:
 - dbpcm_warehouse.payroll.register_type
 - dbpcm_warehouse.payroll.employee_code

@@ -5,32 +5,53 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT round(SUM(te.earn_amount), 2) AS `Total Earnings`,
-         round(SUM(te.earn_hours), 2) AS `Total Hours`
-  FROM
-    (SELECT punch_date,
-            earn_amount,
-            earn_hours,
-            earn_code
-     FROM dbpcm_warehouse.total_earning) AS te
-  JOIN
-    (SELECT earn_code,
-            category_name
-     FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
-  WHERE ec.category_name = {concept}
+  SELECT
+    round(SUM(te.earn_amount), 2) AS "Total Earnings",
+    round(SUM(te.earn_hours), 2) AS "Total Hours"
+  FROM (
+    SELECT
+      punch_date,
+      earn_amount,
+      earn_hours,
+      earn_code
+    FROM dbpcm_warehouse.total_earning
+  ) AS te
+  JOIN (
+    SELECT
+      earn_code,
+      category_name
+    FROM dbpcm_warehouse.earning_category
+  ) AS ec
+    ON ec.earn_code = te.earn_code
+  WHERE
+    ec.category_name IN ({concept})
     AND te.punch_date >= toDate({period_start})
     AND te.punch_date < toDate({period_end})
+  ORDER BY {order_by}
 slots:
 - name: concept
   type: string
   required: true
   binds_to: dbpcm_warehouse.earning_category.category_name
+  multiple: true
 - name: period
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
-slots_summary: concept, period
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Total Earnings ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Total Earnings
+    direction: ASC
+  allowed_columns:
+  - Total Earnings
+  - Total Hours
+slots_summary: concept, period, order_by
 uses:
 - dbpcm_warehouse.total_earning.earn_amount
 - dbpcm_warehouse.total_earning.earn_hours

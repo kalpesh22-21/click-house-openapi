@@ -1,6 +1,6 @@
 id: bp-earnings-by-department-via-scratch-join
 intent: Total earnings by department, materializing per-employee earnings and joining departments
-slots_summary: department, order_direction
+slots_summary: department, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -12,20 +12,24 @@ uses:
 - dbpcm_warehouse.employee.department_name
 - dbpcm_warehouse.department.department_name
 slots:
-- name: order_direction
-  type: enum
-  required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort by total earnings; defaults to highest first.
 - name: department
   type: string
   required: true
   binds_to: dbpcm_warehouse.department.department_name
   description: Resolve department names/abbreviations against the directory; a known department may have no matching
     employees.
+  multiple: true
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Total Earnings DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Total Earnings
+    direction: DESC
+  allowed_columns:
+  - Department
+  - Total Earnings
 result_grain:
 - Department
 composes:
@@ -45,15 +49,17 @@ composes:
     emp_earnings: $0
   output: {}
   sql_template: |
-    SELECT e.department_name AS "Department",
-           SUM(x.earnings) AS "Total Earnings"
+    SELECT
+      e.department_name AS "Department",
+      SUM(x.earnings) AS "Total Earnings"
     FROM scratch.emp_earnings AS x
-    JOIN dbpcm_warehouse.employee AS e ON e.employee_code = x.employee_code
-    WHERE e.department_name = {department}
-    GROUP BY e.department_name
-    ORDER BY CASE WHEN {order_direction} = 'DESC' THEN "Total Earnings" END DESC NULLS LAST,
-             CASE WHEN {order_direction} = 'ASC' THEN "Total Earnings" END ASC NULLS LAST,
-             "Department" ASC
+    JOIN dbpcm_warehouse.employee AS e
+      ON e.employee_code = x.employee_code
+    WHERE
+      e.department_name IN ({department})
+    GROUP BY
+      e.department_name
+    ORDER BY {order_by}
 column_formats:
   Department:
     kind: text

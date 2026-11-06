@@ -1,7 +1,9 @@
 id: bp-termination-family
-intent: Employees with a recorded termination date in a half-open period, with the total matching employee count before the display limit. Includes same-day/later rehires and employees no longer currently Terminated. Apply current
-  status only when explicitly requested. For counts/grouped summaries use bp-employee-date-summary with date_basis=termination.
-slots_summary: period, row_limit, employee_status, department, order_direction
+intent: Employees with a recorded termination date in a half-open period, with the total matching employee count
+  before the display limit. Includes same-day/later rehires and employees no longer currently Terminated. Apply
+  current status only when explicitly requested. For counts/grouped summaries use bp-employee-date-summary with
+  date_basis=termination.
+slots_summary: period, row_limit, employee_status, department, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -17,7 +19,8 @@ slots:
   type: period_range
   temporal_type: date
   required: true
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: row_limit
   type: positive_integer
   required: true
@@ -40,6 +43,7 @@ slots:
   - All
   binds_to: dbpcm_warehouse.employee.employee_status
   optional_pattern: 'TRUE'
+  multiple: true
 - name: department
   type: entity
   required: false
@@ -47,35 +51,43 @@ slots:
   optional_pattern: 'TRUE'
   description: Resolve department names/abbreviations against the directory; a known department may have no matching
     employees.
-- name: order_direction
-  type: enum
+  multiple: true
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Termination Date DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Termination Date
+    direction: DESC
+  allowed_columns:
+  - Employee Code
+  - Employee Name
+  - Department
+  - Current Status
+  - Termination Date
+  - Total Matching Employees
 result_grain:
 - Employee Code
-sql_template: |
-  SELECT e.employee_code AS `Employee Code`,
-         e.employee_name AS `Employee Name`,
-         e.department_name AS `Department`,
-         e.employee_status AS `Current Status`,
-         e.termination_date AS `Termination Date`,
-         count(*) OVER () AS `Total Matching Employees`
-  FROM dbpcm_warehouse.employee e
-  WHERE e.termination_date >= {period_start}
+sql_template: |+
+  SELECT
+    e.employee_code AS "Employee Code",
+    e.employee_name AS "Employee Name",
+    e.department_name AS "Department",
+    e.employee_status AS "Current Status",
+    e.termination_date AS "Termination Date",
+    count(*) OVER () AS "Total Matching Employees"
+  FROM dbpcm_warehouse.employee AS e
+  WHERE
+    e.termination_date >= {period_start}
     AND e.termination_date < {period_end}
-    AND (e.employee_status = {employee_status}
-         OR {employee_status} = 'All')
-    AND e.department_name = {department}
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN e.termination_date
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN e.termination_date
-                     END ASC, e.employee_code
+    AND (
+      e.employee_status IN ({employee_status}) OR 'All' IN ({employee_status})
+    )
+    AND e.department_name IN ({department})
+  ORDER BY {order_by}
   LIMIT {row_limit}
+
 uses_rules:
 - terminations_in_period
 column_formats:

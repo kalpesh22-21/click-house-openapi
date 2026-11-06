@@ -5,43 +5,53 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT formatDateTime(toStartOfMonth(t.request_date), '%Y-%m') AS "Month",
-         round(SUM(t.hours), 2) AS "Approved Hours"
+  SELECT
+    formatDateTime(dateTrunc('MONTH', t.request_date), '%Y-%m') AS "Month",
+    round(SUM(t.hours), 2) AS "Approved Hours"
   FROM dbpcm_warehouse.time_off_request AS t
-  WHERE t.status = 'Approved'
-    AND t.event_type = {event_type}
-    AND t.hours IS NOT NULL
-    AND t.request_date >=
-      (SELECT MAX(request_date)
-       FROM dbpcm_warehouse.time_off_request) - INTERVAL {win} MONTH
-  GROUP BY "Month"
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Month"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Month"
-                     END ASC
+  WHERE
+    t.status = 'Approved'
+    AND t.event_type IN ({event_type})
+    AND NOT (
+      t.hours IS NULL
+    )
+    AND t.request_date >= (
+      SELECT
+        MAX(request_date)
+      FROM dbpcm_warehouse.time_off_request
+    ) - INTERVAL (
+      {win}
+    ) MONTH
+  GROUP BY
+    "Month"
+  ORDER BY {order_by}
 slots:
 - name: win
   type: relative_window
   required: true
-- name: order_direction
-  type: enum
-  required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
 - name: event_type
   type: enum
   required: false
   enum_values:
   - Time Off Request
   - Payout Request
-  default: Time Off Request
+  default:
+  - Time Off Request
   description: Accrual event category to count. Defaults to Time Off Request; use Payout Request only when payouts
     are explicitly requested.
-slots_summary: win, order_direction, event_type
+  multiple: true
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Month ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Month
+    direction: ASC
+  allowed_columns:
+  - Month
+  - Approved Hours
+slots_summary: win, event_type, order_by
 uses:
 - dbpcm_warehouse.time_off_request.request_date
 - dbpcm_warehouse.time_off_request.hours

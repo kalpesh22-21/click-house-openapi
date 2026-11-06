@@ -4,28 +4,40 @@ intent: Count and share of retroactive employee master-data changes where the ef
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  -- Output aliases are Title-Case display names; consumers keying on column names
-  -- must use the quoted aliases.
-
-  SELECT changed_field AS "Changed Field",
-         count() AS "Retroactive Changes",
-         round(count() * 100.0 / nullIf(
-                                          (SELECT count()
-                                           FROM dbpcm_warehouse.employee_change
-                                           WHERE change_time_added >= addMonths(today(), -{win})
-                                             AND effective_date IS NOT NULL), 0), 2) AS "Share Pct"
+sql_template: |+
+  /* Output aliases are Title-Case display names; consumers keying on column names */
+  /* must use the quoted aliases. */
+  SELECT
+    changed_field AS "Changed Field",
+    count() AS "Retroactive Changes",
+    round(
+      count() * 100.0 / nullIf(
+        (
+          SELECT
+            count()
+          FROM dbpcm_warehouse.employee_change
+          WHERE
+            change_time_added >= addMonths(today(), -{win})
+            AND NOT (
+              effective_date IS NULL
+            )
+        ),
+        0
+      ),
+      2
+    ) AS "Share Pct"
   FROM dbpcm_warehouse.employee_change
-  WHERE change_time_added >= addMonths(today(), -{win})
-    AND effective_date IS NOT NULL
-    AND dateDiff('day', effective_date, change_time_added) > {lag_days}
-  GROUP BY changed_field
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Retroactive Changes"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Retroactive Changes"
-                     END ASC, "Changed Field"
+  WHERE
+    change_time_added >= addMonths(today(), -{win})
+    AND NOT (
+      effective_date IS NULL
+    )
+    AND DATE_DIFF(DAY, effective_date, change_time_added) > {lag_days}
+  GROUP BY
+    changed_field
+  ORDER BY {order_by}
   LIMIT {max_rows}
+
 slots:
 - name: lag_days
   type: positive_integer
@@ -36,15 +48,19 @@ slots:
 - name: max_rows
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: lag_days, win, max_rows, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Retroactive Changes DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Retroactive Changes
+    direction: DESC
+  allowed_columns:
+  - Changed Field
+  - Retroactive Changes
+  - Share Pct
+slots_summary: lag_days, win, max_rows, order_by
 uses:
 - dbpcm_warehouse.employee_change.effective_date
 - dbpcm_warehouse.employee_change.change_time_added

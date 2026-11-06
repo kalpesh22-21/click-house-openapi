@@ -1,9 +1,9 @@
 """Format corpus SQL without changing its AST; preserve bind tokens and YAML blocks."""
 import re
 from pathlib import Path
-import sqlparse
+
 import sqlglot
-from sqlglot import exp
+import sqlparse
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1] / 'app/corpus/data/blueprints'

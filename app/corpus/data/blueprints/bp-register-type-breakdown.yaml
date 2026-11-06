@@ -5,16 +5,15 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT register_type AS "Register Type",
-         round(SUM(amount), 2) AS "Total Amount"
+  SELECT
+    register_type AS "Register Type",
+    round(SUM(amount), 2) AS "Total Amount"
   FROM dbpcm_warehouse.payroll
-  WHERE pay_period_end_date = {period}
-  GROUP BY register_type
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Total Amount"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Total Amount"
-                     END ASC
+  WHERE
+    pay_period_end_date = {period}
+  GROUP BY
+    register_type
+  ORDER BY {order_by}
 slots:
 - name: period
   type: period
@@ -22,15 +21,18 @@ slots:
   binds_to: dbpcm_warehouse.payroll.pay_period_end_date
   temporal_type: date
   optional_pattern: 'TRUE'
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: period, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Total Amount DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Total Amount
+    direction: DESC
+  allowed_columns:
+  - Register Type
+  - Total Amount
+slots_summary: period, order_by
 uses:
 - dbpcm_warehouse.payroll.register_type
 - dbpcm_warehouse.payroll.amount

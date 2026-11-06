@@ -4,44 +4,71 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT department_name AS "Department",
-         countIf(employee_status = 'Active') AS "Active Headcount",
-         round(avgIf(toFloat64(annual_salary), employee_status = 'Active' AND pay_type = 'Salary' AND annual_salary > 0), 2) AS "Avg Salary (Active)",
-         round(avgIf(date_diff('day', hire_date, now()) / 365.25, employee_status = 'Active'), 1) AS "Avg Tenure Years (Active)",
-         round(100 * countIf(employee_status = 'Active'
-                             AND gender = 'Female') / nullIf(countIf(employee_status = 'Active'), 0), 2) AS "Pct Female (Active)",
-         round(100 * countIf(employee_status = 'Active'
-                             AND direct_deposit = 1) / nullIf(countIf(employee_status = 'Active'), 0), 2) AS "Pct Direct Deposit (Active)",
-         countIf(employee_status = 'On Leave') AS "On Leave",
-         countIf(employee_status = 'On Leave'
-                 AND leave_absence_start IS NOT NULL
-                 AND toDate32(leave_absence_start) > toDate32('1900-01-01')
-                 AND NOT (leave_absence_end IS NOT NULL
-                          AND toDate32(leave_absence_end) > toDate32('1900-01-01'))
-                 AND leave_absence_start < now() - INTERVAL 1 YEAR) AS "On Leave Over 1 Year No End"
+  SELECT
+    department_name AS "Department",
+    countIf(employee_status = 'Active') AS "Active Headcount",
+    round(
+      avgIf(
+        toFloat64(annual_salary),
+        employee_status = 'Active' AND pay_type = 'Salary' AND annual_salary > 0
+      ),
+      2
+    ) AS "Avg Salary (Active)",
+    round(avgIf(DATE_DIFF(DAY, hire_date, now()) / 365.25, employee_status = 'Active'), 1) AS "Avg Tenure Years (Active)",
+    round(
+      100 * countIf(employee_status = 'Active' AND gender = 'Female') / nullIf(countIf(employee_status = 'Active'), 0),
+      2
+    ) AS "Pct Female (Active)",
+    round(
+      100 * countIf(employee_status = 'Active' AND direct_deposit = 1) / nullIf(countIf(employee_status = 'Active'), 0),
+      2
+    ) AS "Pct Direct Deposit (Active)",
+    countIf(employee_status = 'On Leave') AS "On Leave",
+    countIf(
+      employee_status = 'On Leave'
+      AND NOT (
+        leave_absence_start IS NULL
+      )
+      AND toDate32(leave_absence_start) > toDate32('1900-01-01')
+      AND NOT (
+        NOT (
+          leave_absence_end IS NULL
+        )
+        AND toDate32(leave_absence_end) > toDate32('1900-01-01')
+      )
+      AND leave_absence_start < now() - INTERVAL '1' YEAR
+    ) AS "On Leave Over 1 Year No End"
   FROM dbpcm_warehouse.employee
-  WHERE department_name = {department}
-  GROUP BY department_name
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Department"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Department"
-                     END ASC
+  WHERE
+    department_name IN ({department})
+  GROUP BY
+    department_name
+  ORDER BY {order_by}
 slots:
 - name: department
   type: string
   required: false
   binds_to: dbpcm_warehouse.employee.department_name
   optional_pattern: 'TRUE'
-- name: order_direction
-  type: enum
+  multiple: true
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
-slots_summary: department, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Department ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Department
+    direction: ASC
+  allowed_columns:
+  - Department
+  - Active Headcount
+  - Avg Salary (Active)
+  - Avg Tenure Years (Active)
+  - Pct Female (Active)
+  - Pct Direct Deposit (Active)
+  - On Leave
+  - On Leave Over 1 Year No End
+slots_summary: department, order_by
 uses:
 - dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.department_name

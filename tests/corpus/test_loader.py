@@ -88,7 +88,7 @@ class TestLoadBlueprints:
         assert "dbpcm_warehouse.payroll.amount" in bp["uses"]
         # pay type is now a slot, not hard-coded (warehouse has no overtime code).
         assert "dbpcm_warehouse.payroll.type_code" in bp["uses"]
-        assert bp["sql_template"].startswith("SELECT e.department_name")
+        assert " ".join(bp["sql_template"].split()).startswith("SELECT e.department_name")
         # source/verified are NOT stored in the YAML — injected only at export.
         assert "source" not in bp
         assert "verified" not in bp
@@ -234,5 +234,5 @@ def test_hire_window_uses_documented_status_label():
     sql = loader.load_blueprints()['bp-hires-in-range']['sql_template']
     statuses = load_semantic_catalog()['dbpcm_warehouse.employee']['columns']['employee_status']['values']
     assert 'Not Hired' in statuses
-    assert "employee_status != 'Not Hired'" in sql
+    assert "employee_status <> 'Not Hired'" in sql
     assert "employee_status != 'N'" not in sql

@@ -4,24 +4,22 @@ intent: Monthly counts of employee master-data changes grouped by the actor user
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  -- Output aliases are Title-Case display names; consumers keying on column names
-  -- must use the quoted aliases.
-
-  SELECT formatDateTime(toStartOfMonth(change_time_added), '%Y-%m') AS "Month",
-         change_by_usertype AS "User Type",
-         count() AS "Change Events"
+sql_template: |+
+  /* Output aliases are Title-Case display names; consumers keying on column names */
+  /* must use the quoted aliases. */
+  SELECT
+    formatDateTime(dateTrunc('MONTH', change_time_added), '%Y-%m') AS "Month",
+    change_by_usertype AS "User Type",
+    count() AS "Change Events"
   FROM dbpcm_warehouse.employee_change
-  WHERE change_time_added >= addMonths(today(), -{win})
-  GROUP BY "Month",
-           change_by_usertype
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Change Events"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Change Events"
-                     END ASC, "Month",
-                              "User Type"
+  WHERE
+    change_time_added >= addMonths(today(), -{win})
+  GROUP BY
+    "Month",
+    change_by_usertype
+  ORDER BY {order_by}
   LIMIT {max_rows}
+
 slots:
 - name: win
   type: relative_window
@@ -29,15 +27,19 @@ slots:
 - name: max_rows
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: win, max_rows, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Month ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Month
+    direction: ASC
+  allowed_columns:
+  - Month
+  - User Type
+  - Change Events
+slots_summary: win, max_rows, order_by
 uses:
 - dbpcm_warehouse.employee_change.change_by_usertype
 - dbpcm_warehouse.employee_change.change_time_added

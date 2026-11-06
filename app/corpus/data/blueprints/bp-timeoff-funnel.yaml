@@ -4,41 +4,49 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT t.status AS "Status",
-         COUNT(*) AS "Request Count"
+  SELECT
+    t.status AS "Status",
+    COUNT(*) AS "Request Count"
   FROM dbpcm_warehouse.time_off_request AS t
-  WHERE (toDate32(t.request_date) >= {window_start} AND toDate32(t.request_date) < {window_end})
-    AND t.event_type = {event_type}
-  GROUP BY t.status
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Request Count"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Request Count"
-                     END ASC
+  WHERE
+    (
+      toDate32(t.request_date) >= {window_start}
+      AND toDate32(t.request_date) < {window_end}
+    )
+    AND t.event_type IN ({event_type})
+  GROUP BY
+    t.status
+  ORDER BY {order_by}
 slots:
 - name: window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
-- name: order_direction
-  type: enum
-  required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: event_type
   type: enum
   required: false
   enum_values:
   - Time Off Request
   - Payout Request
-  default: Time Off Request
+  default:
+  - Time Off Request
   description: Accrual event category to count. Defaults to Time Off Request; use Payout Request only when payouts
     are explicitly requested.
-slots_summary: window, order_direction, event_type
+  multiple: true
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Request Count DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Request Count
+    direction: DESC
+  allowed_columns:
+  - Status
+  - Request Count
+slots_summary: window, event_type, order_by
 uses:
 - dbpcm_warehouse.time_off_request.status
 - dbpcm_warehouse.time_off_request.event_type

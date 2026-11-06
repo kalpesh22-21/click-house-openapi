@@ -3,45 +3,59 @@ intent: Denied expense total and denial rate by department for a payment date wi
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT department_description AS "Department",
-         countIf(expense_status = 'Denied') AS "Denied Count",
-         round(toFloat64(SUMIf(amount_approved, expense_status = 'Denied')), 2) AS "Denied Amount",
-         round(toFloat64(countIf(expense_status = 'Denied')) / nullIf(count(), 0), 4) AS "Denial Rate"
+sql_template: |+
+  SELECT
+    department_description AS "Department",
+    countIf(expense_status = 'Denied') AS "Denied Count",
+    round(toFloat64(SUMIf(amount_approved, expense_status = 'Denied')), 2) AS "Denied Amount",
+    round(toFloat64(countIf(expense_status = 'Denied')) / nullIf(count(), 0), 4) AS "Denial Rate"
   FROM dbpcm_warehouse.expense
-  WHERE expense_status IN ('Approved',
-                           'Paid',
-                           'Marked as Paid',
-                           'Denied')
+  WHERE
+    expense_status IN ('Approved', 'Paid', 'Marked as Paid', 'Denied')
     AND expense_paid_date >= {expense_window_start}
     AND expense_paid_date < {expense_window_end}
-    AND department_description = {department}
-  GROUP BY department_description
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Denied Amount"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Denied Amount"
-                     END ASC, "Department"
+    AND department_description IN ({department})
+  GROUP BY
+    department_description
+  ORDER BY {order_by}
+  LIMIT {top_n}
+
 slots:
+- name: top_n
+  type: positive_integer
+  required: false
+  min_value: 1
+  max_value: 1000
+  optional_pattern: 'TRUE'
+  description: Optional maximum number of output rows after aggregation and the declared ordering; omit for the
+    full result. Bind only when the user requests a limited list. Returns at most N rows; does not include all tied
+    ranks or change the measured population. Applies to the whole result, not per group.
 - name: expense_window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: department
   type: string
   required: false
   binds_to: dbpcm_warehouse.expense.department_description
   optional_pattern: 'TRUE'
-- name: order_direction
-  type: enum
+  multiple: true
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: expense_window, department, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Denied Amount DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Denied Amount
+    direction: DESC
+  allowed_columns:
+  - Department
+  - Denied Count
+  - Denied Amount
+  - Denial Rate
+slots_summary: top_n, expense_window, department, order_by
 uses:
 - dbpcm_warehouse.expense.expense_status
 - dbpcm_warehouse.expense.amount_approved

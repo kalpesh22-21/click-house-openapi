@@ -5,10 +5,12 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT round(SUM(amount), 2) AS "Total Net Pay"
+  SELECT
+    round(SUM(amount), 2) AS "Total Net Pay"
   FROM dbpcm_warehouse.payroll
-  WHERE register_type = 'NETPAYDIST'
-    AND pay_period_end_date = {period}
+  WHERE
+    register_type = 'NETPAYDIST' AND pay_period_end_date = {period}
+  ORDER BY {order_by}
 slots:
 - name: period
   type: period
@@ -16,7 +18,17 @@ slots:
   binds_to: dbpcm_warehouse.payroll.pay_period_end_date
   temporal_type: date
   optional_pattern: 'TRUE'
-slots_summary: period
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Total Net Pay ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Total Net Pay
+    direction: ASC
+  allowed_columns:
+  - Total Net Pay
+slots_summary: period, order_by
 uses:
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.register_type

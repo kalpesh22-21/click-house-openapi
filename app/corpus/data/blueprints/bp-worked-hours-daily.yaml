@@ -4,39 +4,47 @@ intent: Total timecard-grade paid hours per calendar day from total_earning, the
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT punch_date AS "Punch Date",
-         round(SUM(earn_hours), 2) AS "Total Hours"
-  FROM
-    (SELECT punch_date,
-            earn_hours
-     FROM dbpcm_warehouse.total_earning)
-  WHERE (punch_date >= {window_start} AND punch_date < {window_end})
-  GROUP BY punch_date
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Punch Date"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Punch Date"
-                     END ASC
+sql_template: |+
+  SELECT
+    punch_date AS "Punch Date",
+    round(SUM(earn_hours), 2) AS "Total Hours"
+  FROM (
+    SELECT
+      punch_date,
+      earn_hours
+    FROM dbpcm_warehouse.total_earning
+  )
+  WHERE
+    (
+      punch_date >= {window_start} AND punch_date < {window_end}
+    )
+  GROUP BY
+    punch_date
+  ORDER BY {order_by}
   LIMIT {max_rows}
+
 slots:
 - name: window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: max_rows
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: window, max_rows, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Punch Date ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Punch Date
+    direction: ASC
+  allowed_columns:
+  - Punch Date
+  - Total Hours
+slots_summary: window, max_rows, order_by
 uses:
 - dbpcm_warehouse.total_earning.punch_date
 - dbpcm_warehouse.total_earning.earn_hours

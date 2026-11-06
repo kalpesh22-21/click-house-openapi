@@ -5,24 +5,24 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT earn_code AS `Earn Code`,
-         category_name AS `Category`
-  FROM dbpcm_warehouse.earning_category FINAL
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN category_name
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN category_name
-                     END ASC, earn_code
+  SELECT
+    earn_code AS "Earn Code",
+    category_name AS "Category"
+  FROM dbpcm_warehouse.earning_category
+  ORDER BY {order_by}
 slots:
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
-slots_summary: order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Category ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Category
+    direction: ASC
+  allowed_columns:
+  - Earn Code
+  - Category
+slots_summary: order_by
 uses:
 - dbpcm_warehouse.earning_category.earn_code
 - dbpcm_warehouse.earning_category.category_name

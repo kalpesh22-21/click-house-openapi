@@ -3,40 +3,42 @@ intent: Approved expense spend by policy description ranked for a payment date w
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT expense_policy_description AS "Policy",
-         round(toFloat64(SUM(amount_approved)), 2) AS "Approved Spend"
+sql_template: |+
+  SELECT
+    expense_policy_description AS "Policy",
+    round(toFloat64(SUM(amount_approved)), 2) AS "Approved Spend"
   FROM dbpcm_warehouse.expense
-  WHERE expense_status IN ('Approved',
-                           'Paid',
-                           'Marked as Paid')
+  WHERE
+    expense_status IN ('Approved', 'Paid', 'Marked as Paid')
     AND expense_paid_date >= {expense_window_start}
     AND expense_paid_date < {expense_window_end}
-  GROUP BY expense_policy_description
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Approved Spend"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Approved Spend"
-                     END ASC, "Policy"
+  GROUP BY
+    expense_policy_description
+  ORDER BY {order_by}
   LIMIT {top_n}
+
 slots:
 - name: expense_window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: top_n
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: expense_window, top_n, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Approved Spend DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Approved Spend
+    direction: DESC
+  allowed_columns:
+  - Policy
+  - Approved Spend
+slots_summary: expense_window, top_n, order_by
 uses:
 - dbpcm_warehouse.expense.expense_policy_description
 - dbpcm_warehouse.expense.amount_approved

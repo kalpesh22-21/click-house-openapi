@@ -4,35 +4,53 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT employee_code AS "Employee Code",
-         employee_name AS "Name",
-         department_name AS "Department",
-         hire_date AS "Hire Date",
-         date_diff('year', hire_date, now()) AS "Years of Service"
+  SELECT
+    employee_code AS "Employee Code",
+    employee_name AS "Name",
+    department_name AS "Department",
+    hire_date AS "Hire Date",
+    DATE_DIFF(YEAR, hire_date, now()) AS "Years of Service",
+    toDayOfYear(hire_date) AS "Anniversary Day of Year"
   FROM dbpcm_warehouse.employee
-  WHERE employee_status = 'Active'
-    AND hire_date IS NOT NULL
+  WHERE
+    employee_status = 'Active'
+    AND NOT (
+      hire_date IS NULL
+    )
     AND toDate32(hire_date) > toDate32('1900-01-01')
     AND toDayOfYear(hire_date) >= toDayOfYear(now())
     AND toDayOfYear(hire_date) <= toDayOfYear(now()) + {win}
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN toDayOfYear(hire_date)
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN toDayOfYear(hire_date)
-                     END ASC, employee_code
+  ORDER BY {order_by}
+  LIMIT {top_n}
 slots:
+- name: top_n
+  type: positive_integer
+  required: false
+  min_value: 1
+  max_value: 1000
+  optional_pattern: 'TRUE'
+  description: Optional maximum number of output rows after aggregation and the declared ordering; omit for the
+    full result. Bind only when the user requests a limited list. Returns at most N rows; does not include all tied
+    ranks or change the measured population. Applies to the whole result, not per group.
 - name: win
   type: relative_window
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
-slots_summary: win, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Anniversary Day of Year ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Anniversary Day of Year
+    direction: ASC
+  allowed_columns:
+  - Employee Code
+  - Name
+  - Department
+  - Hire Date
+  - Years of Service
+  - Anniversary Day of Year
+slots_summary: top_n, win, order_by
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_name
@@ -52,5 +70,7 @@ column_formats:
     kind: number
     unit: years
     precision: 2
+  Anniversary Day of Year:
+    kind: integer
 presentation:
   kind: table

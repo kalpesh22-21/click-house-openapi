@@ -3,44 +3,73 @@ intent: Department turnover rate for a window using terms divided by current act
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT department_name AS "Department",
-         countIf(termination_date >= {window_start}
-                 AND termination_date < {window_end}
-                 AND termination_date IS NOT NULL
-                 AND toDate32(termination_date) > toDate32('1900-01-01')
-                 AND (most_recent_hire_date IS NULL
-                      OR most_recent_hire_date < termination_date)) AS "Terms",
-         round(100 * countIf(termination_date >= {window_start}
-                             AND termination_date < {window_end}
-                             AND termination_date IS NOT NULL
-                             AND toDate32(termination_date) > toDate32('1900-01-01')
-                             AND (most_recent_hire_date IS NULL
-                                  OR most_recent_hire_date < termination_date)) / nullIf(countIf(employee_status = 'Active'), 0), 2) AS "Turnover Rate Pct"
+sql_template: |+
+  SELECT
+    department_name AS "Department",
+    countIf(
+      termination_date >= {window_start}
+      AND termination_date < {window_end}
+      AND NOT (
+        termination_date IS NULL
+      )
+      AND toDate32(termination_date) > toDate32('1900-01-01')
+      AND (
+        most_recent_hire_date IS NULL OR most_recent_hire_date < termination_date
+      )
+    ) AS "Terms",
+    round(
+      100 * countIf(
+        termination_date >= {window_start}
+        AND termination_date < {window_end}
+        AND NOT (
+          termination_date IS NULL
+        )
+        AND toDate32(termination_date) > toDate32('1900-01-01')
+        AND (
+          most_recent_hire_date IS NULL OR most_recent_hire_date < termination_date
+        )
+      ) / nullIf(countIf(employee_status = 'Active'), 0),
+      2
+    ) AS "Turnover Rate Pct"
   FROM dbpcm_warehouse.employee
-  WHERE department_name IS NOT NULL
-    AND department_name != ''
-  GROUP BY department_name
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Turnover Rate Pct"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Turnover Rate Pct"
-                     END ASC, "Department"
+  WHERE
+    NOT (
+      department_name IS NULL
+    ) AND department_name <> ''
+  GROUP BY
+    department_name
+  ORDER BY {order_by}
+  LIMIT {top_n}
+
 slots:
+- name: top_n
+  type: positive_integer
+  required: false
+  min_value: 1
+  max_value: 1000
+  optional_pattern: 'TRUE'
+  description: Optional maximum number of output rows after aggregation and the declared ordering; omit for the
+    full result. Bind only when the user requests a limited list. Returns at most N rows; does not include all tied
+    ranks or change the measured population. Applies to the whole result, not per group.
 - name: window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
-- name: order_direction
-  type: enum
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: window, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Turnover Rate Pct DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Turnover Rate Pct
+    direction: DESC
+  allowed_columns:
+  - Department
+  - Terms
+  - Turnover Rate Pct
+slots_summary: top_n, window, order_by
 uses:
 - dbpcm_warehouse.employee.termination_date
 - dbpcm_warehouse.employee.most_recent_hire_date

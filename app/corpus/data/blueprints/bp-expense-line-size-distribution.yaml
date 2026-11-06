@@ -5,49 +5,61 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT concat('$', toString(toInt32(floor(toFloat64(amount_approved) / {band}) * {band})), ' to under $', toString(toInt32(floor(toFloat64(amount_approved) / {band}) * {band} + {band}))) AS "Amount Band",
-         count() AS "Expense Count"
+  SELECT
+    CONCAT(
+      '$',
+      toString(toInt32(FLOOR(toFloat64(amount_approved) / {band}) * {band})),
+      ' to under $',
+      toString(toInt32(FLOOR(toFloat64(amount_approved) / {band}) * {band} + {band}))
+    ) AS "Amount Band",
+    count() AS "Expense Count",
+    toInt32(FLOOR(toFloat64(amount_approved) / {band}) * {band}) AS "Band Start"
   FROM dbpcm_warehouse.expense
-  WHERE expense_status IN ('Approved',
-                           'Paid',
-                           'Marked as Paid')
+  WHERE
+    expense_status IN ('Approved', 'Paid', 'Marked as Paid')
     AND expense_paid_date >= {expense_window_start}
     AND expense_paid_date < {expense_window_end}
-    AND amount_approved IS NOT NULL
-    AND expense_account_description = {account}
-  GROUP BY floor(toFloat64(amount_approved) / {band})
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN floor(toFloat64(amount_approved) / {band})
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN floor(toFloat64(amount_approved) / {band})
-                     END ASC
+    AND NOT (
+      amount_approved IS NULL
+    )
+    AND expense_account_description IN ({account})
+  GROUP BY
+    FLOOR(toFloat64(amount_approved) / {band})
+  ORDER BY {order_by}
 slots:
 - name: expense_window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: band
   type: positive_integer
   required: true
-  description: Whole-dollar band width. Use the requested width; otherwise choose one that gives roughly 10 to 25 bands.
+  description: Whole-dollar band width. Use the requested width; otherwise choose one that gives roughly 10 to 25
+    bands.
 - name: account
   type: entity
   required: false
   binds_to: dbpcm_warehouse.expense.expense_account_description
   optional_pattern: 'TRUE'
   description: Omit for all accounts. Bind one expense account description to show that account's line sizes only.
-- name: order_direction
-  type: enum
+  multiple: true
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the amount bands. Defaults to ASC (smallest band first).
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Band Start ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Band Start
+    direction: ASC
+  allowed_columns:
+  - Amount Band
+  - Expense Count
+  - Band Start
 result_grain:
 - Amount Band
-slots_summary: expense_window, band, account, order_direction
+slots_summary: expense_window, band, account, order_by
 uses:
 - dbpcm_warehouse.expense.amount_approved
 - dbpcm_warehouse.expense.expense_account_description
@@ -58,6 +70,8 @@ column_formats:
     kind: text
   Expense Count:
     kind: integer
+  Band Start:
+    kind: number
 presentation:
   kind: bars
   category_columns:

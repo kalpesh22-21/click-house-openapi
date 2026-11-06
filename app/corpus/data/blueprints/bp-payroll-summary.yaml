@@ -1,11 +1,11 @@
 id: bp-payroll-summary
-intent: Payroll amount and distinct employee count by company, department or pay-date month.
-  Required register_type enum and half-open pay-date period [start,end); select EARN for gross earnings. Optional
-  type_code, employee status, department and employee. Earnings represent finalized total_earning after period close;
-  use total_earning for in-progress earnings and never add both for the same covered earnings. Preaggregate payroll
-  per employee/month before LEFT JOIN; unmatched employees retained unless employee filters supplied. Does not prove
-  complete months or zero-fill missing months; no implicit earnings filter.
-slots_summary: group_by, register_type, period, type_code, employee_status, department, employee, order_direction
+intent: Payroll amount and distinct employee count by company, department or pay-date month. Required register_type
+  enum and half-open pay-date period [start,end); select EARN for gross earnings. Optional type_code, employee status,
+  department and employee. Earnings represent finalized total_earning after period close; use total_earning for
+  in-progress earnings and never add both for the same covered earnings. Preaggregate payroll per employee/month
+  before LEFT JOIN; unmatched employees retained unless employee filters supplied. Does not prove complete months
+  or zero-fill missing months; no implicit earnings filter.
+slots_summary: group_by, register_type, period, type_code, employee_status, department, employee, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -38,16 +38,19 @@ slots:
   - EEBEN
   - ERTAX
   binds_to: dbpcm_warehouse.payroll.register_type
+  multiple: true
 - name: period
   type: period_range
   temporal_type: date
   required: true
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: type_code
   type: entity
   required: false
   binds_to: dbpcm_warehouse.payroll.type_code
   optional_pattern: 'TRUE'
+  multiple: true
 - name: employee_status
   type: enum
   required: false
@@ -63,6 +66,7 @@ slots:
   - Unknown
   binds_to: dbpcm_warehouse.employee.employee_status
   optional_pattern: 'TRUE'
+  multiple: true
 - name: department
   type: entity
   required: false
@@ -70,55 +74,68 @@ slots:
   optional_pattern: 'TRUE'
   description: Resolve department names/abbreviations against the directory; a known department may have no matching
     employees.
+  multiple: true
 - name: employee
   type: entity
   required: false
   binds_to: dbpcm_warehouse.employee.employee_code
   optional_pattern: 'TRUE'
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Group ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Group
+    direction: ASC
+  allowed_columns:
+  - Group
+  - Payroll Amount
+  - Employee Count
 result_grain:
 - Group
 sql_template: |
-  WITH p AS
-    (SELECT employee_code,
-            substring(toString(pay_date), 1, 7) AS month,
-            sum(amount) AS amount
-     FROM dbpcm_warehouse.payroll
-     WHERE register_type = {register_type}
-       AND type_code = {type_code}
-       AND toDate(pay_date) >= toDate({period_start})
-       AND toDate(pay_date) < toDate({period_end})
-     GROUP BY employee_code,
-              substring(toString(pay_date), 1, 7))
-  SELECT CASE
-             WHEN {group_by} = 'department' THEN e.department_name
-             WHEN {group_by} = 'month' THEN toString(p.month)
-             ELSE 'Company'
-         END AS `Group`,
-         sum(CAST(p.amount AS Nullable(Decimal(38, 2)))) AS `Payroll Amount`,
-         uniqExact(p.employee_code) AS `Employee Count`
+  WITH p AS (
+    SELECT
+      employee_code,
+      SUBSTRING(toString(pay_date), 1, 7) AS month,
+      sum(amount) AS amount
+    FROM dbpcm_warehouse.payroll
+    WHERE
+      register_type IN ({register_type})
+      AND type_code IN ({type_code})
+      AND toDate(pay_date) >= toDate({period_start})
+      AND toDate(pay_date) < toDate({period_end})
+    GROUP BY
+      employee_code,
+      SUBSTRING(toString(pay_date), 1, 7)
+  )
+  SELECT
+    CASE
+      WHEN {group_by} = 'department'
+      THEN e.department_name
+      WHEN {group_by} = 'month'
+      THEN toString(p.month)
+      ELSE 'Company'
+    END AS "Group",
+    sum(CAST(p.amount AS Nullable(Decimal(38, 2)))) AS "Payroll Amount",
+    uniqExact(p.employee_code) AS "Employee Count"
   FROM p
-  LEFT JOIN dbpcm_warehouse.employee e ON p.employee_code = e.employee_code
-  WHERE e.employee_status = {employee_status}
-    AND e.department_name = {department}
+  LEFT JOIN dbpcm_warehouse.employee AS e
+    ON p.employee_code = e.employee_code
+  WHERE
+    e.employee_status IN ({employee_status})
+    AND e.department_name IN ({department})
     AND e.employee_code = {employee}
-  GROUP BY CASE
-               WHEN {group_by} = 'department' THEN e.department_name
-               WHEN {group_by} = 'month' THEN toString(p.month)
-               ELSE 'Company'
-           END
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN `Group`
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN `Group`
-                     END ASC
+  GROUP BY
+    CASE
+      WHEN {group_by} = 'department'
+      THEN e.department_name
+      WHEN {group_by} = 'month'
+      THEN toString(p.month)
+      ELSE 'Company'
+    END
+  ORDER BY {order_by}
 column_formats:
   Group:
     kind: text

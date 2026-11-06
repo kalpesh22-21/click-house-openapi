@@ -4,23 +4,23 @@ intent: Year-to-date gross earnings, net pay, and paid hours per employee from t
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT p.employee_code AS "Employee Code",
-         any(e.employee_name) AS "Employee Name",
-         round(SUMIf(p.amount, p.register_type = 'EARN'), 2) AS "Gross Earnings",
-         round(SUMIf(p.amount, p.register_type = 'NETPAYDIST'), 2) AS "Net Pay",
-         round(SUMIf(p.type_hours, p.register_type = 'EARN'), 2) AS "Paid Hours"
+sql_template: |+
+  SELECT
+    p.employee_code AS "Employee Code",
+    any(e.employee_name) AS "Employee Name",
+    round(SUMIf(p.amount, p.register_type = 'EARN'), 2) AS "Gross Earnings",
+    round(SUMIf(p.amount, p.register_type = 'NETPAYDIST'), 2) AS "Net Pay",
+    round(SUMIf(p.type_hours, p.register_type = 'EARN'), 2) AS "Paid Hours"
   FROM dbpcm_warehouse.payroll AS p
-  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
-  WHERE p.employee_code = {ee}
-    AND e.department_name = {dept}
-  GROUP BY p.employee_code
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Gross Earnings"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Gross Earnings"
-                     END ASC
+  JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = p.employee_code
+  WHERE
+    p.employee_code = {ee} AND e.department_name IN ({dept})
+  GROUP BY
+    p.employee_code
+  ORDER BY {order_by}
   LIMIT {top_n}
+
 slots:
 - name: ee
   type: string
@@ -32,18 +32,25 @@ slots:
   required: false
   binds_to: dbpcm_warehouse.employee.department_name
   optional_pattern: 'TRUE'
+  multiple: true
 - name: top_n
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: ee, dept, top_n, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Gross Earnings DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Gross Earnings
+    direction: DESC
+  allowed_columns:
+  - Employee Code
+  - Employee Name
+  - Gross Earnings
+  - Net Pay
+  - Paid Hours
+slots_summary: ee, dept, top_n, order_by
 uses:
 - dbpcm_warehouse.payroll.employee_code
 - dbpcm_warehouse.payroll.amount

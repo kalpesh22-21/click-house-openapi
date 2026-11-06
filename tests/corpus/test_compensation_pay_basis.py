@@ -10,6 +10,7 @@ from app.corpus.loader import load_blueprints
 from app.semantic_catalog.loader import load_semantic_catalog
 from app.trino_client import _map_clickhouse_functions
 from app.trino_semantics import annotate_input_types
+from tests.corpus.native_sort import bind_sort
 
 VALUES = {"order_direction": "'DESC'",'top_n': '10', 'employee_status': "'All'", 'department': "'Sales'", 'employee': "'s1'",
           'salary_population': "'recorded'", 'group_by': "'company'", 'band_width': '10000',
@@ -29,7 +30,7 @@ def convert(sql):
 @pytest.mark.parametrize('blueprint', BLUEPRINTS, ids=lambda bp: bp['id'])
 def test_compensation_blueprints_have_typed_trino_conversion(blueprint):
     for step in blueprint.get('composes', [blueprint]):
-        sql = re.sub(r'\{(\w+)\}', lambda m: VALUES[m[1]], step['sql_template'])
+        sql = re.sub(r'\{(\w+)\}', lambda m: VALUES[m[1]], bind_sort(blueprint, step['sql_template']))
         tree = convert(sql)
         assert tree.sql(dialect='trino')
         # Simple CASE with coerced boolean WHEN clauses was rejected by live Trino.
@@ -41,7 +42,7 @@ def test_compensation_blueprints_have_typed_trino_conversion(blueprint):
 
 def test_salary_and_hourly_zeros_do_not_mix_and_unknowns_stay_null():
     bp = load_blueprints()['bp-average-annual-salary-by-status']
-    sql = bp['sql_template'].replace('{employee_status}', "'All'")
+    sql = bind_sort(bp).replace('{employee_status}', "'All'")
     tree = convert(sql)
     for table in tree.find_all(exp.Table):
         table.set('db', None)
@@ -71,7 +72,7 @@ ZERO_RATE_ROWS = [
 
 def run_sqlite(blueprint_id, omit=(), **values):
     bp = load_blueprints()[blueprint_id]
-    sql = bp['sql_template']
+    sql = bind_sort(bp, direction=values.get('order_direction'))
     for name in omit:  # an omitted optional slot: its optional_pattern replaces the predicate
         sql = re.sub(r'[\w.]+ = \{' + name + r'\}', 'TRUE', sql)
     sql = re.sub(r'\{(\w+)\}', lambda m: values.get(m[1], VALUES.get(m[1], '')), sql)
@@ -85,9 +86,9 @@ def run_sqlite(blueprint_id, omit=(), **values):
         return db.execute(tree.sql(dialect='sqlite')).fetchall()
 
 
-def test_a_lowest_paid_ranking_skips_employees_with_no_recorded_rate():
-    rows = run_sqlite('bp-compensation-ranking', order_direction="'ASC'", top_n='1')
-    assert [(r[0], r[2]) for r in rows] == [('Hourly', 'h1'), ('Salary', 's1')]
+def test_highest_paid_ranking_keeps_pay_types_separate_and_skips_unrecorded_rates():
+    rows = run_sqlite('bp-compensation-ranking', top_n='1')
+    assert [(r[0], r[2]) for r in rows] == [('Hourly', 'h2'), ('Salary', 's2')]
 
 
 def test_a_below_threshold_count_does_not_count_a_zero_rate_as_paid_below_it():

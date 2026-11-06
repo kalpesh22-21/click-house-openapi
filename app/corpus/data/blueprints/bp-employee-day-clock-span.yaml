@@ -8,7 +8,7 @@ intent: Employee-day first recorded In time, last recorded Out time and matched-
   first/last dates do not prove completeness; missing days/months are not zero-filled. Salaried approved leave and
   automatic pay-period-end entries can generate these records; this blueprint does not establish physical attendance
   or current clock-in.
-slots_summary: period, source, employee, department, hours_type, pay_class, in_type, out_type, order_direction
+slots_summary: top_n, period, source, employee, department, hours_type, pay_class, in_type, out_type, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -28,15 +28,26 @@ uses:
 - dbpcm_warehouse.employee.employee_name
 - dbpcm_warehouse.employee.department_name
 slots:
+- name: top_n
+  type: positive_integer
+  required: false
+  min_value: 1
+  max_value: 1000
+  optional_pattern: 'TRUE'
+  description: Optional maximum number of output rows after aggregation and the declared ordering; omit for the
+    full result. Bind only when the user requests a limited list. Returns at most N rows; does not include all tied
+    ranks or change the measured population. Applies to the whole result, not per group.
 - name: period
   type: period_range
   temporal_type: date
   required: true
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: source
   type: entity
   required: true
   binds_to: dbpcm_warehouse.punch_pair.table_source
+  multiple: true
 - name: employee
   type: entity
   required: false
@@ -47,16 +58,19 @@ slots:
   required: false
   binds_to: dbpcm_warehouse.punch_pair.department_code
   optional_pattern: 'TRUE'
+  multiple: true
 - name: hours_type
   type: entity
   required: false
   binds_to: dbpcm_warehouse.punch_pair.hours_type
   optional_pattern: 'TRUE'
+  multiple: true
 - name: pay_class
   type: entity
   required: false
   binds_to: dbpcm_warehouse.punch_pair.pay_class_code
   optional_pattern: 'TRUE'
+  multiple: true
 - name: in_type
   type: enum
   required: false
@@ -67,6 +81,7 @@ slots:
   - IL
   - IB
   - IX
+  multiple: true
 - name: out_type
   type: enum
   required: false
@@ -77,46 +92,58 @@ slots:
   - OL
   - OB
   - OX
-- name: order_direction
-  type: enum
+  multiple: true
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Punch Date ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Punch Date
+    direction: ASC
+  allowed_columns:
+  - Employee Code
+  - Employee Name
+  - Department
+  - Punch Date
+  - First Recorded In
+  - Last Recorded Out
+  - Pair Count
+  - Paid Hours
 result_grain:
 - Employee Code
 - Punch Date
-sql_template: |
-  SELECT p.employee_code AS `Employee Code`,
-         e.employee_name AS `Employee Name`,
-         e.department_name AS `Department`,
-         p.punch_date AS `Punch Date`,
-         min(p.in_punch_time) AS `First Recorded In`,
-         max(p.out_punch_time) AS `Last Recorded Out`,
-         count(*) AS `Pair Count`,
-         sum(p.earn_hours) AS `Paid Hours`
+sql_template: |+
+  SELECT
+    p.employee_code AS "Employee Code",
+    e.employee_name AS "Employee Name",
+    e.department_name AS "Department",
+    p.punch_date AS "Punch Date",
+    min(p.in_punch_time) AS "First Recorded In",
+    max(p.out_punch_time) AS "Last Recorded Out",
+    count(*) AS "Pair Count",
+    sum(p.earn_hours) AS "Paid Hours"
   FROM dbpcm_warehouse.punch_pair AS p
-  LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = p.employee_code
-  WHERE p.punch_date >= toDate({period_start})
+  LEFT JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = p.employee_code
+  WHERE
+    p.punch_date >= toDate({period_start})
     AND p.punch_date < toDate({period_end})
-    AND p.table_source = {source}
+    AND p.table_source IN ({source})
     AND p.employee_code = {employee}
-    AND p.department_code = {department}
-    AND p.hours_type = {hours_type}
-    AND p.pay_class_code = {pay_class}
-    AND p.in_punch_type = {in_type}
-    AND p.out_punch_type = {out_type}
-  GROUP BY p.employee_code,
-           e.employee_name,
-           e.department_name,
-           p.punch_date
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN p.employee_code
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN p.employee_code
-                     END ASC, p.punch_date
+    AND p.department_code IN ({department})
+    AND p.hours_type IN ({hours_type})
+    AND p.pay_class_code IN ({pay_class})
+    AND p.in_punch_type IN ({in_type})
+    AND p.out_punch_type IN ({out_type})
+  GROUP BY
+    p.employee_code,
+    e.employee_name,
+    e.department_name,
+    p.punch_date
+  ORDER BY {order_by}
+  LIMIT {top_n}
+
 column_formats:
   Employee Code:
     kind: identifier

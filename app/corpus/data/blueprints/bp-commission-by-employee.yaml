@@ -5,47 +5,59 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT te.employee_code AS "Employee Code",
-         any(e.employee_name) AS "Employee Name",
-         round(SUM(te.earn_amount), 2) AS "Total Commission"
-  FROM
-    (SELECT employee_code,
-            punch_date,
-            earn_amount,
-            earn_code
-     FROM dbpcm_warehouse.total_earning) AS te
-  JOIN
-    (SELECT earn_code,
-            category_name
-     FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
-  LEFT JOIN dbpcm_warehouse.employee AS e ON e.employee_code = te.employee_code
-  WHERE ec.category_name = 'Commission'
-    AND (te.punch_date >= {period_start} AND te.punch_date < {period_end})
-  GROUP BY te.employee_code
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Total Commission"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Total Commission"
-                     END ASC, "Employee Code"
+  SELECT
+    te.employee_code AS "Employee Code",
+    any(e.employee_name) AS "Employee Name",
+    round(SUM(te.earn_amount), 2) AS "Total Commission"
+  FROM (
+    SELECT
+      employee_code,
+      punch_date,
+      earn_amount,
+      earn_code
+    FROM dbpcm_warehouse.total_earning
+  ) AS te
+  JOIN (
+    SELECT
+      earn_code,
+      category_name
+    FROM dbpcm_warehouse.earning_category
+  ) AS ec
+    ON ec.earn_code = te.earn_code
+  LEFT JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = te.employee_code
+  WHERE
+    ec.category_name = 'Commission'
+    AND (
+      te.punch_date >= {period_start} AND te.punch_date < {period_end}
+    )
+  GROUP BY
+    te.employee_code
+  ORDER BY {order_by}
   LIMIT {top_n}
 slots:
 - name: period
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: top_n
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: period, top_n, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Total Commission DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Total Commission
+    direction: DESC
+  allowed_columns:
+  - Employee Code
+  - Employee Name
+  - Total Commission
+slots_summary: period, top_n, order_by
 uses:
 - dbpcm_warehouse.total_earning.earn_amount
 - dbpcm_warehouse.total_earning.employee_code

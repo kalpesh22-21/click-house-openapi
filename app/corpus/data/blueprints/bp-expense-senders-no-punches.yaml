@@ -4,39 +4,60 @@ intent: Employees who submitted expense activity but have zero punched timecard 
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT "Employee Code",
-         "Employee Name",
-         "Department"
-  FROM
-    (SELECT DISTINCT e.employee_code AS "Employee Code",
-                     e.employee_name AS "Employee Name",
-                     e.department_name AS "Department"
-     FROM dbpcm_warehouse.expense AS ex
-     JOIN dbpcm_warehouse.employee AS e ON e.employee_code = ex.employee_code
-     WHERE toDate(ex.date_time_submitted) >= addMonths(today(), -{win})
-       AND ex.employee_code NOT IN
-         (SELECT DISTINCT employee_code
+sql_template: |+
+  SELECT
+    "Employee Code",
+    "Employee Name",
+    "Department"
+  FROM (
+    SELECT DISTINCT
+      e.employee_code AS "Employee Code",
+      e.employee_name AS "Employee Name",
+      e.department_name AS "Department"
+    FROM dbpcm_warehouse.expense AS ex
+    JOIN dbpcm_warehouse.employee AS e
+      ON e.employee_code = ex.employee_code
+    WHERE
+      toDate(ex.date_time_submitted) >= addMonths(today(), -{win})
+      AND NOT (
+        ex.employee_code IN (
+          SELECT DISTINCT
+            employee_code
           FROM dbpcm_warehouse.punch_pair
-          WHERE punch_date >= addMonths(today(), -{win}))) AS results
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Employee Code"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Employee Code"
-                     END ASC
+          WHERE
+            punch_date >= addMonths(today(), -{win})
+        )
+      )
+  ) AS results
+  ORDER BY {order_by}
+  LIMIT {top_n}
+
 slots:
+- name: top_n
+  type: positive_integer
+  required: false
+  min_value: 1
+  max_value: 1000
+  optional_pattern: 'TRUE'
+  description: Optional maximum number of output rows after aggregation and the declared ordering; omit for the
+    full result. Bind only when the user requests a limited list. Returns at most N rows; does not include all tied
+    ranks or change the measured population. Applies to the whole result, not per group.
 - name: win
   type: relative_window
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
-slots_summary: win, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Employee Code ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Employee Code
+    direction: ASC
+  allowed_columns:
+  - Employee Code
+  - Employee Name
+  - Department
+slots_summary: top_n, win, order_by
 uses:
 - dbpcm_warehouse.expense.employee_code
 - dbpcm_warehouse.expense.date_time_submitted

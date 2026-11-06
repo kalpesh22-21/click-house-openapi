@@ -1,32 +1,39 @@
 id: bp-median-salary-by-position-level
-intent: True median annual salary per position level for active Salary-pay-type employees with a recorded salary. Hourly employees are paid by rate and are not included
+intent: True median annual salary per position level for active Salary-pay-type employees with a recorded salary.
+  Hourly employees are paid by rate and are not included
 status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT position_level AS "Position Level",
-         round((quantileExactLow(0.5)(toFloat64(annual_salary)) + quantileExactHigh(0.5)(toFloat64(annual_salary))) / 2, 2) AS "Median Annual Salary",
-         count(DISTINCT employee_code) AS "Headcount"
+  SELECT
+    position_level AS "Position Level",
+    round(
+      (
+        quantileExactLow(0.5)(toFloat64(annual_salary)) + quantileExactHigh(0.5)(toFloat64(annual_salary))
+      ) / 2,
+      2
+    ) AS "Median Annual Salary",
+    count(DISTINCT employee_code) AS "Headcount"
   FROM dbpcm_warehouse.employee
-  WHERE employee_status = 'Active'
-    AND pay_type = 'Salary'
-    AND annual_salary > 0
-  GROUP BY position_level
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN position_level
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN position_level
-                     END ASC
+  WHERE
+    employee_status = 'Active' AND pay_type = 'Salary' AND annual_salary > 0
+  GROUP BY
+    position_level
+  ORDER BY {order_by}
 slots:
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
-slots_summary: order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Position Level ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Position Level
+    direction: ASC
+  allowed_columns:
+  - Position Level
+  - Median Annual Salary
+  - Headcount
+slots_summary: order_by
 uses:
 - dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.employee_code

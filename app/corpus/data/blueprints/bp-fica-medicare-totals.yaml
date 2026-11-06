@@ -5,20 +5,17 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT type_code AS "Tax Code",
-         register_type AS "Tax Side",
-         round(SUM(amount), 2) AS "Total Tax"
+  SELECT
+    type_code AS "Tax Code",
+    register_type AS "Tax Side",
+    round(SUM(amount), 2) AS "Total Tax"
   FROM dbpcm_warehouse.payroll
-  WHERE register_type IN ('EETAX',
-                          'ERTAX')
-    AND pay_period_end_date = {period}
-  GROUP BY type_code,
-           register_type
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Total Tax"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Total Tax"
-                     END ASC
+  WHERE
+    register_type IN ('EETAX', 'ERTAX') AND pay_period_end_date = {period}
+  GROUP BY
+    type_code,
+    register_type
+  ORDER BY {order_by}
 slots:
 - name: period
   type: period
@@ -26,15 +23,19 @@ slots:
   binds_to: dbpcm_warehouse.payroll.pay_period_end_date
   temporal_type: date
   optional_pattern: 'TRUE'
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: period, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Total Tax DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Total Tax
+    direction: DESC
+  allowed_columns:
+  - Tax Code
+  - Tax Side
+  - Total Tax
+slots_summary: period, order_by
 uses:
 - dbpcm_warehouse.payroll.type_code
 - dbpcm_warehouse.payroll.amount

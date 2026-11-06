@@ -1,23 +1,44 @@
 id: bp-median-annual-salary
-intent: True median annual salary of active Salary-pay-type employees with a recorded salary, overall or per department. Hourly employees are paid by rate and are not included
+intent: True median annual salary of active Salary-pay-type employees with a recorded salary, overall or per department.
+  Hourly employees are paid by rate and are not included
 status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT round((quantileExactLow(0.5)(toFloat64(annual_salary)) + quantileExactHigh(0.5)(toFloat64(annual_salary))) / 2, 2) AS "Median Annual Salary",
-         count(DISTINCT employee_code) AS "Headcount"
+  SELECT
+    round(
+      (
+        quantileExactLow(0.5)(toFloat64(annual_salary)) + quantileExactHigh(0.5)(toFloat64(annual_salary))
+      ) / 2,
+      2
+    ) AS "Median Annual Salary",
+    count(DISTINCT employee_code) AS "Headcount"
   FROM dbpcm_warehouse.employee
-  WHERE employee_status = 'Active'
+  WHERE
+    employee_status = 'Active'
     AND pay_type = 'Salary'
     AND annual_salary > 0
-    AND department_name = {department}
+    AND department_name IN ({department})
+  ORDER BY {order_by}
 slots:
 - name: department
   type: string
   required: false
   binds_to: dbpcm_warehouse.employee.department_name
   optional_pattern: 'TRUE'
-slots_summary: department
+  multiple: true
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Median Annual Salary ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Median Annual Salary
+    direction: ASC
+  allowed_columns:
+  - Median Annual Salary
+  - Headcount
+slots_summary: department, order_by
 uses:
 - dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.employee_code

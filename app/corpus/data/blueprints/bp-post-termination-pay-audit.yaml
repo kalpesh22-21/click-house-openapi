@@ -4,48 +4,60 @@ intent: Terminated employees who received payroll earnings after their terminati
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT p.employee_code AS "Employee Code",
-         any(e.employee_name) AS "Employee Name",
-         round(SUM(p.amount), 2) AS "Total Earnings",
-         any(e.termination_date) AS "Termination Date",
-         max(p.pay_date) AS "Last Pay Date"
+sql_template: |+
+  SELECT
+    p.employee_code AS "Employee Code",
+    any(e.employee_name) AS "Employee Name",
+    round(SUM(p.amount), 2) AS "Total Earnings",
+    any(e.termination_date) AS "Termination Date",
+    max(p.pay_date) AS "Last Pay Date"
   FROM dbpcm_warehouse.payroll AS p
-  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
-  WHERE p.register_type = 'EARN'
+  JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = p.employee_code
+  WHERE
+    p.register_type = 'EARN'
     AND p.pay_date >= {pay_window_start}
     AND p.pay_date < {pay_window_end}
-    AND e.termination_date IS NOT NULL
+    AND NOT (
+      e.termination_date IS NULL
+    )
     AND toDate32(e.termination_date) > toDate32('1900-01-01')
     AND p.pay_date > e.termination_date
-    AND (e.most_recent_hire_date IS NULL
-         OR toDate32(e.most_recent_hire_date) <= toDate32('1900-01-01')
-         OR e.most_recent_hire_date <= e.termination_date)
-  GROUP BY p.employee_code
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Total Earnings"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Total Earnings"
-                     END ASC
+    AND (
+      e.most_recent_hire_date IS NULL
+      OR toDate32(e.most_recent_hire_date) <= toDate32('1900-01-01')
+      OR e.most_recent_hire_date <= e.termination_date
+    )
+  GROUP BY
+    p.employee_code
+  ORDER BY {order_by}
   LIMIT {max_rows}
+
 slots:
 - name: pay_window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: max_rows
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: pay_window, max_rows, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Total Earnings DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Total Earnings
+    direction: DESC
+  allowed_columns:
+  - Employee Code
+  - Employee Name
+  - Total Earnings
+  - Termination Date
+  - Last Pay Date
+slots_summary: pay_window, max_rows, order_by
 uses:
 - dbpcm_warehouse.payroll.employee_code
 - dbpcm_warehouse.payroll.register_type

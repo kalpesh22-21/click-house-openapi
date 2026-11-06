@@ -5,45 +5,62 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  WITH period_bounds AS
-    (SELECT any(pay_period_start_date) AS start_dt,
-            any(pay_period_end_date) AS end_dt
-     FROM dbpcm_warehouse.payroll
-     WHERE pay_period_end_date = {period}),
-       register_hours AS
-    (SELECT employee_code,
-            SUM(type_hours) AS register_hours
-     FROM dbpcm_warehouse.payroll
-     WHERE register_type = 'EARN'
-       AND pay_period_end_date = {period}
-     GROUP BY employee_code),
-       te_hours AS
-    (SELECT te.employee_code,
-            SUM(te.earn_hours) AS te_hours
-     FROM
-       (SELECT employee_code,
-               punch_date,
-               earn_hours
-        FROM dbpcm_warehouse.total_earning) AS te
-     CROSS JOIN period_bounds pb
-     WHERE te.punch_date BETWEEN pb.start_dt AND pb.end_dt
-     GROUP BY te.employee_code)
-  SELECT COALESCE(r.employee_code, t.employee_code) AS "Employee Code",
-         max(e.employee_name) AS "Employee Name", {period} AS "Pay Period End",
-                                                   round(COALESCE(r.register_hours, 0), 2) AS "Register Hours",
-                                                   round(COALESCE(t.te_hours, 0), 2) AS "Timecard Hours",
-                                                   round(COALESCE(t.te_hours, 0) - COALESCE(r.register_hours, 0), 2) AS "Difference",
-                                                   round(abs(COALESCE(t.te_hours, 0) - COALESCE(r.register_hours, 0)) / nullIf(COALESCE(r.register_hours, 0), 0) * 100, 2) AS "Pct Diff"
-  FROM register_hours r
-  FULL OUTER JOIN te_hours t ON t.employee_code = r.employee_code
-  LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = COALESCE(r.employee_code, t.employee_code)
-  GROUP BY COALESCE(r.employee_code, t.employee_code), {period}, r.register_hours,
-                                                                 t.te_hours
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN abs(COALESCE(t.te_hours, 0) - COALESCE(r.register_hours, 0))
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN abs(COALESCE(t.te_hours, 0) - COALESCE(r.register_hours, 0))
-                     END ASC
+  WITH period_bounds AS (
+    SELECT
+      any(pay_period_start_date) AS start_dt,
+      any(pay_period_end_date) AS end_dt
+    FROM dbpcm_warehouse.payroll
+    WHERE
+      pay_period_end_date = {period}
+  ), register_hours AS (
+    SELECT
+      employee_code,
+      SUM(type_hours) AS register_hours
+    FROM dbpcm_warehouse.payroll
+    WHERE
+      register_type = 'EARN' AND pay_period_end_date = {period}
+    GROUP BY
+      employee_code
+  ), te_hours AS (
+    SELECT
+      te.employee_code,
+      SUM(te.earn_hours) AS te_hours
+    FROM (
+      SELECT
+        employee_code,
+        punch_date,
+        earn_hours
+      FROM dbpcm_warehouse.total_earning
+    ) AS te
+    CROSS JOIN period_bounds AS pb
+    WHERE
+      te.punch_date BETWEEN pb.start_dt AND pb.end_dt
+    GROUP BY
+      te.employee_code
+  )
+  SELECT
+    COALESCE(r.employee_code, t.employee_code) AS "Employee Code",
+    max(e.employee_name) AS "Employee Name",
+    {period} AS "Pay Period End",
+    round(COALESCE(r.register_hours, 0), 2) AS "Register Hours",
+    round(COALESCE(t.te_hours, 0), 2) AS "Timecard Hours",
+    round(COALESCE(t.te_hours, 0) - COALESCE(r.register_hours, 0), 2) AS "Difference",
+    round(
+      abs(COALESCE(t.te_hours, 0) - COALESCE(r.register_hours, 0)) / nullIf(COALESCE(r.register_hours, 0), 0) * 100,
+      2
+    ) AS "Pct Diff",
+    ABS(round(COALESCE(t.te_hours, 0) - COALESCE(r.register_hours, 0), 2)) AS "Absolute Difference"
+  FROM register_hours AS r
+  FULL OUTER JOIN te_hours AS t
+    ON t.employee_code = r.employee_code
+  LEFT JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = COALESCE(r.employee_code, t.employee_code)
+  GROUP BY
+    COALESCE(r.employee_code, t.employee_code),
+    {period},
+    r.register_hours,
+    t.te_hours
+  ORDER BY {order_by}
   LIMIT {top_n}
 slots:
 - name: period
@@ -54,15 +71,24 @@ slots:
 - name: top_n
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: period, top_n, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Absolute Difference DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Absolute Difference
+    direction: DESC
+  allowed_columns:
+  - Employee Code
+  - Employee Name
+  - Pay Period End
+  - Register Hours
+  - Timecard Hours
+  - Difference
+  - Pct Diff
+  - Absolute Difference
+slots_summary: period, top_n, order_by
 uses:
 - dbpcm_warehouse.total_earning.employee_code
 - dbpcm_warehouse.total_earning.punch_date
@@ -97,5 +123,7 @@ column_formats:
     kind: percent
     scale: percent
     precision: 2
+  Absolute Difference:
+    kind: number
 presentation:
   kind: table

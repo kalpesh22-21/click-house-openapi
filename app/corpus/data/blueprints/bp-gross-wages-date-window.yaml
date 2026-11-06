@@ -5,18 +5,32 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT round(SUM(amount), 2) AS "Total Gross Wages"
+  SELECT
+    round(SUM(amount), 2) AS "Total Gross Wages"
   FROM dbpcm_warehouse.payroll
-  WHERE register_type = 'EARN'
+  WHERE
+    register_type = 'EARN'
     AND pay_period_start_date < {window_end}
     AND pay_period_end_date >= {window_start}
+  ORDER BY {order_by}
 slots:
 - name: window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
-slots_summary: window
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Total Gross Wages ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Total Gross Wages
+    direction: ASC
+  allowed_columns:
+  - Total Gross Wages
+slots_summary: window, order_by
 uses:
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.register_type

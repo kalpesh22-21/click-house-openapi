@@ -1,13 +1,16 @@
 """Execute the actual template against opposing submission/payment dates."""
 import sqlite3
 from pathlib import Path
+
 import yaml
+
+from tests.corpus.native_sort import bind_sort
 
 
 def test_expense_submitters_use_submission_window_and_include_unpaid_expenses():
     path=Path(__file__).parents[2]/'app/corpus/data/blueprints/bp-expense-senders-no-punches.yaml'
     blueprint=yaml.safe_load(path.read_text())
-    sql=blueprint['sql_template'].replace('{win}','3').replace('{order_direction}',"'ASC'")
+    sql=bind_sort(blueprint, direction='ASC').replace('{top_n}','1000').replace('{win}','3').replace('{order_direction}',"'ASC'")
     assert 'dbpcm_warehouse.expense.date_time_submitted' in blueprint['uses']
     assert 'dbpcm_warehouse.expense.expense_paid_date' not in blueprint['uses']
     with sqlite3.connect(':memory:') as db:

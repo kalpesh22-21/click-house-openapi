@@ -5,18 +5,33 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT round(SUMIf(amount, register_type = 'EARN'), 2) AS "Gross Earnings",
-         round(SUMIf(amount, register_type = 'NETPAYDIST'), 2) AS "Net Pay"
+  SELECT
+    round(SUMIf(amount, register_type = 'EARN'), 2) AS "Gross Earnings",
+    round(SUMIf(amount, register_type = 'NETPAYDIST'), 2) AS "Net Pay"
   FROM dbpcm_warehouse.payroll
-  WHERE pay_period_start_date >= {quarter_start}
+  WHERE
+    pay_period_start_date >= {quarter_start}
     AND pay_period_end_date < {quarter_end}
+  ORDER BY {order_by}
 slots:
 - name: quarter
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
-slots_summary: quarter
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Gross Earnings ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Gross Earnings
+    direction: ASC
+  allowed_columns:
+  - Gross Earnings
+  - Net Pay
+slots_summary: quarter, order_by
 uses:
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.register_type

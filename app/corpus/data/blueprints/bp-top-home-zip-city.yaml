@@ -4,34 +4,31 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT primary_zip_postal_code AS "Zip Code",
-         any(primary_city_municipality) AS "City",
-         any(primary_state_province) AS "State",
-         count(DISTINCT employee_code) AS "Headcount"
+  SELECT
+    primary_zip_postal_code AS "Zip Code",
+    any(primary_city_municipality) AS "City",
+    any(primary_state_province) AS "State",
+    count(DISTINCT employee_code) AS "Headcount"
   FROM dbpcm_warehouse.employee
-  WHERE employee_status = 'Active'
-    AND primary_zip_postal_code IS NOT NULL
-    AND primary_zip_postal_code != ''
-  GROUP BY primary_zip_postal_code
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Headcount"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Headcount"
-                     END ASC, "Zip Code"
+  WHERE
+    employee_status = 'Active'
+    AND NOT (
+      primary_zip_postal_code IS NULL
+    )
+    AND primary_zip_postal_code <> ''
+  GROUP BY
+    primary_zip_postal_code
+  ORDER BY
+    "Headcount" DESC,
+    "Zip Code"
   LIMIT {top_n}
 slots:
 - name: top_n
   type: relative_window
   required: true
-- name: order_direction
-  type: enum
-  required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: top_n, order_direction
+  description: This blueprint has a fixed ranking defined by its purpose; this slot only limits that ranking. It
+    does not accept order_by or order_direction. A different selection or display order requires a separate query.
+slots_summary: top_n
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.primary_zip_postal_code

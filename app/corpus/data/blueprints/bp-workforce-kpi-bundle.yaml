@@ -4,95 +4,161 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT count(DISTINCT CASE
-                            WHEN employee_status = 'Active' THEN employee_code
-                            ELSE NULL
-                        END) AS "Active Headcount",
-         round(100 * count(DISTINCT CASE
-                                        WHEN employee_status = 'Active'
-                                             AND employment_type = 'W2' THEN employee_code
-                                        ELSE NULL
-                                    END) / nullIf(count(DISTINCT CASE
-                                                                     WHEN employee_status = 'Active' THEN employee_code
-                                                                     ELSE NULL
-                                                                 END), 0), 2) AS "W2 Share Pct",
-         round((quantileExactLow(0.5)(CASE
-                                          WHEN employee_status = 'Active'
-                                               AND pay_type = 'Salary' AND annual_salary > 0 THEN toFloat64(annual_salary)
-                                          ELSE NULL
-                                      END) + quantileExactHigh(0.5)(CASE
-                                                                        WHEN employee_status = 'Active'
-                                                                             AND pay_type = 'Salary' AND annual_salary > 0 THEN toFloat64(annual_salary)
-                                                                        ELSE NULL
-                                                                    END)) / 2, 2) AS "Median Annual Salary",
-         round(avg(CASE
-                       WHEN employee_status = 'Active' THEN DATE_DIFF(DAY, hire_date, now()) / 365.25
-                       ELSE NULL
-                   END), 1) AS "Avg Tenure Years",
-         round(100 * count(DISTINCT CASE
-                                        WHEN employee_status = 'Active'
-                                             AND dol_status_description = 'Full Time' THEN employee_code
-                                        ELSE NULL
-                                    END) / nullIf(count(DISTINCT CASE
-                                                                     WHEN employee_status = 'Active' THEN employee_code
-                                                                     ELSE NULL
-                                                                 END), 0), 2) AS "Pct Full Time",
-         round(100 * count(DISTINCT CASE
-                                        WHEN employee_status = 'Active'
-                                             AND direct_deposit = 1 THEN employee_code
-                                        ELSE NULL
-                                    END) / nullIf(count(DISTINCT CASE
-                                                                     WHEN employee_status = 'Active' THEN employee_code
-                                                                     ELSE NULL
-                                                                 END), 0), 2) AS "Pct Direct Deposit",
-         count(DISTINCT CASE
-                            WHEN (employee_status <> 'Not Hired'
-                                  OR employee_status IS NULL)
-                                 AND hire_date >= {kpi_window_start}
-                                 AND hire_date < {kpi_window_end} THEN employee_code
-                            ELSE NULL
-                        END) AS "Hires In Window",
-         count(DISTINCT CASE
-                            WHEN employee_status = 'Terminated'
-                                 AND NOT (termination_date IS NULL)
-                                 AND toDate32(termination_date) > toDate32('1900-01-01')
-                                 AND (most_recent_hire_date IS NULL
-                                      OR most_recent_hire_date < termination_date)
-                                 AND termination_date >= {kpi_window_start}
-                                 AND termination_date < {kpi_window_end} THEN employee_code
-                            ELSE NULL
-                        END) AS "Terms In Window",
-         round(count(DISTINCT CASE
-                                  WHEN employee_status = 'Terminated'
-                                       AND NOT (termination_date IS NULL)
-                                       AND toDate32(termination_date) > toDate32('1900-01-01')
-                                       AND (most_recent_hire_date IS NULL
-                                            OR most_recent_hire_date < termination_date)
-                                       AND termination_date >= {kpi_window_start}
-                                       AND termination_date < {kpi_window_end} THEN employee_code
-                                  ELSE NULL
-                              END) / nullIf(count(DISTINCT CASE
-                                                               WHEN employee_status = 'Active' THEN employee_code
-                                                               ELSE NULL
-                                                           END), 0), 4) AS "Turnover Rate In Window",
-         count(DISTINCT CASE
-                            WHEN employee_status = 'On Leave' THEN employee_code
-                            ELSE NULL
-                        END) AS "On Leave",
-         count(DISTINCT CASE
-                            WHEN employee_status = 'Active'
-                                 AND (primary_emergency_contact_phone IS NULL
-                                      OR primary_emergency_contact_phone = '') THEN employee_code
-                            ELSE NULL
-                        END) AS "Missing Emergency Contacts"
+  SELECT
+    count(DISTINCT CASE WHEN employee_status = 'Active' THEN employee_code ELSE NULL END) AS "Active Headcount",
+    round(
+      100 * count(
+        DISTINCT CASE
+          WHEN employee_status = 'Active' AND employment_type = 'W2'
+          THEN employee_code
+          ELSE NULL
+        END
+      ) / nullIf(
+        count(DISTINCT CASE WHEN employee_status = 'Active' THEN employee_code ELSE NULL END),
+        0
+      ),
+      2
+    ) AS "W2 Share Pct",
+    round(
+      (
+        quantileExactLow(0.5)(CASE
+          WHEN employee_status = 'Active' AND pay_type = 'Salary' AND annual_salary > 0
+          THEN toFloat64(annual_salary)
+          ELSE NULL
+        END) + quantileExactHigh(0.5)(CASE
+          WHEN employee_status = 'Active' AND pay_type = 'Salary' AND annual_salary > 0
+          THEN toFloat64(annual_salary)
+          ELSE NULL
+        END)
+      ) / 2,
+      2
+    ) AS "Median Annual Salary",
+    round(
+      avg(
+        CASE
+          WHEN employee_status = 'Active'
+          THEN DATE_DIFF(DAY, hire_date, now()) / 365.25
+          ELSE NULL
+        END
+      ),
+      1
+    ) AS "Avg Tenure Years",
+    round(
+      100 * count(
+        DISTINCT CASE
+          WHEN employee_status = 'Active' AND dol_status_description = 'Full Time'
+          THEN employee_code
+          ELSE NULL
+        END
+      ) / nullIf(
+        count(DISTINCT CASE WHEN employee_status = 'Active' THEN employee_code ELSE NULL END),
+        0
+      ),
+      2
+    ) AS "Pct Full Time",
+    round(
+      100 * count(
+        DISTINCT CASE
+          WHEN employee_status = 'Active' AND direct_deposit = 1
+          THEN employee_code
+          ELSE NULL
+        END
+      ) / nullIf(
+        count(DISTINCT CASE WHEN employee_status = 'Active' THEN employee_code ELSE NULL END),
+        0
+      ),
+      2
+    ) AS "Pct Direct Deposit",
+    count(
+      DISTINCT CASE
+        WHEN (
+          employee_status <> 'Not Hired' OR employee_status IS NULL
+        )
+        AND hire_date >= {kpi_window_start}
+        AND hire_date < {kpi_window_end}
+        THEN employee_code
+        ELSE NULL
+      END
+    ) AS "Hires In Window",
+    count(
+      DISTINCT CASE
+        WHEN employee_status = 'Terminated'
+        AND NOT (
+          termination_date IS NULL
+        )
+        AND toDate32(termination_date) > toDate32('1900-01-01')
+        AND (
+          most_recent_hire_date IS NULL OR most_recent_hire_date < termination_date
+        )
+        AND termination_date >= {kpi_window_start}
+        AND termination_date < {kpi_window_end}
+        THEN employee_code
+        ELSE NULL
+      END
+    ) AS "Terms In Window",
+    round(
+      count(
+        DISTINCT CASE
+          WHEN employee_status = 'Terminated'
+          AND NOT (
+            termination_date IS NULL
+          )
+          AND toDate32(termination_date) > toDate32('1900-01-01')
+          AND (
+            most_recent_hire_date IS NULL OR most_recent_hire_date < termination_date
+          )
+          AND termination_date >= {kpi_window_start}
+          AND termination_date < {kpi_window_end}
+          THEN employee_code
+          ELSE NULL
+        END
+      ) / nullIf(
+        count(DISTINCT CASE WHEN employee_status = 'Active' THEN employee_code ELSE NULL END),
+        0
+      ),
+      4
+    ) AS "Turnover Rate In Window",
+    count(DISTINCT CASE WHEN employee_status = 'On Leave' THEN employee_code ELSE NULL END) AS "On Leave",
+    count(
+      DISTINCT CASE
+        WHEN employee_status = 'Active'
+        AND (
+          primary_emergency_contact_phone IS NULL OR primary_emergency_contact_phone = ''
+        )
+        THEN employee_code
+        ELSE NULL
+      END
+    ) AS "Missing Emergency Contacts"
   FROM dbpcm_warehouse.employee
+  ORDER BY {order_by}
 slots:
 - name: kpi_window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
-slots_summary: kpi_window
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Active Headcount ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Active Headcount
+    direction: ASC
+  allowed_columns:
+  - Active Headcount
+  - W2 Share Pct
+  - Median Annual Salary
+  - Avg Tenure Years
+  - Pct Full Time
+  - Pct Direct Deposit
+  - Hires In Window
+  - Terms In Window
+  - Turnover Rate In Window
+  - On Leave
+  - Missing Emergency Contacts
+slots_summary: kpi_window, order_by
 uses:
 - dbpcm_warehouse.employee.pay_type
 - dbpcm_warehouse.employee.employee_code

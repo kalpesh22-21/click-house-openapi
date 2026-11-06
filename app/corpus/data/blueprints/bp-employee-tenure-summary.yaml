@@ -4,7 +4,7 @@ intent: Elapsed years from original or most recent hire date to a supplied ISO Y
   NULL, dates at/before 1900-01-01 and future hire dates. all-status elapsed time does NOT stop at termination and
   is not historical active headcount. Date is explicit, not inferred from today. Defaults to Active + On Leave;
   employee_status selects another status or All to remove the filter.
-slots_summary: group_by, hire_basis, reference_date, employee_status, department, employee, order_direction
+slots_summary: group_by, hire_basis, reference_date, employee_status, department, employee, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -34,7 +34,8 @@ slots:
   temporal_type: date
   required: true
 - name: employee_status
-  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
+  description: Defaults to Active and On Leave. Omit this slot or send [Active, On Leave] for both; send a list
+    of specific statuses to select another population. All removes the status filter and must be supplied alone.
   type: enum
   required: false
   enum_values:
@@ -49,7 +50,10 @@ slots:
   - Unknown
   - All
   binds_to: dbpcm_warehouse.employee.employee_status
-  optional_pattern: e.employee_status IN ('Active', 'On Leave')
+  multiple: true
+  default:
+  - Active
+  - On Leave
 - name: department
   type: entity
   required: false
@@ -57,63 +61,101 @@ slots:
   optional_pattern: 'TRUE'
   description: Resolve department names/abbreviations against the directory; a known department may have no matching
     employees.
+  multiple: true
 - name: employee
   type: entity
   required: false
   binds_to: dbpcm_warehouse.employee.employee_code
   optional_pattern: 'TRUE'
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Group ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Group
+    direction: ASC
+  allowed_columns:
+  - Group
+  - Valid Hire Date Count
+  - Average Elapsed Years
+  - Minimum Elapsed Years
+  - Maximum Elapsed Years
 result_grain:
 - Group
 sql_template: |
-  SELECT CASE {group_by}
-             WHEN 'department' THEN e.department_name
-             WHEN 'status' THEN e.employee_status
-             ELSE 'Company'
-         END AS `Group`,
-         count(*) AS `Valid Hire Date Count`,
-         avg(dateDiff('day', CASE {hire_basis}
-                                 WHEN 'most_recent_hire' THEN e.most_recent_hire_date
-                                 ELSE e.hire_date
-                             END, toDate({reference_date})) / 365.25) AS `Average Elapsed Years`,
-         min(dateDiff('day', CASE {hire_basis}
-                                 WHEN 'most_recent_hire' THEN e.most_recent_hire_date
-                                 ELSE e.hire_date
-                             END, toDate({reference_date})) / 365.25) AS `Minimum Elapsed Years`,
-         max(dateDiff('day', CASE {hire_basis}
-                                 WHEN 'most_recent_hire' THEN e.most_recent_hire_date
-                                 ELSE e.hire_date
-                             END, toDate({reference_date})) / 365.25) AS `Maximum Elapsed Years`
-  FROM dbpcm_warehouse.employee e
-  WHERE (e.employee_status = {employee_status}
-         OR {employee_status} = 'All')
-    AND e.department_name = {department}
+  SELECT
+    CASE
+      WHEN {group_by} = 'department'
+      THEN e.department_name
+      WHEN {group_by} = 'status'
+      THEN e.employee_status
+      ELSE 'Company'
+    END AS "Group",
+    count(*) AS "Valid Hire Date Count",
+    avg(
+      DATE_DIFF(
+        DAY,
+        CASE
+          WHEN {hire_basis} = 'most_recent_hire'
+          THEN e.most_recent_hire_date
+          ELSE e.hire_date
+        END,
+        toDate({reference_date})
+      ) / 365.25
+    ) AS "Average Elapsed Years",
+    min(
+      DATE_DIFF(
+        DAY,
+        CASE
+          WHEN {hire_basis} = 'most_recent_hire'
+          THEN e.most_recent_hire_date
+          ELSE e.hire_date
+        END,
+        toDate({reference_date})
+      ) / 365.25
+    ) AS "Minimum Elapsed Years",
+    max(
+      DATE_DIFF(
+        DAY,
+        CASE
+          WHEN {hire_basis} = 'most_recent_hire'
+          THEN e.most_recent_hire_date
+          ELSE e.hire_date
+        END,
+        toDate({reference_date})
+      ) / 365.25
+    ) AS "Maximum Elapsed Years"
+  FROM dbpcm_warehouse.employee AS e
+  WHERE
+    (
+      e.employee_status IN ({employee_status}) OR 'All' IN ({employee_status})
+    )
+    AND e.department_name IN ({department})
     AND e.employee_code = {employee}
-    AND (CASE {hire_basis}
-             WHEN 'most_recent_hire' THEN e.most_recent_hire_date
-             ELSE e.hire_date
-         END) > toDate('1900-01-01')
-    AND (CASE {hire_basis}
-             WHEN 'most_recent_hire' THEN e.most_recent_hire_date
-             ELSE e.hire_date
-         END) <= toDate({reference_date})
-  GROUP BY CASE {group_by}
-               WHEN 'department' THEN e.department_name
-               WHEN 'status' THEN e.employee_status
-               ELSE 'Company'
-           END
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN `Group`
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN `Group`
-                     END ASC
+    AND (
+      CASE
+        WHEN {hire_basis} = 'most_recent_hire'
+        THEN e.most_recent_hire_date
+        ELSE e.hire_date
+      END
+    ) > toDate('1900-01-01')
+    AND (
+      CASE
+        WHEN {hire_basis} = 'most_recent_hire'
+        THEN e.most_recent_hire_date
+        ELSE e.hire_date
+      END
+    ) <= toDate({reference_date})
+  GROUP BY
+    CASE
+      WHEN {group_by} = 'department'
+      THEN e.department_name
+      WHEN {group_by} = 'status'
+      THEN e.employee_status
+      ELSE 'Company'
+    END
+  ORDER BY {order_by}
 column_formats:
   Group:
     kind: text

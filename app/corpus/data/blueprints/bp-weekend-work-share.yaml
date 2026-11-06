@@ -5,35 +5,47 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT formatDateTime(toStartOfMonth(punch_date), '%Y-%m') AS "Month",
-         round(SUM(earn_hours), 2) AS "Total Hours",
-         round(SUMIf(earn_hours, dayOfWeek(punch_date) IN (6, 7)), 2) AS "Weekend Hours",
-         round(SUMIf(earn_hours, dayOfWeek(punch_date) NOT IN (6, 7)), 2) AS "Weekday Hours",
-         round(100 * SUMIf(earn_hours, dayOfWeek(punch_date) IN (6, 7)) / nullIf(SUM(earn_hours), 0), 2) AS "Weekend Share Pct"
-  FROM
-    (SELECT punch_date,
-            earn_hours
-     FROM dbpcm_warehouse.total_earning)
-  WHERE punch_date >= today() - toIntervalMonth({win})
-  GROUP BY "Month"
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Month"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Month"
-                     END ASC
+  SELECT
+    formatDateTime(addDays(punch_date, 1 - toDayOfMonth(punch_date)), '%Y-%m') AS "Month",
+    round(SUM(earn_hours), 2) AS "Total Hours",
+    round(SUMIf(earn_hours, dayOfWeek(punch_date) IN (6, 7)), 2) AS "Weekend Hours",
+    round(SUMIf(earn_hours, NOT (
+      dayOfWeek(punch_date) IN (6, 7)
+    )), 2) AS "Weekday Hours",
+    round(
+      100 * SUMIf(earn_hours, dayOfWeek(punch_date) IN (6, 7)) / nullIf(SUM(earn_hours), 0),
+      2
+    ) AS "Weekend Share Pct"
+  FROM (
+    SELECT
+      punch_date,
+      earn_hours
+    FROM dbpcm_warehouse.total_earning
+  )
+  WHERE
+    punch_date >= today() - toIntervalMonth({win})
+  GROUP BY
+    "Month"
+  ORDER BY {order_by}
 slots:
 - name: win
   type: relative_window
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: win, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Month ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Month
+    direction: ASC
+  allowed_columns:
+  - Month
+  - Total Hours
+  - Weekend Hours
+  - Weekday Hours
+  - Weekend Share Pct
+slots_summary: win, order_by
 uses:
 - dbpcm_warehouse.total_earning.punch_date
 - dbpcm_warehouse.total_earning.earn_hours

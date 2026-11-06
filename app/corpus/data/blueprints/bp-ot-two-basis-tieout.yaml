@@ -5,54 +5,78 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  WITH period_bounds AS
-    (SELECT any(pay_period_start_date) AS start_dt,
-            any(pay_period_end_date) AS end_dt
-     FROM dbpcm_warehouse.payroll
-     WHERE pay_period_end_date = {period}),
-       register_ot AS
-    (SELECT employee_code,
-            round(toFloat64(SUM(amount)), 2) AS reg_amount
-     FROM dbpcm_warehouse.payroll
-     WHERE register_type = 'EARN'
-       AND type_code IN
-         (SELECT earn_code
-          FROM dbpcm_warehouse.earning_category FINAL
-          WHERE category_name = {overtime_category})
-       AND pay_period_end_date = {period}
-     GROUP BY employee_code),
-       te_ot AS
-    (SELECT te.employee_code,
-            round(toFloat64(SUM(te.earn_amount)), 2) AS te_amount
-     FROM
-       (SELECT employee_code,
-               punch_date,
-               earn_amount,
-               earn_code
-        FROM dbpcm_warehouse.total_earning) AS te
-     CROSS JOIN period_bounds pb
-     WHERE te.earn_code IN
-         (SELECT earn_code
-          FROM dbpcm_warehouse.earning_category FINAL
-          WHERE category_name = {overtime_category})
-       AND te.punch_date BETWEEN pb.start_dt AND pb.end_dt
-     GROUP BY te.employee_code)
-  SELECT COALESCE(r.employee_code, t.employee_code) AS "Employee Code",
-         max(e.employee_name) AS "Employee Name", {period} AS "Pay Period End",
-                                                   round(COALESCE(r.reg_amount, 0), 2) AS "Register OT",
-                                                   round(COALESCE(t.te_amount, 0), 2) AS "Timecard OT",
-                                                   round(COALESCE(t.te_amount, 0) - COALESCE(r.reg_amount, 0), 2) AS "Difference",
-                                                   round(abs(COALESCE(t.te_amount, 0) - COALESCE(r.reg_amount, 0)) / nullIf(COALESCE(r.reg_amount, 0), 0) * 100, 2) AS "Pct Diff"
-  FROM register_ot r
-  FULL OUTER JOIN te_ot t ON t.employee_code = r.employee_code
-  LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = COALESCE(r.employee_code, t.employee_code)
-  GROUP BY COALESCE(r.employee_code, t.employee_code), {period}, r.reg_amount,
-                                                                 t.te_amount
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN abs(COALESCE(t.te_amount, 0) - COALESCE(r.reg_amount, 0))
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN abs(COALESCE(t.te_amount, 0) - COALESCE(r.reg_amount, 0))
-                     END ASC
+  WITH period_bounds AS (
+    SELECT
+      any(pay_period_start_date) AS start_dt,
+      any(pay_period_end_date) AS end_dt
+    FROM dbpcm_warehouse.payroll
+    WHERE
+      pay_period_end_date = {period}
+  ), register_ot AS (
+    SELECT
+      employee_code,
+      round(toFloat64(SUM(amount)), 2) AS reg_amount
+    FROM dbpcm_warehouse.payroll
+    WHERE
+      register_type = 'EARN'
+      AND type_code IN (
+        SELECT
+          earn_code
+        FROM dbpcm_warehouse.earning_category
+        WHERE
+          category_name IN ({overtime_category})
+      )
+      AND pay_period_end_date = {period}
+    GROUP BY
+      employee_code
+  ), te_ot AS (
+    SELECT
+      te.employee_code,
+      round(toFloat64(SUM(te.earn_amount)), 2) AS te_amount
+    FROM (
+      SELECT
+        employee_code,
+        punch_date,
+        earn_amount,
+        earn_code
+      FROM dbpcm_warehouse.total_earning
+    ) AS te
+    CROSS JOIN period_bounds AS pb
+    WHERE
+      te.earn_code IN (
+        SELECT
+          earn_code
+        FROM dbpcm_warehouse.earning_category
+        WHERE
+          category_name IN ({overtime_category})
+      )
+      AND te.punch_date BETWEEN pb.start_dt AND pb.end_dt
+    GROUP BY
+      te.employee_code
+  )
+  SELECT
+    COALESCE(r.employee_code, t.employee_code) AS "Employee Code",
+    max(e.employee_name) AS "Employee Name",
+    {period} AS "Pay Period End",
+    round(COALESCE(r.reg_amount, 0), 2) AS "Register OT",
+    round(COALESCE(t.te_amount, 0), 2) AS "Timecard OT",
+    round(COALESCE(t.te_amount, 0) - COALESCE(r.reg_amount, 0), 2) AS "Difference",
+    round(
+      abs(COALESCE(t.te_amount, 0) - COALESCE(r.reg_amount, 0)) / nullIf(COALESCE(r.reg_amount, 0), 0) * 100,
+      2
+    ) AS "Pct Diff",
+    ABS(round(COALESCE(t.te_amount, 0) - COALESCE(r.reg_amount, 0), 2)) AS "Absolute Difference"
+  FROM register_ot AS r
+  FULL OUTER JOIN te_ot AS t
+    ON t.employee_code = r.employee_code
+  LEFT JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = COALESCE(r.employee_code, t.employee_code)
+  GROUP BY
+    COALESCE(r.employee_code, t.employee_code),
+    {period},
+    r.reg_amount,
+    t.te_amount
+  ORDER BY {order_by}
   LIMIT {top_n}
 slots:
 - name: period
@@ -63,20 +87,30 @@ slots:
 - name: top_n
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
-  required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
 - name: overtime_category
   type: entity
   required: true
   binds_to: dbpcm_warehouse.earning_category.category_name
   description: Resolve the requested overtime concept to this client's category label; do not invent earning codes.
-slots_summary: period, top_n, order_direction, overtime_category
+  multiple: true
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Absolute Difference DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Absolute Difference
+    direction: DESC
+  allowed_columns:
+  - Employee Code
+  - Employee Name
+  - Pay Period End
+  - Register OT
+  - Timecard OT
+  - Difference
+  - Pct Diff
+  - Absolute Difference
+slots_summary: period, top_n, overtime_category, order_by
 uses:
 - dbpcm_warehouse.payroll.employee_code
 - dbpcm_warehouse.payroll.register_type
@@ -115,5 +149,7 @@ column_formats:
     kind: percent
     scale: percent
     precision: 2
+  Absolute Difference:
+    kind: number
 presentation:
   kind: table

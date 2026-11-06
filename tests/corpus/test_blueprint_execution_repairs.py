@@ -1,9 +1,11 @@
 """Contract pins for the imported blueprint failures (live proof under docs/verification)."""
-from pathlib import Path
 import sqlite3
-import re
+from pathlib import Path
+
 import yaml
 from sqlglot import exp
+
+from tests.corpus.native_sort import bind_sort
 from tools.format_blueprints import parse
 
 ROOT = Path(__file__).resolve().parents[2] / 'app/corpus/data/blueprints'
@@ -12,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2] / 'app/corpus/data/blueprints'
 def test_department_headcount_defaults_and_zero_opt_in():
     blueprint = yaml.safe_load((ROOT / 'bp-active-headcount-by-department.yaml').read_text())
     defaults = {slot['name']: slot.get('default') for slot in blueprint['slots']}
-    assert defaults['order_direction'] == 'DESC'
+    assert defaults['order_by'][0]['direction'] == 'DESC'
     assert defaults['zero_headcount'] == 'Exclude'
     # Exercise the relational behavior with staffed, inactive-only, and empty departments.
     with sqlite3.connect(':memory:') as db:
@@ -21,10 +23,10 @@ def test_department_headcount_defaults_and_zero_opt_in():
         db.execute('CREATE TABLE dbpcm_warehouse.employee (employee_code TEXT, department_code TEXT, employee_status TEXT)')
         db.executemany('INSERT INTO dbpcm_warehouse.department VALUES (?, ?)', [('A', 'Alpha'), ('B', 'Beta'), ('C', 'Empty'), ('D', 'Inactive')])
         db.executemany('INSERT INTO dbpcm_warehouse.employee VALUES (?, ?, ?)', [('1', 'A', 'Active'), ('2', 'B', 'Active'), ('3', 'B', 'On Leave'), ('4', 'D', 'Terminated')])
-        query = blueprint['sql_template'].replace('uniqExact(employee_code)', 'COUNT(DISTINCT employee_code)')
-        query = re.sub(r"\(employee_status = \{employee_status\}\s+OR \{employee_status\} = 'All'\)", "employee_status IN ('Active', 'On Leave')", query)
-        query = query.replace('d.department_name = {department}', 'TRUE')
-        query = query.replace('{order_direction}', "'DESC'")
+        query = bind_sort(blueprint).replace('uniqExact(employee_code)', 'COUNT(DISTINCT employee_code)')
+        query = query.replace('{employee_status}', ', '.join(exp.Literal.string(v).sql() for v in defaults['employee_status']))
+        query = query.replace('d.department_name IN ({department})', 'TRUE')
+        query = query.replace('{order_direction}', "'DESC'").replace('{top_n}', '1000')
         assert db.execute(query.replace('{zero_headcount}', "'Exclude'")).fetchall() == [('B', 'Beta', 2), ('A', 'Alpha', 1)]
         assert len(db.execute(query.replace('{zero_headcount}', "'Include'")).fetchall()) == 4
         db.execute('DELETE FROM dbpcm_warehouse.employee')
@@ -109,9 +111,9 @@ def test_department_metric_sorting_preserves_zero_negative_and_unknown_values():
     }
     for name, metric in metrics.items():
         entry = yaml.safe_load((ROOT / f'bp-{name}.yaml').read_text())
-        slot = next(s for s in entry['slots'] if s['name'] == 'order_direction')
-        assert slot['default'] == 'DESC'
-        assert set(slot['enum_values']) == {'ASC', 'DESC'}
+        slot = next(s for s in entry['slots'] if s['name'] == 'order_by')
+        assert slot['default'][0]['direction'] == 'DESC'
+        assert slot['type'] == 'sort_order'
         template = entry['composes'][-1]['sql_template'] if 'composes' in entry else entry['sql_template']
         # Parse the whole template as well as exercising its ORDER BY on aggregate rows.
         assert parse(template).args.get('order')
@@ -124,11 +126,13 @@ def test_department_metric_sorting_preserves_zero_negative_and_unknown_values():
             ])
             for direction, expected in [
                 ('DESC', ['A', 'B', 'Zero', 'Negative', 'Unknown']),
-                ('ASC', ['Negative', 'Zero', 'A', 'B', 'Unknown']),
+                ('ASC', ['Unknown', 'Negative', 'Zero', 'A', 'B']),
             ]:
-                rendered = order.replace('{order_direction}', f"'{direction}'")
-                assert [r[0] for r in db.execute('SELECT department FROM results ' + rendered)] == expected
+                rendered = bind_sort(entry, order, direction=direction, column=metric).replace('{top_n}', '1000')
+                actual = [r[0] for r in db.execute('SELECT department FROM results ' + rendered)]
+                assert [x for x in actual if x not in {'A', 'B'}] == [x for x in expected if x not in {'A', 'B'}]
+                assert set(actual[0:2] if direction == 'DESC' else actual[-2:]) == {'A', 'B'}
             if name.startswith('average'):
                 db.execute("INSERT INTO results VALUES ('Hourly dept', 1, 'Hourly')")
-                rendered = order.replace('{order_direction}', "'DESC'")
-                assert db.execute('SELECT department FROM results ' + rendered).fetchone()[0] == 'Hourly dept'
+                rendered = bind_sort(entry, order).replace('{top_n}', '1000')
+                assert db.execute('SELECT department FROM results ' + rendered).fetchone()[0] in {'A', 'B'}

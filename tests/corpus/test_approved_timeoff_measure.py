@@ -1,14 +1,17 @@
 """Execute the authored measure against mixed accrual event categories."""
 import sqlite3
 from pathlib import Path
+
 import yaml
+
+from tests.corpus.native_sort import bind_sort
 
 
 def test_approved_hours_excludes_payouts_pending_and_other_periods():
     path = Path(__file__).parents[2] / 'app/corpus/data/blueprints/bp-approved-timeoff-hours.yaml'
     bp = yaml.safe_load(path.read_text())
     assert 'dbpcm_warehouse.time_off_request.event_type' in bp['uses']
-    sql = bp['sql_template'].format(window_start="'2026-01-01'", window_end="'2026-12-31'", dept="'Sales'", order_direction="'DESC'")
+    sql = bind_sort(bp).format(top_n=1000, window_start="'2026-01-01'", window_end="'2026-12-31'", dept="'Sales'", order_direction="'DESC'")
     with sqlite3.connect(':memory:') as db:
         db.execute("ATTACH DATABASE ':memory:' AS dbpcm_warehouse")
         db.create_function('toDate32', 1, lambda value: value)

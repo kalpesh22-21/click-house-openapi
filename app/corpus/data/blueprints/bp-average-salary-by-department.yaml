@@ -3,7 +3,7 @@ intent: Average annual compensation and headcount by department and pay type. Av
   headcount includes it. Salary uses annual_salary; Hourly uses hourly_salary and estimated annual compensation
   = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes overtime). Keep pay types separate. Defaults to
   Active + On Leave; employee_status overrides or All removes the filter.
-slots_summary: department, employee_status, order_direction
+slots_summary: top_n, department, employee_status, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -16,15 +16,15 @@ uses:
 - dbpcm_warehouse.employee.hourly_salary
 - dbpcm_warehouse.department.department_name
 slots:
-- name: order_direction
-  type: enum
+- name: top_n
+  type: positive_integer
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort by average annual compensation; defaults to highest first. Departments are ranked within each
-    pay type.
+  min_value: 1
+  max_value: 1000
+  optional_pattern: 'TRUE'
+  description: Optional maximum number of output rows after aggregation and the declared ordering; omit for the
+    full result. Bind only when the user requests a limited list. Returns at most N rows; does not include all tied
+    ranks or change the measured population. Applies to the whole result, not per group.
 - name: department
   type: string
   required: false
@@ -32,8 +32,10 @@ slots:
   optional_pattern: 'TRUE'
   description: Resolve department names/abbreviations against the directory; a known department may have no matching
     employees.
+  multiple: true
 - name: employee_status
-  description: Omit for Active + On Leave; select a status to override, or All to remove the status filter.
+  description: Defaults to Active and On Leave. Omit this slot or send [Active, On Leave] for both; send a list
+    of specific statuses to select another population. All removes the status filter and must be supplied alone.
   type: enum
   required: false
   enum_values:
@@ -48,37 +50,66 @@ slots:
   - Unknown
   - All
   binds_to: dbpcm_warehouse.employee.employee_status
-  optional_pattern: employee_status IN ('Active', 'On Leave')
+  multiple: true
+  default:
+  - Active
+  - On Leave
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Average Annual Compensation DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Average Annual Compensation
+    direction: DESC
+  allowed_columns:
+  - Pay Type
+  - Compensation Basis
+  - Department
+  - Average Annual Compensation
+  - Headcount
+  - Average Hourly Rate
 result_grain:
 - Department
 - Pay Type
-sql_template: |
-  SELECT pay_type AS `Pay Type`,
-         CASE
-             WHEN pay_type = 'Hourly' THEN 'Estimated annual compensation (2080 hours)'
-             WHEN pay_type = 'Salary' THEN 'Recorded annual salary'
-             ELSE 'Unknown compensation basis'
-         END AS `Compensation Basis`,
-         department_name AS "Department",
-         AVG((CASE
-                  WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary
-                  WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary * 2080
-                  ELSE NULL
-              END)) AS "Average Annual Compensation",
-         COUNT(DISTINCT employee_code) AS "Headcount",
-         avg(CASE
-                 WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary
-                 ELSE NULL
-             END) AS `Average Hourly Rate`
+sql_template: |+
+  SELECT
+    pay_type AS "Pay Type",
+    CASE
+      WHEN pay_type = 'Hourly'
+      THEN 'Estimated annual compensation (2080 hours)'
+      WHEN pay_type = 'Salary'
+      THEN 'Recorded annual salary'
+      ELSE 'Unknown compensation basis'
+    END AS "Compensation Basis",
+    department_name AS "Department",
+    AVG(
+      (
+        CASE
+          WHEN pay_type = 'Salary' AND annual_salary > 0
+          THEN annual_salary
+          WHEN pay_type = 'Hourly' AND hourly_salary > 0
+          THEN hourly_salary * 2080
+          ELSE NULL
+        END
+      )
+    ) AS "Average Annual Compensation",
+    COUNT(DISTINCT employee_code) AS "Headcount",
+    avg(
+      CASE WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary ELSE NULL END
+    ) AS "Average Hourly Rate"
   FROM dbpcm_warehouse.employee
-  WHERE department_name = {department}
-    AND (employee_status = {employee_status}
-         OR {employee_status} = 'All')
-  GROUP BY pay_type,
-           department_name
-  ORDER BY `Pay Type` ASC, CASE WHEN {order_direction} = 'DESC' THEN "Average Annual Compensation" END DESC NULLS LAST,
-           CASE WHEN {order_direction} = 'ASC' THEN "Average Annual Compensation" END ASC NULLS LAST,
-           "Department" ASC
+  WHERE
+    department_name IN ({department})
+    AND (
+      employee_status IN ({employee_status}) OR 'All' IN ({employee_status})
+    )
+  GROUP BY
+    pay_type,
+    department_name
+  ORDER BY {order_by}
+  LIMIT {top_n}
+
 uses_rules:
 - compensation_by_pay_type
 column_formats:

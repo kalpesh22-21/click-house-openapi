@@ -4,27 +4,33 @@ intent: Employees whose total paid hours across all timecard entries in a single
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT te.employee_code AS "Employee Code",
-         any(e.employee_name) AS "Employee Name",
-         te.punch_date AS "Punch Date",
-         round(SUM(te.earn_hours), 2) AS "Daily Hours"
-  FROM
-    (SELECT employee_code,
-            punch_date,
-            earn_hours
-     FROM dbpcm_warehouse.total_earning) AS te
-  JOIN dbpcm_warehouse.employee e ON e.employee_code = te.employee_code
-  WHERE (te.punch_date >= {window_start} AND te.punch_date < {window_end})
-  GROUP BY te.employee_code,
-           te.punch_date
-  HAVING SUM(te.earn_hours) > {threshold}
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Daily Hours"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Daily Hours"
-                     END ASC, "Employee Code"
+sql_template: |+
+  SELECT
+    te.employee_code AS "Employee Code",
+    any(e.employee_name) AS "Employee Name",
+    te.punch_date AS "Punch Date",
+    round(SUM(te.earn_hours), 2) AS "Daily Hours"
+  FROM (
+    SELECT
+      employee_code,
+      punch_date,
+      earn_hours
+    FROM dbpcm_warehouse.total_earning
+  ) AS te
+  JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = te.employee_code
+  WHERE
+    (
+      te.punch_date >= {window_start} AND te.punch_date < {window_end}
+    )
+  GROUP BY
+    te.employee_code,
+    te.punch_date
+  HAVING
+    SUM(te.earn_hours) > {threshold}
+  ORDER BY {order_by}
   LIMIT {max_rows}
+
 slots:
 - name: threshold
   type: positive_integer
@@ -33,19 +39,25 @@ slots:
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: max_rows
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: threshold, window, max_rows, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Daily Hours DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Daily Hours
+    direction: DESC
+  allowed_columns:
+  - Employee Code
+  - Employee Name
+  - Punch Date
+  - Daily Hours
+slots_summary: threshold, window, max_rows, order_by
 uses:
 - dbpcm_warehouse.total_earning.employee_code
 - dbpcm_warehouse.total_earning.punch_date

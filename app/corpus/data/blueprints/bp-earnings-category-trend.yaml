@@ -5,44 +5,54 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT formatDateTime(toStartOfMonth(te.punch_date), '%Y-%m') AS "Month",
-         round(SUM(te.earn_amount), 2) AS "Total Dollars"
-  FROM
-    (SELECT punch_date,
-            earn_amount,
-            earn_code
-     FROM dbpcm_warehouse.total_earning) AS te
-  JOIN
-    (SELECT earn_code,
-            category_name
-     FROM dbpcm_warehouse.earning_category FINAL) AS ec ON ec.earn_code = te.earn_code
-  WHERE ec.category_name = {concept}
-    AND te.punch_date >= addMonths(
-                                     (SELECT max(punch_date)
-                                      FROM dbpcm_warehouse.total_earning), -{win})
-  GROUP BY "Month"
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Month"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Month"
-                     END ASC
+  SELECT
+    formatDateTime(addDays(te.punch_date, 1 - toDayOfMonth(te.punch_date)), '%Y-%m') AS "Month",
+    round(SUM(te.earn_amount), 2) AS "Total Dollars"
+  FROM (
+    SELECT
+      punch_date,
+      earn_amount,
+      earn_code
+    FROM dbpcm_warehouse.total_earning
+  ) AS te
+  JOIN (
+    SELECT
+      earn_code,
+      category_name
+    FROM dbpcm_warehouse.earning_category
+  ) AS ec
+    ON ec.earn_code = te.earn_code
+  WHERE
+    ec.category_name IN ({concept})
+    AND te.punch_date >= addMonths((
+      SELECT
+        max(punch_date)
+      FROM dbpcm_warehouse.total_earning
+    ), -{win})
+  GROUP BY
+    "Month"
+  ORDER BY {order_by}
 slots:
 - name: concept
   type: string
   required: true
   binds_to: dbpcm_warehouse.earning_category.category_name
+  multiple: true
 - name: win
   type: relative_window
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: concept, win, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Month ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Month
+    direction: ASC
+  allowed_columns:
+  - Month
+  - Total Dollars
+slots_summary: concept, win, order_by
 uses:
 - dbpcm_warehouse.total_earning.earn_amount
 - dbpcm_warehouse.total_earning.punch_date

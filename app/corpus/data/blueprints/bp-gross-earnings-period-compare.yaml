@@ -4,19 +4,19 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT pay_period_end_date AS "Period",
-         round(SUM(p.amount), 2) AS "Gross Earnings"
+  SELECT
+    pay_period_end_date AS "Period",
+    round(SUM(p.amount), 2) AS "Gross Earnings"
   FROM dbpcm_warehouse.payroll AS p
-  JOIN dbpcm_warehouse.employee AS e ON e.employee_code = p.employee_code
-  WHERE p.register_type = 'EARN'
+  JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = p.employee_code
+  WHERE
+    p.register_type = 'EARN'
     AND p.pay_period_end_date IN ({period_a}, {period_b})
-    AND e.department_name = {dept}
-  GROUP BY pay_period_end_date
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Period"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Period"
-                     END ASC
+    AND e.department_name IN ({dept})
+  GROUP BY
+    pay_period_end_date
+  ORDER BY {order_by}
 slots:
 - name: period_a
   type: period
@@ -33,15 +33,19 @@ slots:
   required: false
   binds_to: dbpcm_warehouse.employee.department_name
   optional_pattern: 'TRUE'
-- name: order_direction
-  type: enum
+  multiple: true
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
-slots_summary: period_a, period_b, dept, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Period ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Period
+    direction: ASC
+  allowed_columns:
+  - Period
+  - Gross Earnings
+slots_summary: period_a, period_b, dept, order_by
 uses:
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.register_type

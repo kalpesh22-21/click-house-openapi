@@ -3,51 +3,68 @@ intent: Resolve labor allocation slots 1-3 to codes and descriptions for active 
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT e.employee_code AS "Employee Code",
-         e.department_name AS "Department",
-         la1.code AS "Allocation 1 Code",
-         la1.description AS "Allocation 1 Description",
-         la2.code AS "Allocation 2 Code",
-         la2.description AS "Allocation 2 Description",
-         la3.code AS "Allocation 3 Code",
-         la3.description AS "Allocation 3 Description",
-         toUInt8((e.labor_allocation_key_1 IS NULL
-                  OR e.labor_allocation_key_1 = '')
-                 OR (e.labor_allocation_key_2 IS NULL
-                     OR e.labor_allocation_key_2 = '')
-                 OR (e.labor_allocation_key_3 IS NULL
-                     OR e.labor_allocation_key_3 = '')) AS "Unallocated"
+sql_template: |+
+  SELECT
+    e.employee_code AS "Employee Code",
+    e.department_name AS "Department",
+    la1.code AS "Allocation 1 Code",
+    la1.description AS "Allocation 1 Description",
+    la2.code AS "Allocation 2 Code",
+    la2.description AS "Allocation 2 Description",
+    la3.code AS "Allocation 3 Code",
+    la3.description AS "Allocation 3 Description",
+    toUInt8(
+      (
+        e.labor_allocation_key_1 IS NULL OR e.labor_allocation_key_1 = ''
+      )
+      OR (
+        e.labor_allocation_key_2 IS NULL OR e.labor_allocation_key_2 = ''
+      )
+      OR (
+        e.labor_allocation_key_3 IS NULL OR e.labor_allocation_key_3 = ''
+      )
+    ) AS "Unallocated"
   FROM dbpcm_warehouse.employee AS e
-  LEFT JOIN dbpcm_warehouse.labor_allocation AS la1 ON e.labor_allocation_key_1 = la1.join_key
-  LEFT JOIN dbpcm_warehouse.labor_allocation AS la2 ON e.labor_allocation_key_2 = la2.join_key
-  LEFT JOIN dbpcm_warehouse.labor_allocation AS la3 ON e.labor_allocation_key_3 = la3.join_key
-  WHERE e.employee_status = 'Active'
-    AND e.department_name = {department}
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN e.employee_code
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN e.employee_code
-                     END ASC
+  LEFT JOIN dbpcm_warehouse.labor_allocation AS la1
+    ON e.labor_allocation_key_1 = la1.join_key
+  LEFT JOIN dbpcm_warehouse.labor_allocation AS la2
+    ON e.labor_allocation_key_2 = la2.join_key
+  LEFT JOIN dbpcm_warehouse.labor_allocation AS la3
+    ON e.labor_allocation_key_3 = la3.join_key
+  WHERE
+    e.employee_status = 'Active' AND e.department_name IN ({department})
+  ORDER BY {order_by}
   LIMIT {max_rows}
+
 slots:
 - name: department
   type: string
   required: false
   binds_to: dbpcm_warehouse.employee.department_name
   optional_pattern: 'TRUE'
+  multiple: true
 - name: max_rows
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
-slots_summary: department, max_rows, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Employee Code ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Employee Code
+    direction: ASC
+  allowed_columns:
+  - Employee Code
+  - Department
+  - Allocation 1 Code
+  - Allocation 1 Description
+  - Allocation 2 Code
+  - Allocation 2 Description
+  - Allocation 3 Code
+  - Allocation 3 Description
+  - Unallocated
+slots_summary: department, max_rows, order_by
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.department_name

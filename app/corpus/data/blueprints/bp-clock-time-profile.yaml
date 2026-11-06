@@ -4,48 +4,73 @@ intent: Time-of-day clock-in and clock-out distribution per employee home depart
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT e.department_name AS "Department",
-         round((quantileExactLow(0.5)(toHour(pp.in_punch_time) * 60 + toMinute(pp.in_punch_time)) + quantileExactHigh(0.5)(toHour(pp.in_punch_time) * 60 + toMinute(pp.in_punch_time))) / 2, 0) AS "Median Clock-In Min",
-         round((quantileExactLow(0.5)(toHour(pp.out_punch_time) * 60 + toMinute(pp.out_punch_time)) + quantileExactHigh(0.5)(toHour(pp.out_punch_time) * 60 + toMinute(pp.out_punch_time))) / 2, 0) AS "Median Clock-Out Min",
-         count() AS "Pair Count"
-  FROM
-    (SELECT employee_code,
-            punch_date,
-            in_punch_time,
-            out_punch_time
-     FROM dbpcm_warehouse.punch_pair) AS pp
-  JOIN dbpcm_warehouse.employee e ON e.employee_code = pp.employee_code
-  WHERE (pp.punch_date >= {window_start} AND pp.punch_date < {window_end})
-    AND pp.in_punch_time IS NOT NULL
+sql_template: |+
+  SELECT
+    e.department_name AS "Department",
+    round(
+      (
+        quantileExactLow(0.5)(toHour(pp.in_punch_time) * 60 + toMinute(pp.in_punch_time)) + quantileExactHigh(0.5)(toHour(pp.in_punch_time) * 60 + toMinute(pp.in_punch_time))
+      ) / 2,
+      0
+    ) AS "Median Clock-In Min",
+    round(
+      (
+        quantileExactLow(0.5)(toHour(pp.out_punch_time) * 60 + toMinute(pp.out_punch_time)) + quantileExactHigh(0.5)(toHour(pp.out_punch_time) * 60 + toMinute(pp.out_punch_time))
+      ) / 2,
+      0
+    ) AS "Median Clock-Out Min",
+    count() AS "Pair Count"
+  FROM (
+    SELECT
+      employee_code,
+      punch_date,
+      in_punch_time,
+      out_punch_time
+    FROM dbpcm_warehouse.punch_pair
+  ) AS pp
+  JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = pp.employee_code
+  WHERE
+    (
+      pp.punch_date >= {window_start} AND pp.punch_date < {window_end}
+    )
+    AND NOT (
+      pp.in_punch_time IS NULL
+    )
     AND toDate32(pp.in_punch_time) > toDate32('1900-01-01')
-    AND pp.out_punch_time IS NOT NULL
+    AND NOT (
+      pp.out_punch_time IS NULL
+    )
     AND toDate32(pp.out_punch_time) > toDate32('1900-01-01')
-  GROUP BY e.department_name
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Median Clock-In Min"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Median Clock-In Min"
-                     END ASC
+  GROUP BY
+    e.department_name
+  ORDER BY {order_by}
   LIMIT {max_rows}
+
 slots:
 - name: window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: max_rows
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: window, max_rows, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Median Clock-In Min ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Median Clock-In Min
+    direction: ASC
+  allowed_columns:
+  - Department
+  - Median Clock-In Min
+  - Median Clock-Out Min
+  - Pair Count
+slots_summary: window, max_rows, order_by
 uses:
 - dbpcm_warehouse.punch_pair.employee_code
 - dbpcm_warehouse.punch_pair.in_punch_time

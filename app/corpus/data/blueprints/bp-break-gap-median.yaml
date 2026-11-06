@@ -4,60 +4,86 @@ intent: Median break gap in hours between consecutive punch pairs on the same em
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  WITH ordered AS
-    (SELECT employee_code,
-            punch_date,
-            in_punch_time,
-            out_punch_time,
-            toInt64(row_number() OVER (PARTITION BY employee_code, punch_date
-                                       ORDER BY in_punch_time)) AS rn
-     FROM
-       (SELECT employee_code,
-               punch_date,
-               in_punch_time,
-               out_punch_time
-        FROM dbpcm_warehouse.punch_pair)
-     WHERE (punch_date >= {window_start} AND punch_date < {window_end})
-       AND in_punch_time IS NOT NULL
-       AND toDate32(in_punch_time) > toDate32('1900-01-01')
-       AND out_punch_time IS NOT NULL
-       AND toDate32(out_punch_time) > toDate32('1900-01-01'))
-  SELECT current.employee_code AS "Employee Code",
-         current.punch_date AS "Punch Date",
-         round(((quantileExactLow(0.5)(dateDiff('minute', prev.out_punch_time, current.in_punch_time)) + quantileExactHigh(0.5)(dateDiff('minute', prev.out_punch_time, current.in_punch_time))) / 2) / 60.0, 2) AS "Median Break Gap Hours",
-         count() AS "Gap Count"
-  FROM ordered current
-  JOIN ordered prev ON prev.employee_code = current.employee_code
-  AND prev.punch_date = current.punch_date
-  AND prev.rn = current.rn - 1
-  GROUP BY current.employee_code,
-           current.punch_date
-  HAVING count() > 0
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Median Break Gap Hours"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Median Break Gap Hours"
-                     END ASC, "Employee Code"
+sql_template: |+
+  WITH ordered AS (
+    SELECT
+      employee_code,
+      punch_date,
+      in_punch_time,
+      out_punch_time,
+      toInt64(
+        row_number() OVER (PARTITION BY employee_code, punch_date ORDER BY in_punch_time)
+      ) AS rn
+    FROM (
+      SELECT
+        employee_code,
+        punch_date,
+        in_punch_time,
+        out_punch_time
+      FROM dbpcm_warehouse.punch_pair
+    )
+    WHERE
+      (
+        punch_date >= {window_start} AND punch_date < {window_end}
+      )
+      AND NOT (
+        in_punch_time IS NULL
+      )
+      AND toDate32(in_punch_time) > toDate32('1900-01-01')
+      AND NOT (
+        out_punch_time IS NULL
+      )
+      AND toDate32(out_punch_time) > toDate32('1900-01-01')
+  )
+  SELECT
+    current.employee_code AS "Employee Code",
+    current.punch_date AS "Punch Date",
+    round(
+      (
+        (
+          quantileExactLow(0.5)(DATE_DIFF(MINUTE, prev.out_punch_time, current.in_punch_time)) + quantileExactHigh(0.5)(DATE_DIFF(MINUTE, prev.out_punch_time, current.in_punch_time))
+        ) / 2
+      ) / 60.0,
+      2
+    ) AS "Median Break Gap Hours",
+    count() AS "Gap Count"
+  FROM ordered AS current
+  JOIN ordered AS prev
+    ON prev.employee_code = current.employee_code
+    AND prev.punch_date = current.punch_date
+    AND prev.rn = current.rn - 1
+  GROUP BY
+    current.employee_code,
+    current.punch_date
+  HAVING
+    count() > 0
+  ORDER BY {order_by}
   LIMIT {max_rows}
+
 slots:
 - name: window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: max_rows
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: window, max_rows, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Median Break Gap Hours DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Median Break Gap Hours
+    direction: DESC
+  allowed_columns:
+  - Employee Code
+  - Punch Date
+  - Median Break Gap Hours
+  - Gap Count
+slots_summary: window, max_rows, order_by
 uses:
 - dbpcm_warehouse.punch_pair.employee_code
 - dbpcm_warehouse.punch_pair.punch_date

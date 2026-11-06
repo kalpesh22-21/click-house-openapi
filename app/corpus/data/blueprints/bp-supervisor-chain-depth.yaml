@@ -4,34 +4,62 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT toString(depth) AS "Chain Depth",
-         count() AS "Headcount",
-         round(100 * count() / sum(count()) OVER (), 2) AS "Share Pct"
-  FROM
-    (SELECT employee_code,
-            toUInt8((NOT (primary_supervisor_ee_code IS NULL)
-                     AND primary_supervisor_ee_code <> '')) + toUInt8((NOT (secondary_supervisor_ee_code IS NULL)
-                                                                       AND secondary_supervisor_ee_code <> '')) + toUInt8((NOT (tertiary_supervisor_ee_code IS NULL)
-                                                                                                                           AND tertiary_supervisor_ee_code <> '')) + toUInt8((NOT (quaternary_supervisor_ee_code IS NULL)
-                                                                                                                                                                              AND quaternary_supervisor_ee_code <> '')) AS depth
-     FROM dbpcm_warehouse.employee
-     WHERE employee_status = 'Active')
-  GROUP BY depth
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN depth
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN depth
-                     END ASC
+  SELECT
+    toString(depth) AS "Chain Depth",
+    count() AS "Headcount",
+    round(100 * count() / sum(count()) OVER (), 2) AS "Share Pct"
+  FROM (
+    SELECT
+      employee_code,
+      toUInt8(
+        (
+          NOT (
+            primary_supervisor_ee_code IS NULL
+          ) AND primary_supervisor_ee_code <> ''
+        )
+      ) + toUInt8(
+        (
+          NOT (
+            secondary_supervisor_ee_code IS NULL
+          )
+          AND secondary_supervisor_ee_code <> ''
+        )
+      ) + toUInt8(
+        (
+          NOT (
+            tertiary_supervisor_ee_code IS NULL
+          )
+          AND tertiary_supervisor_ee_code <> ''
+        )
+      ) + toUInt8(
+        (
+          NOT (
+            quaternary_supervisor_ee_code IS NULL
+          )
+          AND quaternary_supervisor_ee_code <> ''
+        )
+      ) AS depth
+    FROM dbpcm_warehouse.employee
+    WHERE
+      employee_status = 'Active'
+  )
+  GROUP BY
+    depth
+  ORDER BY {order_by}
 slots:
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
-slots_summary: order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Chain Depth ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Chain Depth
+    direction: ASC
+  allowed_columns:
+  - Chain Depth
+  - Headcount
+  - Share Pct
+slots_summary: order_by
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.primary_supervisor_ee_code

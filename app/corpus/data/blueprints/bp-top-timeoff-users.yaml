@@ -4,61 +4,70 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT req."Employee Code",
-         req."Employee Name",
-         req."Department",
-         req."Approved Hours",
-         round(COALESCE(bal.balance_total, 0), 2) AS "Current Balance Hours"
-  FROM
-    (SELECT t.employee_code AS "Employee Code",
-            any(e.employee_name) AS "Employee Name",
-            any(e.department_name) AS "Department",
-            round(SUM(t.hours), 2) AS "Approved Hours"
-     FROM dbpcm_warehouse.time_off_request AS t
-     JOIN dbpcm_warehouse.employee AS e ON e.employee_code = t.employee_code
-     WHERE t.status = 'Approved'
-       AND t.event_type = {event_type}
-       AND t.hours IS NOT NULL
-       AND (toDate32(t.request_date) >= {window_start} AND toDate32(t.request_date) < {window_end})
-     GROUP BY t.employee_code) AS req
-  LEFT JOIN
-    (SELECT employee_code,
-            round(SUM(beginning_balance + accrued_amount - taken_amount), 2) AS balance_total
-     FROM dbpcm_warehouse.time_off_balance
-     GROUP BY employee_code) AS bal ON bal.employee_code = req."Employee Code"
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Approved Hours"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Approved Hours"
-                     END ASC
+  SELECT
+    req."Employee Code",
+    req."Employee Name",
+    req."Department",
+    req."Approved Hours",
+    round(COALESCE(bal.balance_total, 0), 2) AS "Current Balance Hours"
+  FROM (
+    SELECT
+      t.employee_code AS "Employee Code",
+      any(e.employee_name) AS "Employee Name",
+      any(e.department_name) AS "Department",
+      round(SUM(t.hours), 2) AS "Approved Hours"
+    FROM dbpcm_warehouse.time_off_request AS t
+    JOIN dbpcm_warehouse.employee AS e
+      ON e.employee_code = t.employee_code
+    WHERE
+      t.status = 'Approved'
+      AND t.event_type IN ({event_type})
+      AND NOT (
+        t.hours IS NULL
+      )
+      AND (
+        toDate32(t.request_date) >= {window_start}
+        AND toDate32(t.request_date) < {window_end}
+      )
+    GROUP BY
+      t.employee_code
+  ) AS req
+  LEFT JOIN (
+    SELECT
+      employee_code,
+      round(SUM(beginning_balance + accrued_amount - taken_amount), 2) AS balance_total
+    FROM dbpcm_warehouse.time_off_balance
+    GROUP BY
+      employee_code
+  ) AS bal
+    ON bal.employee_code = req."Employee Code"
+  ORDER BY
+    "Approved Hours" DESC
   LIMIT {top_n}
 slots:
 - name: top_n
   type: relative_window
   required: true
+  description: This blueprint has a fixed ranking defined by its purpose; this slot only limits that ranking. It
+    does not accept order_by or order_direction. A different selection or display order requires a separate query.
 - name: window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
-- name: order_direction
-  type: enum
-  required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
 - name: event_type
   type: enum
   required: false
   enum_values:
   - Time Off Request
   - Payout Request
-  default: Time Off Request
+  default:
+  - Time Off Request
   description: Accrual event category to count. Defaults to Time Off Request; use Payout Request only when payouts
     are explicitly requested.
-slots_summary: top_n, window, order_direction, event_type
+  multiple: true
+slots_summary: top_n, window, event_type
 uses:
 - dbpcm_warehouse.time_off_request.employee_code
 - dbpcm_warehouse.time_off_request.hours

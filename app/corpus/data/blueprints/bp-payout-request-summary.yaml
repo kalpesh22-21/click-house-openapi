@@ -5,20 +5,39 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT COUNT(*) AS "Payout Requests",
-         round(SUM(t.hours), 2) AS "Total Hours",
-         COUNT(DISTINCT t.employee_code) AS "Employees"
+  SELECT
+    COUNT(*) AS "Payout Requests",
+    round(SUM(t.hours), 2) AS "Total Hours",
+    COUNT(DISTINCT t.employee_code) AS "Employees"
   FROM dbpcm_warehouse.time_off_request AS t
-  WHERE t.event_type = 'Payout Request'
+  WHERE
+    t.event_type = 'Payout Request'
     AND t.status = 'Approved'
-    AND (toDate32(t.request_date) >= {window_start} AND toDate32(t.request_date) < {window_end})
+    AND (
+      toDate32(t.request_date) >= {window_start}
+      AND toDate32(t.request_date) < {window_end}
+    )
+  ORDER BY {order_by}
 slots:
 - name: window
   type: period_range
   required: true
   temporal_type: date
-  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and end 2026-04-01; for a complete day, end is the next day.
-slots_summary: window
+  description: Start is inclusive and end is exclusive. For January 1 through March 31, use start 2026-01-01 and
+    end 2026-04-01; for a complete day, end is the next day.
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Payout Requests ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Payout Requests
+    direction: ASC
+  allowed_columns:
+  - Payout Requests
+  - Total Hours
+  - Employees
+slots_summary: window, order_by
 uses:
 - dbpcm_warehouse.time_off_request.event_type
 - dbpcm_warehouse.time_off_request.hours

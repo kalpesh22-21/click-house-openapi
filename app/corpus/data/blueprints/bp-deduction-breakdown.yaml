@@ -4,19 +4,18 @@ intent: Total payroll deductions and breakdown by deduction type code for a pay 
 status: validated
 drift_status: clean
 catalog_sha: ''
-sql_template: |
-  SELECT type_code AS "Deduction Code",
-         round(SUM(amount), 2) AS "Total Deductions"
+sql_template: |+
+  SELECT
+    type_code AS "Deduction Code",
+    round(SUM(amount), 2) AS "Total Deductions"
   FROM dbpcm_warehouse.payroll
-  WHERE register_type = 'DDUCT'
-    AND pay_period_end_date = {period}
-  GROUP BY type_code
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Total Deductions"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Total Deductions"
-                     END ASC
+  WHERE
+    register_type = 'DDUCT' AND pay_period_end_date = {period}
+  GROUP BY
+    type_code
+  ORDER BY {order_by}
   LIMIT {top_n}
+
 slots:
 - name: period
   type: period
@@ -27,15 +26,18 @@ slots:
 - name: top_n
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: period, top_n, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Total Deductions DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Total Deductions
+    direction: DESC
+  allowed_columns:
+  - Deduction Code
+  - Total Deductions
+slots_summary: period, top_n, order_by
 uses:
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.type_code

@@ -4,37 +4,44 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT works_in_state AS "Works In State",
-         multiIf(union_code IS NULL
-                 OR union_code = '', 'Non-Union', 'Union') AS "Union Flag",
-         round((quantileExactLow(0.5)(toFloat64(rate_1)) + quantileExactHigh(0.5)(toFloat64(rate_1))) / 2, 2) AS "Median Hourly Rate",
-         count(DISTINCT employee_code) AS "Headcount"
+  SELECT
+    works_in_state AS "Works In State",
+    multiIf(union_code IS NULL OR union_code = '', 'Non-Union', 'Union') AS "Union Flag",
+    round(
+      (
+        quantileExactLow(0.5)(toFloat64(rate_1)) + quantileExactHigh(0.5)(toFloat64(rate_1))
+      ) / 2,
+      2
+    ) AS "Median Hourly Rate",
+    count(DISTINCT employee_code) AS "Headcount"
   FROM dbpcm_warehouse.employee
-  WHERE employee_status = 'Active'
-    AND rate_1 > 0
-    AND works_in_state = {work_state}
-  GROUP BY works_in_state,
-           "Union Flag"
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN works_in_state
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN works_in_state
-                     END ASC, "Union Flag"
+  WHERE
+    employee_status = 'Active' AND rate_1 > 0 AND works_in_state IN ({work_state})
+  GROUP BY
+    works_in_state,
+    "Union Flag"
+  ORDER BY {order_by}
 slots:
 - name: work_state
   type: string
   required: false
   binds_to: dbpcm_warehouse.employee.works_in_state
   optional_pattern: 'TRUE'
-- name: order_direction
-  type: enum
+  multiple: true
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: ASC
-  description: Sort direction for the primary ORDER BY column. Defaults to ASC (original presentation order).
-slots_summary: work_state, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Works In State ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Works In State
+    direction: ASC
+  allowed_columns:
+  - Works In State
+  - Union Flag
+  - Median Hourly Rate
+  - Headcount
+slots_summary: work_state, order_by
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.works_in_state

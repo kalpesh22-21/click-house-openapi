@@ -5,57 +5,75 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  WITH tor_monthly AS
-    (SELECT employee_code,
-            formatDateTime(toStartOfMonth(request_date), '%Y-%m') AS month,
-            round(SUM(hours), 2) AS tor_hours
-     FROM dbpcm_warehouse.time_off_request
-     WHERE status = 'Approved'
-       AND event_type = {event_type}
-       AND request_date >= addMonths(today(), -{win})
-       AND earn_code IN
-         (SELECT earn_code
-          FROM dbpcm_warehouse.earning_category FINAL
-          WHERE category_name = {timeoff_category})
-     GROUP BY employee_code,
-              formatDateTime(toStartOfMonth(request_date), '%Y-%m')),
-       te_monthly AS
-    (SELECT employee_code,
-            formatDateTime(toStartOfMonth(punch_date), '%Y-%m') AS month,
-            round(SUM(earn_hours), 2) AS te_hours
-     FROM
-       (SELECT employee_code,
-               punch_date,
-               earn_code,
-               earn_hours
-        FROM dbpcm_warehouse.total_earning)
-     WHERE punch_date >= addMonths(today(), -{win})
-       AND earn_code IN
-         (SELECT earn_code
-          FROM dbpcm_warehouse.earning_category FINAL
-          WHERE category_name = {timeoff_category})
-     GROUP BY employee_code,
-              formatDateTime(toStartOfMonth(punch_date), '%Y-%m'))
-  SELECT COALESCE(r.employee_code, t.employee_code) AS "Employee Code",
-         max(e.employee_name) AS "Employee Name",
-         COALESCE(r.month, t.month) AS "Month",
-         round(COALESCE(r.tor_hours, 0), 2) AS "Approved Timeoff Hours",
-         round(COALESCE(t.te_hours, 0), 2) AS "Paid Leave Hours",
-         round(COALESCE(r.tor_hours, 0) - COALESCE(t.te_hours, 0), 2) AS "Difference",
-         round(abs(COALESCE(r.tor_hours, 0) - COALESCE(t.te_hours, 0)) / nullIf(COALESCE(t.te_hours, 0), 0) * 100, 2) AS "Pct Diff"
-  FROM tor_monthly r
-  FULL OUTER JOIN te_monthly t ON t.employee_code = r.employee_code
-  AND t.month = r.month
-  LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = COALESCE(r.employee_code, t.employee_code)
-  GROUP BY COALESCE(r.employee_code, t.employee_code),
-           COALESCE(r.month, t.month),
-           r.tor_hours,
-           t.te_hours
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN abs(COALESCE(r.tor_hours, 0) - COALESCE(t.te_hours, 0))
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN abs(COALESCE(r.tor_hours, 0) - COALESCE(t.te_hours, 0))
-                     END ASC
+  WITH tor_monthly AS (
+    SELECT
+      employee_code,
+      formatDateTime(dateTrunc('MONTH', request_date), '%Y-%m') AS month,
+      round(SUM(hours), 2) AS tor_hours
+    FROM dbpcm_warehouse.time_off_request
+    WHERE
+      status = 'Approved'
+      AND event_type IN ({event_type})
+      AND request_date >= addMonths(today(), -{win})
+      AND earn_code IN (
+        SELECT
+          earn_code
+        FROM dbpcm_warehouse.earning_category
+        WHERE
+          category_name IN ({timeoff_category})
+      )
+    GROUP BY
+      employee_code,
+      formatDateTime(dateTrunc('MONTH', request_date), '%Y-%m')
+  ), te_monthly AS (
+    SELECT
+      employee_code,
+      formatDateTime(addDays(punch_date, 1 - toDayOfMonth(punch_date)), '%Y-%m') AS month,
+      round(SUM(earn_hours), 2) AS te_hours
+    FROM (
+      SELECT
+        employee_code,
+        punch_date,
+        earn_code,
+        earn_hours
+      FROM dbpcm_warehouse.total_earning
+    )
+    WHERE
+      punch_date >= addMonths(today(), -{win})
+      AND earn_code IN (
+        SELECT
+          earn_code
+        FROM dbpcm_warehouse.earning_category
+        WHERE
+          category_name IN ({timeoff_category})
+      )
+    GROUP BY
+      employee_code,
+      formatDateTime(addDays(punch_date, 1 - toDayOfMonth(punch_date)), '%Y-%m')
+  )
+  SELECT
+    COALESCE(r.employee_code, t.employee_code) AS "Employee Code",
+    max(e.employee_name) AS "Employee Name",
+    COALESCE(r.month, t.month) AS "Month",
+    round(COALESCE(r.tor_hours, 0), 2) AS "Approved Timeoff Hours",
+    round(COALESCE(t.te_hours, 0), 2) AS "Paid Leave Hours",
+    round(COALESCE(r.tor_hours, 0) - COALESCE(t.te_hours, 0), 2) AS "Difference",
+    round(
+      abs(COALESCE(r.tor_hours, 0) - COALESCE(t.te_hours, 0)) / nullIf(COALESCE(t.te_hours, 0), 0) * 100,
+      2
+    ) AS "Pct Diff",
+    ABS(round(COALESCE(r.tor_hours, 0) - COALESCE(t.te_hours, 0), 2)) AS "Absolute Difference"
+  FROM tor_monthly AS r
+  FULL OUTER JOIN te_monthly AS t
+    ON t.employee_code = r.employee_code AND t.month = r.month
+  LEFT JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = COALESCE(r.employee_code, t.employee_code)
+  GROUP BY
+    COALESCE(r.employee_code, t.employee_code),
+    COALESCE(r.month, t.month),
+    r.tor_hours,
+    t.te_hours
+  ORDER BY {order_by}
   LIMIT {top_n}
 slots:
 - name: win
@@ -64,29 +82,41 @@ slots:
 - name: top_n
   type: positive_integer
   required: true
-- name: order_direction
-  type: enum
-  required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
 - name: timeoff_category
   type: entity
   required: true
   binds_to: dbpcm_warehouse.earning_category.category_name
   description: Resolve the requested timeoff concept to this client's category label; do not invent earning codes.
+  multiple: true
 - name: event_type
   type: enum
   required: false
   enum_values:
   - Time Off Request
   - Payout Request
-  default: Time Off Request
+  default:
+  - Time Off Request
   description: Accrual event category to count. Defaults to Time Off Request; use Payout Request only when payouts
     are explicitly requested.
-slots_summary: win, top_n, order_direction, timeoff_category, event_type
+  multiple: true
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Absolute Difference DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Absolute Difference
+    direction: DESC
+  allowed_columns:
+  - Employee Code
+  - Employee Name
+  - Month
+  - Approved Timeoff Hours
+  - Paid Leave Hours
+  - Difference
+  - Pct Diff
+  - Absolute Difference
+slots_summary: win, top_n, timeoff_category, event_type, order_by
 uses:
 - dbpcm_warehouse.time_off_request.employee_code
 - dbpcm_warehouse.time_off_request.request_date
@@ -125,5 +155,7 @@ column_formats:
     kind: percent
     scale: percent
     precision: 2
+  Absolute Difference:
+    kind: number
 presentation:
   kind: table

@@ -5,29 +5,33 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT d.department_code AS "Department Code",
-         d.department_name AS "Department",
-         countIf(e.employee_status = 'Active') AS "Active Headcount",
-         count(DISTINCT e.employee_code) AS "Total Headcount"
+  SELECT
+    d.department_code AS "Department Code",
+    d.department_name AS "Department",
+    countIf(e.employee_status = 'Active') AS "Active Headcount",
+    count(DISTINCT e.employee_code) AS "Total Headcount"
   FROM dbpcm_warehouse.department AS d
-  LEFT JOIN dbpcm_warehouse.employee AS e ON e.department_code = d.department_code
-  GROUP BY d.department_code,
-           d.department_name
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Active Headcount"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Active Headcount"
-                     END ASC, d.department_name
+  LEFT JOIN dbpcm_warehouse.employee AS e
+    ON e.department_code = d.department_code
+  GROUP BY
+    d.department_code,
+    d.department_name
+  ORDER BY {order_by}
 slots:
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Department ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Department
+    direction: ASC
+  allowed_columns:
+  - Department Code
+  - Department
+  - Active Headcount
+  - Total Headcount
+slots_summary: order_by
 uses:
 - dbpcm_warehouse.department.department_code
 - dbpcm_warehouse.department.department_name

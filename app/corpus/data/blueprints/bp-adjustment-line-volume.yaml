@@ -1,38 +1,43 @@
 id: bp-adjustment-line-volume
-intent: Volume of negative payroll earnings pay items per month, counting adjustment and reversal activity
-  over the last N pay periods
+intent: Volume of negative payroll earnings pay items per month, counting adjustment and reversal activity over
+  the last N pay periods
 status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT formatDateTime(toStartOfMonth(pay_period_end_date), '%Y-%m') AS "Month",
-         count() AS "Adjustment Pay Items",
-         round(SUM(amount), 2) AS "Adjustment Amount"
+  SELECT
+    formatDateTime(addDays(pay_period_end_date, 1 - toDayOfMonth(pay_period_end_date)), '%Y-%m') AS "Month",
+    count() AS "Adjustment Pay Items",
+    round(SUM(amount), 2) AS "Adjustment Amount"
   FROM dbpcm_warehouse.payroll
-  WHERE register_type = 'EARN'
+  WHERE
+    register_type = 'EARN'
     AND amount < 0
-    AND pay_period_end_date >= addMonths(
-                                           (SELECT max(pay_period_end_date)
-                                            FROM dbpcm_warehouse.payroll), -{win})
-  GROUP BY "Month"
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Month"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Month"
-                     END ASC
+    AND pay_period_end_date >= addMonths((
+      SELECT
+        max(pay_period_end_date)
+      FROM dbpcm_warehouse.payroll
+    ), -{win})
+  GROUP BY
+    "Month"
+  ORDER BY {order_by}
 slots:
 - name: win
   type: relative_window
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: win, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Month ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Month
+    direction: ASC
+  allowed_columns:
+  - Month
+  - Adjustment Pay Items
+  - Adjustment Amount
+slots_summary: win, order_by
 uses:
 - dbpcm_warehouse.payroll.amount
 - dbpcm_warehouse.payroll.register_type

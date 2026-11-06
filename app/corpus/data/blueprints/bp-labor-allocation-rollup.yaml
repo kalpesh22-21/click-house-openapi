@@ -4,49 +4,79 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT la.code AS "Allocation Code",
-         la.description AS "Allocation Description",
-         count(DISTINCT e.employee_code) AS "Active Headcount",
-         round(avgIf(toFloat64(e.annual_salary), e.annual_salary IS NOT NULL
-                     AND toFloat64(e.annual_salary) > 0), 2) AS "Avg Salary"
-  FROM
-    (SELECT employee_code,
-            employee_status,
-            annual_salary,
-            CASE {slot}
-                WHEN 1 THEN labor_allocation_key_1
-                WHEN 2 THEN labor_allocation_key_2
-                WHEN 3 THEN labor_allocation_key_3
-                WHEN 4 THEN labor_allocation_key_4
-                WHEN 5 THEN labor_allocation_key_5
-                WHEN 6 THEN labor_allocation_key_6
-                WHEN 7 THEN labor_allocation_key_7
-                WHEN 8 THEN labor_allocation_key_8
-                WHEN 9 THEN labor_allocation_key_9
-                WHEN 10 THEN labor_allocation_key_10
-                WHEN 11 THEN labor_allocation_key_11
-                WHEN 12 THEN labor_allocation_key_12
-                WHEN 13 THEN labor_allocation_key_13
-                WHEN 14 THEN labor_allocation_key_14
-                WHEN 15 THEN labor_allocation_key_15
-                WHEN 16 THEN labor_allocation_key_16
-                WHEN 17 THEN labor_allocation_key_17
-                WHEN 18 THEN labor_allocation_key_18
-                WHEN 19 THEN labor_allocation_key_19
-                ELSE labor_allocation_key_20
-            END AS selected_key
-     FROM dbpcm_warehouse.employee) AS e
-  LEFT JOIN dbpcm_warehouse.labor_allocation AS la ON la.join_key = e.selected_key
-  WHERE e.employee_status = 'Active'
-    AND e.selected_key IS NOT NULL
-    AND e.selected_key != ''
-  GROUP BY la.code,
-           la.description
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Active Headcount"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Active Headcount"
-                     END ASC, "Allocation Code"
+  SELECT
+    la.code AS "Allocation Code",
+    la.description AS "Allocation Description",
+    count(DISTINCT e.employee_code) AS "Active Headcount",
+    round(
+      avgIf(
+        toFloat64(e.annual_salary),
+        NOT (
+          e.annual_salary IS NULL
+        ) AND toFloat64(e.annual_salary) > 0
+      ),
+      2
+    ) AS "Avg Salary"
+  FROM (
+    SELECT
+      employee_code,
+      employee_status,
+      annual_salary,
+      CASE
+        WHEN {slot} = 1
+        THEN labor_allocation_key_1
+        WHEN {slot} = 2
+        THEN labor_allocation_key_2
+        WHEN {slot} = 3
+        THEN labor_allocation_key_3
+        WHEN {slot} = 4
+        THEN labor_allocation_key_4
+        WHEN {slot} = 5
+        THEN labor_allocation_key_5
+        WHEN {slot} = 6
+        THEN labor_allocation_key_6
+        WHEN {slot} = 7
+        THEN labor_allocation_key_7
+        WHEN {slot} = 8
+        THEN labor_allocation_key_8
+        WHEN {slot} = 9
+        THEN labor_allocation_key_9
+        WHEN {slot} = 10
+        THEN labor_allocation_key_10
+        WHEN {slot} = 11
+        THEN labor_allocation_key_11
+        WHEN {slot} = 12
+        THEN labor_allocation_key_12
+        WHEN {slot} = 13
+        THEN labor_allocation_key_13
+        WHEN {slot} = 14
+        THEN labor_allocation_key_14
+        WHEN {slot} = 15
+        THEN labor_allocation_key_15
+        WHEN {slot} = 16
+        THEN labor_allocation_key_16
+        WHEN {slot} = 17
+        THEN labor_allocation_key_17
+        WHEN {slot} = 18
+        THEN labor_allocation_key_18
+        WHEN {slot} = 19
+        THEN labor_allocation_key_19
+        ELSE labor_allocation_key_20
+      END AS selected_key
+    FROM dbpcm_warehouse.employee
+  ) AS e
+  LEFT JOIN dbpcm_warehouse.labor_allocation AS la
+    ON la.join_key = e.selected_key
+  WHERE
+    e.employee_status = 'Active'
+    AND NOT (
+      e.selected_key IS NULL
+    )
+    AND e.selected_key <> ''
+  GROUP BY
+    la.code,
+    la.description
+  ORDER BY {order_by}
   LIMIT {top_n}
 slots:
 - name: slot
@@ -55,15 +85,20 @@ slots:
 - name: top_n
   type: relative_window
   required: true
-- name: order_direction
-  type: enum
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: slot, top_n, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Active Headcount DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Active Headcount
+    direction: DESC
+  allowed_columns:
+  - Allocation Code
+  - Allocation Description
+  - Active Headcount
+  - Avg Salary
+slots_summary: slot, top_n, order_by
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.employee_status

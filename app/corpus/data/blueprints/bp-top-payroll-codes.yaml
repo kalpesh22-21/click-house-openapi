@@ -4,22 +4,23 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT type_code AS "Type Code",
-         round(SUM(amount), 2) AS "Total Amount"
+  SELECT
+    type_code AS "Type Code",
+    round(SUM(amount), 2) AS "Total Amount"
   FROM dbpcm_warehouse.payroll
-  WHERE register_type = {register}
-    AND pay_period_end_date = {period}
-  GROUP BY type_code
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Total Amount"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Total Amount"
-                     END ASC
+  WHERE
+    register_type IN ({register}) AND pay_period_end_date = {period}
+  GROUP BY
+    type_code
+  ORDER BY
+    "Total Amount" DESC
   LIMIT {top_n}
 slots:
 - name: top_n
   type: positive_integer
   required: true
+  description: This blueprint has a fixed ranking defined by its purpose; this slot only limits that ranking. It
+    does not accept order_by or order_direction. A different selection or display order requires a separate query.
 - name: period
   type: period
   required: false
@@ -36,15 +37,8 @@ slots:
   - ERTAX
   - EEBEN
   - NETPAYDIST
-- name: order_direction
-  type: enum
-  required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: top_n, period, register, order_direction
+  multiple: true
+slots_summary: top_n, period, register
 uses:
 - dbpcm_warehouse.payroll.type_code
 - dbpcm_warehouse.payroll.amount

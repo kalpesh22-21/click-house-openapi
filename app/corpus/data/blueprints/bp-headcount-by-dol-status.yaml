@@ -4,32 +4,34 @@ status: validated
 drift_status: clean
 catalog_sha: ''
 sql_template: |
-  SELECT dol_status_description AS "DOL Status",
-         count(DISTINCT employee_code) AS "Headcount"
+  SELECT
+    dol_status_description AS "DOL Status",
+    count(DISTINCT employee_code) AS "Headcount"
   FROM dbpcm_warehouse.employee
-  WHERE employee_status = 'Active'
-    AND department_name = {department}
-  GROUP BY "DOL Status"
-  ORDER BY CASE
-               WHEN {order_direction} = 'DESC' THEN "Headcount"
-           END DESC, CASE
-                         WHEN {order_direction} = 'ASC' THEN "Headcount"
-                     END ASC, "DOL Status"
+  WHERE
+    employee_status = 'Active' AND department_name IN ({department})
+  GROUP BY
+    "DOL Status"
+  ORDER BY {order_by}
 slots:
 - name: department
   type: string
   required: false
   binds_to: dbpcm_warehouse.employee.department_name
   optional_pattern: 'TRUE'
-- name: order_direction
-  type: enum
+  multiple: true
+- name: order_by
+  type: sort_order
   required: false
-  enum_values:
-  - DESC
-  - ASC
-  default: DESC
-  description: Sort direction for the primary ORDER BY column. Defaults to DESC (highest first).
-slots_summary: department, order_direction
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Headcount DESC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Headcount
+    direction: DESC
+  allowed_columns:
+  - DOL Status
+  - Headcount
+slots_summary: department, order_by
 uses:
 - dbpcm_warehouse.employee.employee_code
 - dbpcm_warehouse.employee.dol_status_description

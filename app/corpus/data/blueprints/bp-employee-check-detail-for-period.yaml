@@ -1,6 +1,6 @@
 id: bp-employee-check-detail-for-period
 intent: A single employee's paycheck line items for one pay period, with per-item amount and hours
-slots_summary: employee, period
+slots_summary: employee, period, order_by
 status: validated
 drift_status: clean
 catalog_sha: ''
@@ -25,25 +25,45 @@ slots:
   temporal_type: date
   required: true
   binds_to: dbpcm_warehouse.payroll.pay_period_end_date
+- name: order_by
+  type: sort_order
+  required: false
+  description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
+    columns. Defaults to Register Type ASC. Applies before LIMIT; no implicit secondary sort.
+  default:
+  - column: Register Type
+    direction: ASC
+  allowed_columns:
+  - Register Type
+  - Type Code
+  - Type Code Description
+  - Employee Name
+  - Department Name
+  - Amount
+  - Hours
 result_grain:
 - Register Type
 - Type Code
 sql_template: |
-  SELECT toString(p.register_type) AS "Register Type",
-         toString(p.type_code) AS "Type Code",
-         any(toString(p.type_code_description)) AS "Type Code Description",
-         e.employee_name AS "Employee Name",
-         e.department_name AS "Department Name",
-         toFloat64(SUM(p.amount)) AS "Amount",
-         toFloat64(SUM(p.type_hours)) AS "Hours"
-  FROM dbpcm_warehouse.payroll p
-  LEFT JOIN dbpcm_warehouse.employee e ON e.employee_code = p.employee_code
-  WHERE p.employee_code = {employee}
-    AND p.pay_period_end_date = {period}
-  GROUP BY p.register_type,
-           p.type_code,
-           e.employee_name,
-           e.department_name
+  SELECT
+    toString(p.register_type) AS "Register Type",
+    toString(p.type_code) AS "Type Code",
+    any(toString(p.type_code_description)) AS "Type Code Description",
+    e.employee_name AS "Employee Name",
+    e.department_name AS "Department Name",
+    toFloat64(SUM(p.amount)) AS "Amount",
+    toFloat64(SUM(p.type_hours)) AS "Hours"
+  FROM dbpcm_warehouse.payroll AS p
+  LEFT JOIN dbpcm_warehouse.employee AS e
+    ON e.employee_code = p.employee_code
+  WHERE
+    p.employee_code = {employee} AND p.pay_period_end_date = {period}
+  GROUP BY
+    p.register_type,
+    p.type_code,
+    e.employee_name,
+    e.department_name
+  ORDER BY {order_by}
 column_formats:
   Register Type:
     kind: text
