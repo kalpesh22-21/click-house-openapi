@@ -18,6 +18,9 @@ class SafeExceptionFormatter(logging.Formatter):
 
 
 def configure_logging(level: str, *, stdio: bool = False) -> None:
+    from app.access_logging import install_probe_access_filter
+
+    install_probe_access_filter()
     # ERROR must remain visible even if a deployment requests CRITICAL only.
     logging.basicConfig(
         level=min(getattr(logging, level.upper(), logging.INFO), logging.ERROR),
@@ -45,12 +48,13 @@ def log_failure(
     code: str = "INTERNAL_ERROR",
     status: int | None = None,
 ) -> None:
-    candidate = getattr(exc, "code", code)
-    safe_code = (
-        candidate
-        if isinstance(candidate, str)
-        and re.fullmatch(r"[A-Z][A-Z0-9_]{0,79}", candidate)
-        else "INTERNAL_ERROR"
+    # Driver exceptions often expose numeric or None codes. Keep a valid
+    # domain code when present; otherwise use the caller's operator code.
+    safe_code = next(
+        (candidate for candidate in (getattr(exc, "code", None), code)
+         if isinstance(candidate, str)
+         and re.fullmatch(r"[A-Z][A-Z0-9_]{0,79}", candidate)),
+        "INTERNAL_ERROR",
     )
     logger.error(
         "operation=%s code=%s status=%s failure_class=%s",

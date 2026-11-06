@@ -142,3 +142,31 @@ def test_framework_traceback_does_not_echo_cause_or_sql():
     assert "secret-native-sql" not in result.stdout
     assert "private" not in result.stdout
     assert result.stderr == ""
+
+
+@pytest.mark.parametrize("exception_code,caller_code,expected", [
+    (None, "CLICKHOUSE_UNAVAILABLE", "CLICKHOUSE_UNAVAILABLE"),
+    (62, "CLICKHOUSE_UNAVAILABLE", "CLICKHOUSE_UNAVAILABLE"),
+    ("private\nSQL", "CLICKHOUSE_UNAVAILABLE", "CLICKHOUSE_UNAVAILABLE"),
+    ("DOMAIN_ERROR", "CLICKHOUSE_UNAVAILABLE", "DOMAIN_ERROR"),
+    (None, "private\nSQL", "INTERNAL_ERROR"),
+    ("", "CALLER_ERROR", "CALLER_ERROR"),
+])
+def test_invalid_exception_code_uses_valid_caller_code(caplog, exception_code, caller_code, expected):
+    exc = RuntimeError("private SQL password")
+    exc.code = exception_code
+    with caplog.at_level(logging.ERROR):
+        log_failure(logging.getLogger("app.test"), "test", exc, code=caller_code)
+    assert f"code={expected} status=- failure_class=RuntimeError" in caplog.text
+    assert "private" not in caplog.text
+
+
+@pytest.mark.parametrize("driver_code", [None, 62])
+def test_clickhouse_database_error_preserves_operator_code(caplog, driver_code):
+    from clickhouse_connect.driver.exceptions import DatabaseError
+
+    with caplog.at_level(logging.ERROR):
+        log_failure(logging.getLogger("app.test"), "clickhouse.readiness",
+                    DatabaseError("private SQL", code=driver_code), code="CLICKHOUSE_UNAVAILABLE")
+    assert "code=CLICKHOUSE_UNAVAILABLE" in caplog.text
+    assert "private" not in caplog.text

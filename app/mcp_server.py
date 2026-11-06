@@ -854,18 +854,20 @@ def _clickhouse_health_check() -> bool:
     proxy closed while idle, and the first failure evicts it so the second
     attempt uses a fresh socket.  ``get_client()`` is fetched on every retry so
     a client-construction failure is also treated as a transient/back-end
-    failure instead of surfacing as a 500.  Failures are logged at ERROR without exception text; the broad ``except`` is
-    confined to this health helper.
+    failure instead of surfacing as a 500. Only exhausted probes are logged at
+    ERROR, without exception text; the broad ``except`` is confined to this helper.
     """
-    for _ in range(2):
+    for attempt in range(2):
         try:
             from app.clickhouse_client import get_client
 
             get_client().query("SELECT 1")
             return True
         except Exception as exc:  # noqa: BLE001
-            from app.error_logging import log_failure
-            log_failure(logger, "clickhouse.readiness", exc, code="CLICKHOUSE_UNAVAILABLE")
+            if attempt == 1:
+                from app.error_logging import log_failure
+
+                log_failure(logger, "clickhouse.readiness", exc, code="CLICKHOUSE_UNAVAILABLE")
     return False
 
 
@@ -1470,6 +1472,10 @@ async def _run_http() -> None:
         port=settings.mcp_port,
         log_level=settings.log_level.lower(),
     )
+    from app.access_logging import install_probe_access_filter
+
+    # Config can reconfigure logging; install after it for the HTTP entrypoint.
+    install_probe_access_filter()
     server = uvicorn.Server(config)
     await server.serve()
 

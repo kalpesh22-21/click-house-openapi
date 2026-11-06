@@ -1353,7 +1353,7 @@ class TestMcpHealthEndpoints:
         assert "/health/ready" in mw._public_paths
         assert "/health" in mw._public_paths
 
-    def test_health_check_query_retries_on_first_failure(self):
+    def test_health_check_query_retries_on_first_failure(self, caplog):
         """A single stale-socket failure is retried and a fresh query succeeds."""
         client = MagicMock()
         client.query.side_effect = [ConnectionResetError("stale socket"), None]
@@ -1361,8 +1361,9 @@ class TestMcpHealthEndpoints:
             assert _clickhouse_health_check() is True
         assert client.query.call_count == 2
         client.query.assert_called_with("SELECT 1")
+        assert "operation=clickhouse.readiness" not in caplog.text
 
-    def test_health_check_query_returns_false_after_two_failures(self):
+    def test_health_check_query_returns_false_after_two_failures(self, caplog):
         """Both retries fail, so the helper reports ClickHouse unavailable."""
         client = MagicMock()
         client.query.side_effect = [
@@ -1372,6 +1373,11 @@ class TestMcpHealthEndpoints:
         with patch("app.clickhouse_client.get_client", return_value=client):
             assert _clickhouse_health_check() is False
         assert client.query.call_count == 2
+        records = [r for r in caplog.records if "operation=clickhouse.readiness" in r.getMessage()]
+        assert len(records) == 1
+        assert "code=CLICKHOUSE_UNAVAILABLE" in records[0].getMessage()
+        assert records[0].levelname == "ERROR"
+        assert "first" not in records[0].getMessage() and "second" not in records[0].getMessage()
 
     def test_health_check_query_returns_false_when_get_client_raises(self):
         """Client construction failure is guarded and treated as unavailable."""
