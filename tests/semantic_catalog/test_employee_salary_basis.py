@@ -16,7 +16,7 @@ def test_salary_basis_names_catalogued_columns_and_annual_default():
     assert set(basis['resolves_to']) == {'annual_salary', 'hourly_salary', 'rate_1'}
     assert set(basis['resolves_to']) <= entry['columns'].keys()
     assert 'annual_salary' in basis['default']
-    assert '2080' in basis['default']
+    assert 'Do not annualize' in basis['default']
     assert 'separately' in basis['default']
     for name in ('hourly_salary', 'rate_1', 'pay_frequency', 'scheduled_pay_period_hours'):
         assert name in basis['clarify_if']
@@ -36,8 +36,8 @@ def test_salary_values_remain_nullable_without_universal_zero_guarantees():
 
 def test_hourly_value_is_not_documented_as_a_calculated_annual_ratio():
     description = _entry()['columns']['hourly_salary']['description']
-    assert 'hourly_salary * 2080' in description
-    assert 'not actual payroll pay' in description
+    assert '2080' not in description
+    assert 'Do not assume hours worked or annualize' in description
 
 
 def test_pay_classification_does_not_claim_equivalence_to_positive_salary():

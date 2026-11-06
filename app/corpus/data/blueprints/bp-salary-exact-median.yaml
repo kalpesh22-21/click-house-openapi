@@ -1,10 +1,7 @@
 id: bp-salary-exact-median
-intent: Exact middle-pair median, mean, min, max and known-compensation count by company, department or status,
-  separately by pay type. salary_population selects positive values (the default reading; a zero hourly rate or
-  salary is not recorded compensation) or recorded values including zeros; NULLs excluded. Salary uses annual_salary;
-  Hourly uses hourly_salary and estimated annual compensation = hourly_salary * 2080 (40 hours/week, 52 weeks/year;
-  excludes overtime). Keep pay types separate. Defaults to Active + On Leave; employee_status overrides or All removes
-  the filter.
+intent: Exact median, average, minimum and maximum recorded annual salary and recorded hourly rate, separately by
+  pay type and company, department or status. salary_population selects positive values by default or recorded values
+  including zeros; NULLs excluded. Never annualize hourly rates. Defaults to Active + On Leave.
 slots_summary: group_by, salary_population, employee_status, department, employee, order_by
 status: validated
 drift_status: clean
@@ -81,10 +78,13 @@ slots:
   - Compensation Basis
   - Group
   - Known Compensation Count
-  - Exact Median Annual Compensation
-  - Average Annual Compensation
-  - Minimum Annual Compensation
-  - Maximum Annual Compensation
+  - Exact Median Annual Salary
+  - Exact Median Hourly Rate
+  - Average Annual Salary
+  - Minimum Annual Salary
+  - Minimum Hourly Rate
+  - Maximum Annual Salary
+  - Maximum Hourly Rate
   - Average Hourly Rate
 result_grain:
 - Group
@@ -94,7 +94,7 @@ sql_template: |
     e.pay_type AS "Pay Type",
     CASE
       WHEN e.pay_type = 'Hourly'
-      THEN 'Estimated annual compensation (2080 hours)'
+      THEN 'Recorded hourly rate (per hour)'
       WHEN e.pay_type = 'Salary'
       THEN 'Recorded annual salary'
       ELSE 'Unknown compensation basis'
@@ -112,63 +112,40 @@ sql_template: |
           WHEN e.pay_type = 'Salary'
           THEN e.annual_salary
           WHEN e.pay_type = 'Hourly'
-          THEN e.hourly_salary * 2080
+          THEN e.hourly_salary
           ELSE NULL
         END
       )
     ) AS "Known Compensation Count",
     (
       quantileExactLow(0.5)((
-        CASE
-          WHEN e.pay_type = 'Salary'
-          THEN e.annual_salary
-          WHEN e.pay_type = 'Hourly'
-          THEN e.hourly_salary * 2080
-          ELSE NULL
-        END
+        CASE WHEN e.pay_type = 'Salary' THEN e.annual_salary ELSE NULL END
       )) + quantileExactHigh(0.5)((
-        CASE
-          WHEN e.pay_type = 'Salary'
-          THEN e.annual_salary
-          WHEN e.pay_type = 'Hourly'
-          THEN e.hourly_salary * 2080
-          ELSE NULL
-        END
+        CASE WHEN e.pay_type = 'Salary' THEN e.annual_salary ELSE NULL END
       ))
-    ) / 2 AS "Exact Median Annual Compensation",
-    avg(
-      (
-        CASE
-          WHEN e.pay_type = 'Salary'
-          THEN e.annual_salary
-          WHEN e.pay_type = 'Hourly'
-          THEN e.hourly_salary * 2080
-          ELSE NULL
-        END
-      )
-    ) AS "Average Annual Compensation",
-    min(
-      (
-        CASE
-          WHEN e.pay_type = 'Salary'
-          THEN e.annual_salary
-          WHEN e.pay_type = 'Hourly'
-          THEN e.hourly_salary * 2080
-          ELSE NULL
-        END
-      )
-    ) AS "Minimum Annual Compensation",
-    max(
-      (
-        CASE
-          WHEN e.pay_type = 'Salary'
-          THEN e.annual_salary
-          WHEN e.pay_type = 'Hourly'
-          THEN e.hourly_salary * 2080
-          ELSE NULL
-        END
-      )
-    ) AS "Maximum Annual Compensation",
+    ) / 2 AS "Exact Median Annual Salary",
+    (
+      quantileExactLow(0.5)((
+        CASE WHEN e.pay_type = 'Hourly' THEN e.hourly_salary ELSE NULL END
+      )) + quantileExactHigh(0.5)((
+        CASE WHEN e.pay_type = 'Hourly' THEN e.hourly_salary ELSE NULL END
+      ))
+    ) / 2 AS "Exact Median Hourly Rate",
+    avg((
+      CASE WHEN e.pay_type = 'Salary' THEN e.annual_salary ELSE NULL END
+    )) AS "Average Annual Salary",
+    min((
+      CASE WHEN e.pay_type = 'Salary' THEN e.annual_salary ELSE NULL END
+    )) AS "Minimum Annual Salary",
+    min((
+      CASE WHEN e.pay_type = 'Hourly' THEN e.hourly_salary ELSE NULL END
+    )) AS "Minimum Hourly Rate",
+    max((
+      CASE WHEN e.pay_type = 'Salary' THEN e.annual_salary ELSE NULL END
+    )) AS "Maximum Annual Salary",
+    max((
+      CASE WHEN e.pay_type = 'Hourly' THEN e.hourly_salary ELSE NULL END
+    )) AS "Maximum Hourly Rate",
     avg(CASE WHEN e.pay_type = 'Hourly' THEN e.hourly_salary ELSE NULL END) AS "Average Hourly Rate"
   FROM dbpcm_warehouse.employee AS e
   WHERE
@@ -183,7 +160,7 @@ sql_template: |
           WHEN e.pay_type = 'Salary'
           THEN e.annual_salary
           WHEN e.pay_type = 'Hourly'
-          THEN e.hourly_salary * 2080
+          THEN e.hourly_salary
           ELSE NULL
         END
       ) IS NULL
@@ -195,7 +172,7 @@ sql_template: |
           WHEN e.pay_type = 'Salary'
           THEN e.annual_salary
           WHEN e.pay_type = 'Hourly'
-          THEN e.hourly_salary * 2080
+          THEN e.hourly_salary
           ELSE NULL
         END
       ) > 0
@@ -221,22 +198,37 @@ column_formats:
     kind: text
   Known Compensation Count:
     kind: integer
-  Exact Median Annual Compensation:
+  Exact Median Annual Salary:
     kind: currency
     currency: USD
     precision: 2
-  Average Annual Compensation:
+  Exact Median Hourly Rate:
     kind: currency
     currency: USD
     precision: 2
-  Minimum Annual Compensation:
+    unit: per hour
+  Average Annual Salary:
     kind: currency
     currency: USD
     precision: 2
-  Maximum Annual Compensation:
+  Minimum Annual Salary:
     kind: currency
     currency: USD
     precision: 2
+  Minimum Hourly Rate:
+    kind: currency
+    currency: USD
+    precision: 2
+    unit: per hour
+  Maximum Annual Salary:
+    kind: currency
+    currency: USD
+    precision: 2
+  Maximum Hourly Rate:
+    kind: currency
+    currency: USD
+    precision: 2
+    unit: per hour
   Average Hourly Rate:
     kind: currency
     currency: USD

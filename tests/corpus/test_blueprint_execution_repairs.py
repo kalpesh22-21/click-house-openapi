@@ -104,7 +104,7 @@ def test_payroll_group_selectors_use_searched_case_for_row_values():
 
 def test_department_metric_sorting_preserves_zero_negative_and_unknown_values():
     metrics = {
-        'average-salary-by-department': 'Average Annual Compensation',
+        'average-salary-by-department': 'Average Annual Salary',
         'overtime-by-department': 'Earnings',
         'total-earnings-by-department': 'Total Earnings',
         'earnings-by-department-via-scratch-join': 'Total Earnings',

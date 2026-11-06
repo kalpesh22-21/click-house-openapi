@@ -76,7 +76,7 @@ def test_top_expense_spenders_selects_highest_amounts_with_deterministic_ties():
     ('active-headcount-by-department', 'Headcount', 'DESC'),
     ('pending-timeoff-queue', 'Days Waiting', 'DESC'),
     ('earnings-monthly-trend', 'Month', 'ASC'),
-    ('average-salary-by-department', 'Average Annual Compensation', 'DESC'),
+    ('average-salary-by-department', 'Average Annual Salary', 'DESC'),
     ('employee-directory', 'Name', 'ASC'),
     ('expense-line-size-distribution', 'Band Start', 'ASC'),
     ('upcoming-anniversaries', 'Anniversary Day of Year', 'ASC'),

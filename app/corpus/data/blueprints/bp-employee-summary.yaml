@@ -1,9 +1,7 @@
 id: bp-employee-summary
-intent: Headcount and annual compensation sum, average, minimum, maximum and known-compensation count by company,
-  department or status, separately by pay type. Unknown compensation is NULL; headcount retains other and unknown
-  pay types. Salary uses annual_salary; Hourly uses hourly_salary and estimated annual compensation = hourly_salary
-  * 2080 (40 hours/week, 52 weeks/year; excludes overtime). Keep pay types separate. Defaults to Active + On Leave;
-  employee_status overrides or All removes the filter.
+intent: Headcount and recorded pay statistics by company, department or status and pay type. Annual salary statistics
+  apply only to Salary employees; hourly rate statistics apply only to Hourly employees, in separate columns. Never
+  annualize hourly pay or sum hourly rates. Unknown pay remains NULL. Defaults to Active + On Leave.
 slots_summary: group_by, employee_status, department, employee, order_by
 status: validated
 drift_status: clean
@@ -72,10 +70,12 @@ slots:
   - Group
   - Employee Count
   - Known Compensation Count
-  - Annual Compensation Sum
-  - Average Annual Compensation
-  - Minimum Annual Compensation
-  - Maximum Annual Compensation
+  - Annual Salary Sum
+  - Average Annual Salary
+  - Minimum Annual Salary
+  - Minimum Hourly Rate
+  - Maximum Annual Salary
+  - Maximum Hourly Rate
   - Average Hourly Rate
 result_grain:
 - Group
@@ -85,7 +85,7 @@ sql_template: |
     e.pay_type AS "Pay Type",
     CASE
       WHEN e.pay_type = 'Hourly'
-      THEN 'Estimated annual compensation (2080 hours)'
+      THEN 'Recorded hourly rate (per hour)'
       WHEN e.pay_type = 'Salary'
       THEN 'Recorded annual salary'
       ELSE 'Unknown compensation basis'
@@ -104,55 +104,69 @@ sql_template: |
           WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
           THEN e.annual_salary
           WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
-          THEN e.hourly_salary * 2080
+          THEN e.hourly_salary
           ELSE NULL
         END
       )
     ) AS "Known Compensation Count",
-    sum(
-      (
-        CASE
-          WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
-          THEN e.annual_salary
-          WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
-          THEN e.hourly_salary * 2080
-          ELSE NULL
-        END
+    CASE
+      WHEN e.pay_type = 'Salary'
+      THEN sum(
+        (
+          CASE
+            WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
+            THEN e.annual_salary
+            ELSE NULL
+          END
+        )
       )
-    ) AS "Annual Compensation Sum",
+      ELSE NULL
+    END AS "Annual Salary Sum",
     avg(
       (
         CASE
           WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
           THEN e.annual_salary
-          WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
-          THEN e.hourly_salary * 2080
           ELSE NULL
         END
       )
-    ) AS "Average Annual Compensation",
+    ) AS "Average Annual Salary",
     min(
       (
         CASE
           WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
           THEN e.annual_salary
-          WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
-          THEN e.hourly_salary * 2080
           ELSE NULL
         END
       )
-    ) AS "Minimum Annual Compensation",
+    ) AS "Minimum Annual Salary",
+    min(
+      (
+        CASE
+          WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
+          THEN e.hourly_salary
+          ELSE NULL
+        END
+      )
+    ) AS "Minimum Hourly Rate",
     max(
       (
         CASE
           WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
           THEN e.annual_salary
-          WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
-          THEN e.hourly_salary * 2080
           ELSE NULL
         END
       )
-    ) AS "Maximum Annual Compensation",
+    ) AS "Maximum Annual Salary",
+    max(
+      (
+        CASE
+          WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
+          THEN e.hourly_salary
+          ELSE NULL
+        END
+      )
+    ) AS "Maximum Hourly Rate",
     avg(
       CASE
         WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
@@ -190,22 +204,32 @@ column_formats:
     kind: integer
   Known Compensation Count:
     kind: integer
-  Annual Compensation Sum:
+  Annual Salary Sum:
     kind: currency
     currency: USD
     precision: 2
-  Average Annual Compensation:
+  Average Annual Salary:
     kind: currency
     currency: USD
     precision: 2
-  Minimum Annual Compensation:
+  Minimum Annual Salary:
     kind: currency
     currency: USD
     precision: 2
-  Maximum Annual Compensation:
+  Minimum Hourly Rate:
     kind: currency
     currency: USD
     precision: 2
+    unit: per hour
+  Maximum Annual Salary:
+    kind: currency
+    currency: USD
+    precision: 2
+  Maximum Hourly Rate:
+    kind: currency
+    currency: USD
+    precision: 2
+    unit: per hour
   Average Hourly Rate:
     kind: currency
     currency: USD

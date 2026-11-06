@@ -1,8 +1,6 @@
 id: bp-average-salary-by-department
-intent: Average annual compensation and headcount by department and pay type. Averages exclude unknown compensation;
-  headcount includes it. Salary uses annual_salary; Hourly uses hourly_salary and estimated annual compensation
-  = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes overtime). Keep pay types separate. Defaults to
-  Active + On Leave; employee_status overrides or All removes the filter.
+intent: Average recorded annual salary and recorded hourly rate by department and pay type, in separate columns.
+  Never annualize hourly pay. Defaults to Active + On Leave.
 slots_summary: top_n, department, employee_status, order_by
 status: validated
 drift_status: clean
@@ -58,26 +56,26 @@ slots:
   type: sort_order
   required: false
   description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
-    columns. Defaults to Average Annual Compensation DESC. Applies before LIMIT; no implicit secondary sort.
+    columns. Defaults to Average Annual Salary DESC. Applies before LIMIT; no implicit secondary sort.
   default:
-  - column: Average Annual Compensation
+  - column: Average Annual Salary
     direction: DESC
   allowed_columns:
   - Pay Type
   - Compensation Basis
   - Department
-  - Average Annual Compensation
+  - Average Annual Salary
   - Headcount
   - Average Hourly Rate
 result_grain:
 - Department
 - Pay Type
-sql_template: |+
+sql_template: |
   SELECT
     pay_type AS "Pay Type",
     CASE
       WHEN pay_type = 'Hourly'
-      THEN 'Estimated annual compensation (2080 hours)'
+      THEN 'Recorded hourly rate (per hour)'
       WHEN pay_type = 'Salary'
       THEN 'Recorded annual salary'
       ELSE 'Unknown compensation basis'
@@ -85,15 +83,9 @@ sql_template: |+
     department_name AS "Department",
     AVG(
       (
-        CASE
-          WHEN pay_type = 'Salary' AND annual_salary > 0
-          THEN annual_salary
-          WHEN pay_type = 'Hourly' AND hourly_salary > 0
-          THEN hourly_salary * 2080
-          ELSE NULL
-        END
+        CASE WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary ELSE NULL END
       )
-    ) AS "Average Annual Compensation",
+    ) AS "Average Annual Salary",
     COUNT(DISTINCT employee_code) AS "Headcount",
     avg(
       CASE WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary ELSE NULL END
@@ -109,7 +101,6 @@ sql_template: |+
     department_name
   ORDER BY {order_by}
   LIMIT {top_n}
-
 uses_rules:
 - compensation_by_pay_type
 column_formats:
@@ -119,7 +110,7 @@ column_formats:
     kind: text
   Department:
     kind: text
-  Average Annual Compensation:
+  Average Annual Salary:
     kind: currency
     currency: USD
     precision: 2

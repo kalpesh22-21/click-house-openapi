@@ -1,7 +1,6 @@
 id: bp-departments-above-company-average-salary
-intent: Departments above the corresponding company average, separately for Salary annual salaries and Hourly annual
-  estimates (hourly rate * 2080, 40 hours/week, 52 weeks/year). Defaults to Active + On Leave; employee_status overrides
-  or All removes the filter.
+intent: Departments above the corresponding company average, separately comparing recorded Salary annual salaries
+  and Hourly hourly rates in their original units. Never annualize hourly pay. Defaults to Active + On Leave.
 slots_summary: employee_status, order_by
 status: validated
 drift_status: clean
@@ -22,17 +21,18 @@ composes:
     company_salary_avg: scalar
     company_hourly_avg: scalar
   sql_template: |
-    SELECT avg(CASE
-                   WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary
-                   ELSE NULL
-               END) AS company_salary_avg,
-           avg(CASE
-                   WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary * 2080
-                   ELSE NULL
-               END) AS company_hourly_avg
+    SELECT
+      avg(
+        CASE WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary ELSE NULL END
+      ) AS company_salary_avg,
+      avg(
+        CASE WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary ELSE NULL END
+      ) AS company_hourly_avg
     FROM dbpcm_warehouse.employee
-    WHERE (employee_status IN ({employee_status})
-           OR 'All' IN ({employee_status}))
+    WHERE
+      (
+        employee_status IN ({employee_status}) OR 'All' IN ({employee_status})
+      )
 - order: 1
   feeds_from:
   - 0
@@ -46,18 +46,15 @@ composes:
       pay_type AS "Pay Type",
       CASE
         WHEN pay_type = 'Hourly'
-        THEN 'Estimated annual compensation (2080 hours)'
+        THEN 'Recorded hourly rate (per hour)'
         ELSE 'Recorded annual salary'
       END AS "Compensation Basis",
       avg(
-        CASE
-          WHEN pay_type = 'Salary' AND annual_salary > 0
-          THEN annual_salary
-          WHEN pay_type = 'Hourly' AND hourly_salary > 0
-          THEN hourly_salary * 2080
-          ELSE NULL
-        END
-      ) AS "Department Average Annual Compensation",
+        CASE WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary ELSE NULL END
+      ) AS "Department Average Annual Salary",
+      avg(
+        CASE WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary ELSE NULL END
+      ) AS "Department Average Hourly Rate",
       avg(
         CASE WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary ELSE NULL END
       ) AS "Average Hourly Rate"
@@ -75,7 +72,7 @@ composes:
           WHEN pay_type = 'Salary' AND annual_salary > 0
           THEN annual_salary
           WHEN pay_type = 'Hourly' AND hourly_salary > 0
-          THEN hourly_salary * 2080
+          THEN hourly_salary
           ELSE NULL
         END
       ) > CASE
@@ -112,16 +109,16 @@ slots:
   type: sort_order
   required: false
   description: Ordered list of 1 to 3 column/direction objects. Use exact allowed_columns and ASC or DESC; no duplicate
-    columns. Defaults to Department Average Annual Compensation DESC. Applies before LIMIT; no implicit secondary
-    sort.
+    columns. Defaults to Department Average Annual Salary DESC. Applies before LIMIT; no implicit secondary sort.
   default:
-  - column: Department Average Annual Compensation
+  - column: Department Average Annual Salary
     direction: DESC
   allowed_columns:
   - Department
   - Pay Type
   - Compensation Basis
-  - Department Average Annual Compensation
+  - Department Average Annual Salary
+  - Department Average Hourly Rate
   - Average Hourly Rate
 uses_rules:
 - compensation_by_pay_type
@@ -132,10 +129,15 @@ column_formats:
     kind: text
   Compensation Basis:
     kind: text
-  Department Average Annual Compensation:
+  Department Average Annual Salary:
     kind: currency
     currency: USD
     precision: 2
+  Department Average Hourly Rate:
+    kind: currency
+    currency: USD
+    precision: 2
+    unit: per hour
   Average Hourly Rate:
     kind: currency
     currency: USD

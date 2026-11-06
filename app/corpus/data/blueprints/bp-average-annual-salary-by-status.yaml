@@ -1,8 +1,6 @@
 id: bp-average-annual-salary-by-status
-intent: Average annual compensation by pay type, filtered by employee status. Salary uses annual_salary; Hourly
-  uses hourly_salary and estimated annual compensation = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes
-  overtime). Keep pay types separate. Defaults to Active + On Leave; employee_status overrides or All removes the
-  filter.
+intent: Average recorded annual salary for Salary employees and recorded hourly rate for Hourly employees, separately
+  by pay type, filtered by employee status. Never annualize hourly pay. Defaults to Active + On Leave.
 slots_summary: employee_status, order_by
 status: validated
 drift_status: clean
@@ -45,27 +43,21 @@ slots:
   allowed_columns:
   - Pay Type
   - Compensation Basis
-  - Average Annual Compensation
+  - Average Annual Salary
   - Average Hourly Rate
 sql_template: |
   SELECT
     pay_type AS "Pay Type",
     CASE
       WHEN pay_type = 'Hourly'
-      THEN 'Estimated annual compensation (2080 hours)'
+      THEN 'Recorded hourly rate (per hour)'
       WHEN pay_type = 'Salary'
       THEN 'Recorded annual salary'
       ELSE 'Unknown compensation basis'
     END AS "Compensation Basis",
     avg(
-      CASE
-        WHEN pay_type = 'Salary' AND annual_salary > 0
-        THEN annual_salary
-        WHEN pay_type = 'Hourly' AND hourly_salary > 0
-        THEN hourly_salary * 2080
-        ELSE NULL
-      END
-    ) AS "Average Annual Compensation",
+      CASE WHEN pay_type = 'Salary' AND annual_salary > 0 THEN annual_salary ELSE NULL END
+    ) AS "Average Annual Salary",
     avg(
       CASE WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary ELSE NULL END
     ) AS "Average Hourly Rate"
@@ -86,7 +78,7 @@ column_formats:
     kind: text
   Compensation Basis:
     kind: text
-  Average Annual Compensation:
+  Average Annual Salary:
     kind: currency
     currency: USD
     precision: 2
@@ -96,8 +88,4 @@ column_formats:
     precision: 2
     unit: per hour
 presentation:
-  kind: bars
-  category_columns:
-  - Pay Type
-  measure_columns:
-  - Average Annual Compensation
+  kind: table

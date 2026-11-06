@@ -1,8 +1,7 @@
 id: bp-compensation-ranking
-intent: Top N highest-paid employees separately within Salary and Hourly pay types. Salary uses recorded annual
-  salary; Hourly uses hourly_salary * 2080 estimated annual compensation (40 hours/week, 52 weeks/year, excludes
-  overtime). This is current compensation, not actual payroll earnings. Defaults to Active + On Leave; top_n applies
-  to each pay type.
+intent: Top N highest-paid employees separately within Salary and Hourly pay types. Rank Salary by recorded annual_salary
+  and Hourly by recorded hourly_salary. Show annual salary and hourly rate in separate columns; never annualize
+  hourly pay. Defaults to Active + On Leave; top_n applies separately to each pay type.
 slots_summary: top_n, employee_status, department
 status: validated
 drift_status: clean
@@ -68,9 +67,9 @@ sql_template: |
         WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
         THEN e.annual_salary
         WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
-        THEN e.hourly_salary * 2080
+        THEN e.hourly_salary
         ELSE NULL
-      END AS annual_compensation
+      END AS recorded_pay
     FROM dbpcm_warehouse.employee AS e
     WHERE
       (
@@ -84,12 +83,12 @@ sql_template: |
       department_name,
       pay_type,
       hourly_salary,
-      annual_compensation,
-      row_number() OVER (PARTITION BY pay_type ORDER BY annual_compensation DESC, employee_code) AS compensation_rank
+      recorded_pay,
+      row_number() OVER (PARTITION BY pay_type ORDER BY recorded_pay DESC, employee_code) AS compensation_rank
     FROM compensation
     WHERE
       NOT (
-        annual_compensation IS NULL
+        recorded_pay IS NULL
       )
   )
   SELECT
@@ -98,8 +97,8 @@ sql_template: |
     employee_code AS "Employee Code",
     employee_name AS "Employee Name",
     department_name AS "Department",
-    annual_compensation AS "Annual Compensation",
-    hourly_salary AS "Hourly Rate"
+    CASE WHEN pay_type = 'Salary' THEN recorded_pay ELSE NULL END AS "Annual Salary",
+    CASE WHEN pay_type = 'Hourly' AND hourly_salary > 0 THEN hourly_salary ELSE NULL END AS "Hourly Rate"
   FROM ranked
   WHERE
     compensation_rank <= {top_n}
@@ -120,7 +119,7 @@ column_formats:
     kind: text
   Department:
     kind: text
-  Annual Compensation:
+  Annual Salary:
     kind: currency
     currency: USD
     precision: 2

@@ -255,8 +255,8 @@ columns:
     - Not Implemented
   ethnic_background:
     type: Nullable(String)
-    description: Display description of the employee's ethnic background.
-      The raw ethnic-background code is not exposed as this field; an unmapped code produces an empty string.
+    description: Display description of the employee's ethnic background. The raw ethnic-background code is not
+      exposed as this field; an unmapped code produces an empty string.
   country_code:
     format:
       kind: identifier
@@ -502,17 +502,13 @@ columns:
     - Salary
   hourly_salary:
     type: Nullable(Decimal(18, 6))
-    description: Hourly employee rate. Estimated annual compensation = hourly_salary * 2080 (40 hours/week, 52 weeks/year);
-      disclose the assumption. This excludes overtime and is not actual payroll pay.
+    description: Recorded hourly pay rate, in USD per hour. Do not assume hours worked or annualize this rate.
     unit: USD
   annual_salary:
     type: Nullable(Decimal(18, 6))
-    description: Recorded annual salary for Salary employees; zero for Hourly employees is not zero earnings. Report
-      compensation statistics separately by pay_type. For Hourly use hourly_salary and estimated annual
-      compensation hourly_salary * 2080, labeled as an estimate. For a MEDIAN of this column, quantileExact(0.5)
-      returns the UPPER middle value when the group has an even number of rows, not the average of the two middle
-      values; for a true median use (quantileExactLow(0.5)(annual_salary) + quantileExactHigh(0.5)(annual_salary))
-      / 2.
+    description: Recorded annual salary for Salary employees; zero for Hourly employees is not zero earnings. Use pay_type; keep
+      salary statistics separate from recorded hourly rates. Never assume an annualization factor. For a true median
+      use (quantileExactLow(0.5)(annual_salary) + quantileExactHigh(0.5)(annual_salary)) / 2.
     unit: USD
   scheduled_pay_period_hours:
     type: Nullable(Decimal(18, 6))
@@ -691,20 +687,16 @@ rules:
   applies_when: 'Employee lists, headcounts, current-workforce attribute metrics (tenure, age, compensation), snapshots,
     and cross-module employee details, including grouping by department. Does not apply to payroll, accrual, expense,
     or time fact aggregates, even by employee or department; use all accessible records for those. Unqualified headcounts and current employees use this default. Explicit active employees means Active only; historical
-    or other population scope overrides this default.
-
-    '
+    or other population scope overrides this default.'
   description: 'Default to current Active and On Leave. Explicit user scope overrides this default. Apply per result
-    and blueprint slot; disclose population briefly.
-
-    '
+    and blueprint slot; disclose population briefly.'
 - id: compensation_by_pay_type
   predicate: pay_type
   applies_when: Compensation statistics, comparisons, distributions and rankings unless the user explicitly selects
     a pay basis.
-  description: Separate Salary annual_salary from Hourly hourly_salary and estimated annual compensation (hourly_salary
-    * 2080). Disclose 40 hours/week, 52 weeks/year; estimates exclude overtime and are not payroll-paid amounts.
-    Unknown/other pay types are separate, not zero compensation.
+  description: Separate recorded Salary annual_salary from Hourly hourly_salary in their original units and separate
+    columns. Do not assume hours worked or annualize hourly rates. Annual salary thresholds apply only to Salary
+    employees. Unknown pay types and missing pay remain separate, not zero.
 - id: employment_date_interpretation
   predicate: termination_date
   applies_when: Interpreting termination_date and most_recent_hire_date together.
@@ -729,10 +721,9 @@ ambiguities:
   - annual_salary
   - hourly_salary
   - rate_1
-  default: For unqualified salary/pay questions use annual_salary for Salary and hourly_salary * 2080 as estimated
-    annual compensation for Hourly. Report statistics separately by pay_type; disclose 40 hours/week and
-    52 weeks/year. Explicit hourly-rate or actual-pay requests override this basis. Do not infer pay type from zero
-    salary.
+  default: For unqualified salary/pay questions use recorded annual_salary for Salary and recorded hourly_salary
+    for Hourly, separately labelled with annual and hourly units. Do not annualize hourly pay or infer pay type
+    from zero salary.
   clarify_if: The question asks for an hourly rate (distinguish hourly_salary from rate_1) or a per-period amount
     (confirm pay_frequency and scheduled_pay_period_hours).
 - term: hire_date

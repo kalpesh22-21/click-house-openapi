@@ -1,8 +1,6 @@
 id: bp-salary-threshold-count
-intent: Employee counts by pay type above, below, at least or exactly a whole-currency annual compensation threshold.
-  Empty results mean no matches. Salary uses annual_salary; Hourly uses hourly_salary and estimated annual compensation
-  = hourly_salary * 2080 (40 hours/week, 52 weeks/year; excludes overtime). Keep pay types separate. Defaults to
-  Active + On Leave; employee_status overrides or All removes the filter.
+intent: 'Recorded annual salary counts for Salary employees matching a whole-currency annual salary threshold. Hourly
+  employees are excluded: hourly rates are not annual salaries. Defaults to Active + On Leave.'
 slots_summary: comparison, salary, employee_status, department, employee, order_by
 status: validated
 drift_status: clean
@@ -29,6 +27,7 @@ slots:
   required: true
   min_value: 0
   max_value: 1000000000
+  description: Recorded annual salary threshold for Salary employees only; never apply to hourly rates.
 - name: employee_status
   description: Defaults to Active and On Leave. Omit this slot or send [Active, On Leave] for both; send a list
     of specific statuses to select another population. All removes the status filter and must be supplied alone.
@@ -82,7 +81,7 @@ sql_template: |
     e.pay_type AS "Pay Type",
     CASE
       WHEN e.pay_type = 'Hourly'
-      THEN 'Estimated annual compensation (2080 hours)'
+      THEN 'Recorded hourly rate (per hour)'
       WHEN e.pay_type = 'Salary'
       THEN 'Recorded annual salary'
       ELSE 'Unknown compensation basis'
@@ -91,60 +90,63 @@ sql_template: |
   FROM dbpcm_warehouse.employee AS e
   WHERE
     (
-      e.employee_status IN ({employee_status}) OR 'All' IN ({employee_status})
-    )
-    AND e.department_name IN ({department})
-    AND e.employee_code = {employee}
-    AND (
       (
-        {comparison} = 'above'
-        AND (
-          CASE
-            WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
-            THEN e.annual_salary
-            WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
-            THEN e.hourly_salary * 2080
-            ELSE NULL
-          END
-        ) > {salary}
+        e.employee_status IN ({employee_status}) OR 'All' IN ({employee_status})
       )
-      OR (
-        {comparison} = 'at_least'
-        AND (
-          CASE
-            WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
-            THEN e.annual_salary
-            WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
-            THEN e.hourly_salary * 2080
-            ELSE NULL
-          END
-        ) >= {salary}
-      )
-      OR (
-        {comparison} = 'equal'
-        AND (
-          CASE
-            WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
-            THEN e.annual_salary
-            WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
-            THEN e.hourly_salary * 2080
-            ELSE NULL
-          END
-        ) = {salary}
-      )
-      OR (
-        {comparison} = 'below'
-        AND (
-          CASE
-            WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
-            THEN e.annual_salary
-            WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
-            THEN e.hourly_salary * 2080
-            ELSE NULL
-          END
-        ) < {salary}
+      AND e.department_name IN ({department})
+      AND e.employee_code = {employee}
+      AND (
+        (
+          {comparison} = 'above'
+          AND (
+            CASE
+              WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
+              THEN e.annual_salary
+              WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
+              THEN e.hourly_salary
+              ELSE NULL
+            END
+          ) > {salary}
+        )
+        OR (
+          {comparison} = 'at_least'
+          AND (
+            CASE
+              WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
+              THEN e.annual_salary
+              WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
+              THEN e.hourly_salary
+              ELSE NULL
+            END
+          ) >= {salary}
+        )
+        OR (
+          {comparison} = 'equal'
+          AND (
+            CASE
+              WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
+              THEN e.annual_salary
+              WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
+              THEN e.hourly_salary
+              ELSE NULL
+            END
+          ) = {salary}
+        )
+        OR (
+          {comparison} = 'below'
+          AND (
+            CASE
+              WHEN e.pay_type = 'Salary' AND e.annual_salary > 0
+              THEN e.annual_salary
+              WHEN e.pay_type = 'Hourly' AND e.hourly_salary > 0
+              THEN e.hourly_salary
+              ELSE NULL
+            END
+          ) < {salary}
+        )
       )
     )
+    AND e.pay_type = 'Salary'
   GROUP BY
     e.pay_type
   ORDER BY {order_by}
@@ -158,8 +160,4 @@ column_formats:
   Employee Count:
     kind: integer
 presentation:
-  kind: bars
-  category_columns:
-  - Pay Type
-  measure_columns:
-  - Employee Count
+  kind: table

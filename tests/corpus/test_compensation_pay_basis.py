@@ -15,7 +15,7 @@ from tests.corpus.native_sort import bind_sort
 VALUES = {"order_direction": "'DESC'",'top_n': '10', 'employee_status': "'All'", 'department': "'Sales'", 'employee': "'s1'",
           'salary_population': "'recorded'", 'group_by': "'company'", 'band_width': '10000',
           'salary': '50000', 'comparison': "'above'", 'row_limit': '20',
-          'company_salary_avg': '150000', 'company_hourly_avg': '78000'}
+          'company_salary_avg': '150000', 'company_hourly_avg': '37.5'}
 BLUEPRINTS = [bp for bp in load_blueprints().values()
               if 'dbpcm_warehouse.employee.hourly_salary' in bp.get('uses', [])]
 
@@ -37,7 +37,7 @@ def test_compensation_blueprints_have_typed_trino_conversion(blueprint):
         for case in tree.find_all(exp.Case):
             assert case.this is None
         assert 'pay_type' in sql
-        assert '2080' in sql
+        assert '2080' not in sql
 
 
 def test_salary_and_hourly_zeros_do_not_mix_and_unknowns_stay_null():
@@ -53,7 +53,7 @@ def test_salary_and_hourly_zeros_do_not_mix_and_unknowns_stay_null():
             ('Hourly',0,25,'Active'),('Hourly',0,50,'On Leave'),
             ('None',0,None,'Active')])
         result = {row[0]: row[2:] for row in db.execute(tree.sql(dialect='sqlite')).fetchall()}
-    assert result == {'Salary': (150000,None), 'Hourly': (78000,37.5), 'None': (None,None)}
+    assert result == {'Salary': (150000,None), 'Hourly': (None,37.5), 'None': (None,None)}
 
 
 # A zero is not recorded compensation: an Hourly employee with hourly_salary 0 or a Salary
@@ -94,13 +94,13 @@ def test_highest_paid_ranking_keeps_pay_types_separate_and_skips_unrecorded_rate
 def test_a_below_threshold_count_does_not_count_a_zero_rate_as_paid_below_it():
     rows = run_sqlite('bp-salary-threshold-count', omit=('employee',), comparison="'below'", salary='150000')
     counts = {r[0]: r[-1] for r in rows}
-    assert counts == {'Hourly': 2, 'Salary': 1}  # h0 and s0 have no rate on record
+    assert counts == {'Salary': 1}  # h0 and s0 have no rate on record
 
 
 def test_averages_ignore_zero_rates_and_zero_salaries():
     rows = run_sqlite('bp-average-annual-salary-by-status', employee_status="'All'")
     result = {r[0]: r[2:] for r in rows}
-    assert result == {'Salary': (150000, None), 'Hourly': (52000, 25)}
+    assert result == {'Salary': (150000, None), 'Hourly': (None, 25)}
 
 
 def test_no_compensation_branch_treats_a_zero_rate_as_pay():
@@ -125,3 +125,8 @@ def test_annual_salary_figures_count_only_salaried_employees_with_a_salary(bid):
     sql = re.sub(r'\s+', ' ', bp['sql_template'])
     assert "pay_type = 'Salary' AND annual_salary > 0" in sql
     assert 'dbpcm_warehouse.employee.pay_type' in bp['uses']
+
+
+def test_ranking_returns_recorded_rates_without_an_annual_estimate():
+    rows = run_sqlite('bp-compensation-ranking', top_n='1')
+    assert [(r[0], r[5], r[6]) for r in rows] == [('Hourly', None, 30), ('Salary', 200000, None)]
